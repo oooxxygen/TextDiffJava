@@ -5,9 +5,9 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** KeyIndex 契约：各实现（InMemory / OffHeap / Auto）共用。子类提供 newIndex()。 */
-abstract class KeyIndexContract {
+public abstract class KeyIndexContract {
 
-    abstract KeyIndex newIndex();
+    protected abstract KeyIndex newIndex();
 
     @Test
     void putThenGet() {
