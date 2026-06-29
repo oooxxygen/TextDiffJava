@@ -73,8 +73,24 @@ public final class Comparator {
         }
     }
 
+    /** 默认堆外预算：环境 TEXTDIFF_MAX_IN_MEMORY_BYTES，否则 1 GiB（对等 Python）。 */
+    public static long defaultMaxInMemoryBytes() {
+        String e = System.getenv("TEXTDIFF_MAX_IN_MEMORY_BYTES");
+        if (e != null && !e.isBlank()) {
+            try { return Long.parseLong(e.trim()); } catch (NumberFormatException ignored) {}
+        }
+        return 1024L * 1024 * 1024;
+    }
+
     public static CompareOutcome compareFiles(Path pathA, Path pathB, CompareConfig config,
                                               ResultSink sink) throws IOException {
+        return compareFiles(pathA, pathB, config, sink,
+                defaultMaxInMemoryBytes(), Path.of(System.getProperty("java.io.tmpdir")));
+    }
+
+    public static CompareOutcome compareFiles(Path pathA, Path pathB, CompareConfig config,
+                                              ResultSink sink, long maxInMemoryBytes, Path tmpDir)
+            throws IOException {
         Rules.RuleEngine engine = new Rules.RuleEngine(config);
         String delim = config.delimiter;
         String tp = config.trailerPrefix;
@@ -86,7 +102,7 @@ public final class Comparator {
         Parser.TrailerData trailerB = new Parser.TrailerData();
         boolean spilled;
 
-        try (KeyIndex index = new InMemoryKeyIndex()) {
+        try (KeyIndex index = new AutoKeyIndex(tmpDir, maxInMemoryBytes)) {
             // 阶段 1：建 A 索引
             try (Stream<String> la = Encoding.iterLines(pathA, encA, delim)) {
                 for (String[] cols : Parser.parseData(la, delim, tp, trailerA)) {
