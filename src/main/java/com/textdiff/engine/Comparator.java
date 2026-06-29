@@ -84,48 +84,49 @@ public final class Comparator {
         Summary summary = new Summary();
         Parser.TrailerData trailerA = new Parser.TrailerData();
         Parser.TrailerData trailerB = new Parser.TrailerData();
+        boolean spilled;
 
-        // 阶段 1：建 A 索引（LinkedHashMap 保插入序，使 only_a 输出顺序确定）
-        Map<String, String[]> idx = new LinkedHashMap<>();
-        try (Stream<String> la = Encoding.iterLines(pathA, encA, delim)) {
-            for (String[] cols : Parser.parseData(la, delim, tp, trailerA)) {
-                String key = engine.keyOf(cols);
-                if (key == null) { summary.malformedA++; continue; }
-                idx.put(key, cols);
+        try (KeyIndex index = new InMemoryKeyIndex()) {
+            // 阶段 1：建 A 索引
+            try (Stream<String> la = Encoding.iterLines(pathA, encA, delim)) {
+                for (String[] cols : Parser.parseData(la, delim, tp, trailerA)) {
+                    String key = engine.keyOf(cols);
+                    if (key == null) { summary.malformedA++; continue; }
+                    index.put(key, cols);
+                }
             }
-        }
 
-        // 阶段 2：流式比对 B
-        Set<String> seen = new HashSet<>();
-        try (Stream<String> lb = Encoding.iterLines(pathB, encB, delim)) {
-            for (String[] cols : Parser.parseData(lb, delim, tp, trailerB)) {
-                String key = engine.keyOf(cols);
-                if (key == null) { summary.malformedB++; continue; }
-                String[] aCols = idx.get(key);
-                if (aCols == null) {
-                    sink.addRow(RowDiff.onlyB(key, Status.SECTION_DATA, cols));
-                    summary.onlyB++;
-                } else {
-                    seen.add(key);
-                    int[] diffCols = compareCols(aCols, cols, engine);
-                    if (diffCols.length > 0) {
-                        sink.addRow(RowDiff.diff(key, Status.SECTION_DATA, aCols, cols, diffCols));
-                        summary.diff++;
-                        for (int ci : diffCols) summary.diffColFreq.merge(ci, 1L, Long::sum);
+            // 阶段 2：流式比对 B
+            try (Stream<String> lb = Encoding.iterLines(pathB, encB, delim)) {
+                for (String[] cols : Parser.parseData(lb, delim, tp, trailerB)) {
+                    String key = engine.keyOf(cols);
+                    if (key == null) { summary.malformedB++; continue; }
+                    String[] aCols = index.get(key);
+                    if (aCols == null) {
+                        sink.addRow(RowDiff.onlyB(key, Status.SECTION_DATA, cols));
+                        summary.onlyB++;
                     } else {
-                        // equal：B 隐含等于 A，不重复存 B
-                        sink.addRow(RowDiff.equal(key, Status.SECTION_DATA, aCols));
-                        summary.equal++;
+                        index.markSeen(key);
+                        int[] diffCols = compareCols(aCols, cols, engine);
+                        if (diffCols.length > 0) {
+                            sink.addRow(RowDiff.diff(key, Status.SECTION_DATA, aCols, cols, diffCols));
+                            summary.diff++;
+                            for (int ci : diffCols) summary.diffColFreq.merge(ci, 1L, Long::sum);
+                        } else {
+                            // equal：B 隐含等于 A，不重复存 B
+                            sink.addRow(RowDiff.equal(key, Status.SECTION_DATA, aCols));
+                            summary.equal++;
+                        }
                     }
                 }
             }
-        }
 
-        // 阶段 3：仅 A 存在
-        for (Map.Entry<String, String[]> e : idx.entrySet()) {
-            if (seen.contains(e.getKey())) continue;
-            sink.addRow(RowDiff.onlyA(e.getKey(), Status.SECTION_DATA, e.getValue()));
-            summary.onlyA++;
+            // 阶段 3：仅 A 存在
+            for (Map.Entry<String, String[]> e : index.unseen()) {
+                sink.addRow(RowDiff.onlyA(e.getKey(), Status.SECTION_DATA, e.getValue()));
+                summary.onlyA++;
+            }
+            spilled = index.spilled();
         }
 
         // 阶段 4：trailer 对比
@@ -141,6 +142,6 @@ public final class Comparator {
         summary.recnumCheckA = Parser.recnumCheck(trailerA);
         summary.recnumCheckB = Parser.recnumCheck(trailerB);
 
-        return new CompareOutcome(summary, encA, encB, false);
+        return new CompareOutcome(summary, encA, encB, spilled);
     }
 }
