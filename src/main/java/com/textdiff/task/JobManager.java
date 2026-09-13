@@ -38,6 +38,8 @@ public final class JobManager implements AutoCloseable {
     private final long maxInMemoryBytes;
     private final ExecutorService pool;
     private final ConcurrentMap<String, Future<?>> tasks = new ConcurrentHashMap<>();
+    /** 作业完成回调（AI 归纳分析挂载点，WebBeansConfig 注入）。 */
+    public volatile java.util.function.Consumer<JobRecord> aiHook;
 
     public JobManager(JobStore store, Path resultsRoot, EngineConfig engine) {
         this.store = store;
@@ -136,6 +138,8 @@ public final class JobManager implements AutoCloseable {
             job.status = JobRecord.DONE;
             job.finishedAt = System.currentTimeMillis() / 1000;
             autoExport(job);
+            java.util.function.Consumer<JobRecord> hook = aiHook;
+            if (hook != null) hook.accept(job);
         } catch (Exception e) {
             Future<?> f = tasks.get(jobId);
             if (f != null && f.isCancelled()) {

@@ -6,7 +6,7 @@ import java.util.*;
 import java.util.function.Function;
 
 /** config.ini 加载 + 环境变量覆盖；优先级 env > ini > default。对等 Python config.py。 */
-public record AppConfig(ServerConfig server, EngineConfig engine, StoreConfig store) {
+public record AppConfig(ServerConfig server, EngineConfig engine, StoreConfig store, AiConfig ai) {
 
     public static AppConfig load(Path iniPath, Function<String, String> env) {
         Map<String, Map<String, String>> ini = parseIni(iniPath);
@@ -28,9 +28,24 @@ public record AppConfig(ServerConfig server, EngineConfig engine, StoreConfig st
         boolean storeEnabled = Boolean.parseBoolean(
                 pick(env.apply("TEXTDIFF_STORE_ENABLED"), sto.get("enabled"), "true"));
 
+        Map<String, String> aiSec = ini.getOrDefault("ai", Map.of());
+        AiConfig ai = new AiConfig(
+                Boolean.parseBoolean(pick(env.apply("TEXTDIFF_AI_ENABLED"), aiSec.get("enabled"), "false")),
+                pick(env.apply("TEXTDIFF_AI_BASE_URL"), aiSec.get("base_url"), ""),
+                pick(env.apply("TEXTDIFF_AI_API_KEY"), aiSec.get("api_key"), ""),
+                pick(env.apply("TEXTDIFF_AI_MODEL"), aiSec.get("model"), ""),
+                Integer.parseInt(pick(env.apply("TEXTDIFF_AI_TIMEOUT"), aiSec.get("timeout"), "60")));
+
         return new AppConfig(new ServerConfig(host, port),
                 new EngineConfig(maxThreads, maxInMemoryBytes),
-                new StoreConfig(storeEnabled));
+                new StoreConfig(storeEnabled), ai);
+    }
+
+    /** AI 归纳分析（OpenAI 兼容 /chat/completions）。 */
+    public record AiConfig(boolean enabled, String baseUrl, String apiKey, String model, int timeoutSeconds) {
+        public boolean usable() {
+            return enabled && baseUrl != null && !baseUrl.isBlank() && model != null && !model.isBlank();
+        }
     }
 
     private static String pick(String env, String ini, String def) {

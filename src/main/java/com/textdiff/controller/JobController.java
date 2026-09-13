@@ -8,6 +8,7 @@ import com.textdiff.store.NoteRecord;
 import com.textdiff.store.ResultFiles;
 import com.textdiff.task.JobManager;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -24,10 +25,12 @@ import java.util.function.Predicate;
 public class JobController {
     private final JobManager jobs;
     private final JobStore store;
+    private final com.textdiff.ai.AiAnalyzer analyzer;
 
-    public JobController(JobManager jobs, JobStore store) {
+    public JobController(JobManager jobs, JobStore store, com.textdiff.ai.AiAnalyzer analyzer) {
         this.jobs = jobs;
         this.store = store;
+        this.analyzer = analyzer;
     }
 
     @GetMapping("/joblist")
@@ -246,18 +249,51 @@ public class JobController {
         return out;
     }
 
-    /** M5 前占位：AI 归纳分析。 */
+    /** 手动触发 AI 归纳分析，返回 {content, structured?}。 */
     @PostMapping("/jobs/{id}/analyze")
     public Map<String, Object> analyze(@PathVariable String id) {
-        require(id);
-        throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "AI 分析将在 M5 里程碑启用");
+        JobRecord job = require(id);
+        java.nio.file.Path dir = java.nio.file.Path.of(job.resultDir);
+        java.nio.file.Path analysis = dir.resolve("ai_analysis.json");
+        if (!java.nio.file.Files.isRegularFile(analysis)) {
+            analyzer.analyze(id); // 同步执行，前端等待结果
+            job = require(id);
+        }
+        try {
+            if (!java.nio.file.Files.isRegularFile(analysis)) {
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "AI 未启用或分析未产出（aiStatus=" + job.aiStatus + "）");
+            }
+            return com.textdiff.store.Json.MAPPER.readValue(analysis.toFile(), Map.class);
+        } catch (java.io.IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "ai_analysis.json 读取失败");
+        }
     }
 
-    /** M5 前占位：提示词 MD 预览。 */
-    @GetMapping("/jobs/{id}/prompt")
-    public Map<String, Object> prompt(@PathVariable String id) {
+    /** 提示词 MD 预览/下载。 */
+    @GetMapping(value = "/jobs/{id}/prompt", produces = "text/markdown;charset=UTF-8")
+    public ResponseEntity<String> prompt(@PathVariable String id) {
+        JobRecord job = require(id);
+        java.nio.file.Path file = java.nio.file.Path.of(job.resultDir).resolve("prompt.md");
+        if (!java.nio.file.Files.isRegularFile(file)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "prompt.md 尚未生成（作业完成后自动产出）");
+        }
+        try {
+            return ResponseEntity.ok()
+                    .header("Content-Disposition", "attachment; filename*=UTF-8''"
+                            + java.net.URLEncoder.encode("prompt_" + id + ".md",
+                                    java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20"))
+                    .body(java.nio.file.Files.readString(file, java.nio.charset.StandardCharsets.UTF_8));
+        } catch (java.io.IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "prompt.md 读取失败");
+        }
+    }
+
+    @PostMapping("/jobs/{id}/reanalyze")
+    public Map<String, Object> reanalyze(@PathVariable String id) {
         require(id);
-        throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "提示词模板将在 M5 里程碑启用");
+        analyzer.reanalyze(id);
+        return Map.of("ok", true);
     }
 
     private JobRecord require(String id) {

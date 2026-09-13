@@ -34,6 +34,13 @@ public class WebBeansConfig {
         return new JobManager(store, paths.resultsDir(), cfg.engine());
     }
 
+    /** AI 分析器（构造即挂载 aiHook，作业 done 后自动触发 prompt.md/ai_analysis.json 产出）。 */
+    @Bean(destroyMethod = "shutdown")
+    public com.textdiff.ai.AiAnalyzer aiAnalyzer(DualJobStore store, AppConfig cfg,
+                                                 AppPaths paths, JobManager jobManager) {
+        return new com.textdiff.ai.AiAnalyzer(store, cfg, paths, jobManager);
+    }
+
     /** REST 响应统一 snake_case，对齐前端契约。 */
     @Bean
     public Jackson2ObjectMapperBuilderCustomizer snakeCaseCustomizer() {
