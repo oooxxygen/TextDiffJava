@@ -19,9 +19,17 @@ import java.util.stream.Stream;
 public final class Comparator {
     private Comparator() {}
 
+    private static final String[] EMPTY_COLS = new String[0];
+
     static final List<String> KEY_TRAILER_FIELDS = List.of(
             "RecNum", "SysID", "TabName", "Version", "GenTime",
             "CycFlag", "DataStartDate", "DataEndDate");
+
+    private static void addDupSample(Summary summary, String key) {
+        if (summary.dupKeySamples.size() < Summary.DUP_SAMPLE_CAP && !summary.dupKeySamples.contains(key)) {
+            summary.dupKeySamples.add(key);
+        }
+    }
 
     /** 比对两条记录各列，返回差异列索引（0-based）。一律比原值；omit/ignore 列跳过；长度不齐按空串补。 */
     public static int[] compareCols(String[] aCols, String[] bCols, Rules.RuleEngine engine) {
@@ -102,21 +110,32 @@ public final class Comparator {
         Parser.TrailerData trailerB = new Parser.TrailerData();
         boolean spilled;
 
-        try (KeyIndex index = new AutoKeyIndex(tmpDir, maxInMemoryBytes)) {
-            // 阶段 1：建 A 索引
+        try (KeyIndex index = new AutoKeyIndex(tmpDir, maxInMemoryBytes);
+             KeyIndex bKeys = new AutoKeyIndex(tmpDir, maxInMemoryBytes)) {
+            // 阶段 1：建 A 索引；put 前探查以捕获重复键（主键唯一性检测，需求：键应唯一定位一条记录）
             try (Stream<String> la = Encoding.iterLines(pathA, encA, delim)) {
                 for (String[] cols : Parser.parseData(la, delim, tp, trailerA)) {
                     String key = engine.keyOf(cols);
                     if (key == null) { summary.malformedA++; continue; }
+                    if (index.get(key) != null) {
+                        summary.keyDupA++;
+                        addDupSample(summary, key);
+                    }
                     index.put(key, cols);
                 }
             }
 
-            // 阶段 2：流式比对 B
+            // 阶段 2：流式比对 B；bKeys 仅存键集，检测 B 侧重复键
             try (Stream<String> lb = Encoding.iterLines(pathB, encB, delim)) {
                 for (String[] cols : Parser.parseData(lb, delim, tp, trailerB)) {
                     String key = engine.keyOf(cols);
                     if (key == null) { summary.malformedB++; continue; }
+                    if (bKeys.get(key) != null) {
+                        summary.keyDupB++;
+                        addDupSample(summary, key);
+                    } else {
+                        bKeys.put(key, EMPTY_COLS);
+                    }
                     String[] aCols = index.get(key);
                     if (aCols == null) {
                         sink.addRow(RowDiff.onlyB(key, Status.SECTION_DATA, cols));

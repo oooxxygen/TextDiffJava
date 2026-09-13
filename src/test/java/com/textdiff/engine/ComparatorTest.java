@@ -97,6 +97,20 @@ class ComparatorTest {
     }
 
     @Test
+    void duplicateKeysDetectedOnBothSides(@TempDir Path dir) throws Exception {
+        // A: k1 重复 1 次；B: k2 重复 1 次 + k1 重复 1 次
+        Path a = write(dir, "a.txt", "k1 | 1\nk1 | 2\nk2 | 3");
+        Path b = write(dir, "b.txt", "k2 | 3\nk2 | 9\nk1 | 1\nk1 | 1");
+        ResultSink.ListSink sink = new ResultSink.ListSink();
+        CompareOutcome out = Comparator.compareFiles(a, b, keyCfg(0), sink);
+        Summary s = out.summary();
+        assertEquals(1, s.keyDupA);
+        assertEquals(2, s.keyDupB);
+        assertTrue(s.dupKeySamples.contains("k1"));
+        assertTrue(s.dupKeySamples.contains("k2"));
+    }
+
+    @Test
     void detectedEncodingReported(@TempDir Path dir) throws Exception {
         Path a = write(dir, "a.txt", "k | v");
         Path b = write(dir, "b.txt", "k | v");

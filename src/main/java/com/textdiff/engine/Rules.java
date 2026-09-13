@@ -228,7 +228,7 @@ public final class Rules {
                 }
             }
         }
-        out.sort(Comparator.comparing(s -> Path.of(s).getFileName().toString()));
+        out.sort(java.util.Comparator.comparing(s -> Path.of(s).getFileName().toString()));
         return out;
     }
 
