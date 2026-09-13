@@ -91,10 +91,14 @@ public final class DiffFeatureExtractor {
         Map<String, Integer> deltas = new LinkedHashMap<>();
         int n = 0;
         for (String[] s : f.samples) {
-            if (isNumeric(s[0]) && isNumeric(s[1])) {
-                java.math.BigDecimal d = new java.math.BigDecimal(s[1]).subtract(new java.math.BigDecimal(s[0]));
-                deltas.merge(d.toPlainString(), 1, Integer::sum);
-                n++;
+            try {
+                if (isNumeric(s[0]) && isNumeric(s[1])) {
+                    java.math.BigDecimal d = new java.math.BigDecimal(s[1].trim())
+                            .subtract(new java.math.BigDecimal(s[0].trim()));
+                    deltas.merge(d.toPlainString(), 1, Integer::sum);
+                    n++;
+                }
+            } catch (NumberFormatException ignored) {
             }
         }
         String mode = null;

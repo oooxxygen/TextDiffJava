@@ -138,8 +138,6 @@ public final class JobManager implements AutoCloseable {
             job.status = JobRecord.DONE;
             job.finishedAt = System.currentTimeMillis() / 1000;
             autoExport(job);
-            java.util.function.Consumer<JobRecord> hook = aiHook;
-            if (hook != null) hook.accept(job);
         } catch (Exception e) {
             Future<?> f = tasks.get(jobId);
             if (f != null && f.isCancelled()) {
@@ -151,6 +149,8 @@ public final class JobManager implements AutoCloseable {
             job.finishedAt = System.currentTimeMillis() / 1000;
         }
         store.saveJob(job);
+        java.util.function.Consumer<JobRecord> hook = aiHook;
+        if (hook != null && JobRecord.DONE.equals(job.status)) hook.accept(job); // 状态落盘后再触发 AI
         tasks.remove(jobId);
     }
 

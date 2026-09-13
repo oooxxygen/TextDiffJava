@@ -93,7 +93,8 @@ public final class AiAnalyzer {
             job.aiStatus = "done";
         } catch (Exception e) {
             job.aiStatus = "failed";
-            job.error = "AI 分析失败: " + e.getMessage();
+            StackTraceElement top = e.getStackTrace().length > 0 ? e.getStackTrace()[0] : null;
+            job.error = "AI 分析失败: " + e.getMessage() + " @ " + top;
         }
         store.saveJob(job);
     }
