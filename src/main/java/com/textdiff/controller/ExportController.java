@@ -41,13 +41,11 @@ public class ExportController {
                                             @RequestParam(defaultValue = "full") String mode) {
         JobRecord job = require(id);
         Predicate<com.textdiff.engine.RowDiff> filter = zoneFilter(zone);
-        Path tmp = tmpDir().resolve("job_" + id + "_" + mode + "_" + System.nanoTime() + ".csv");
-        if ("diff".equals(mode)) {
-            ExportAssembler.writeDiffCsv(tmp.getParent(), job, filter);
-        } else {
-            ExportAssembler.writeFullCsv(tmp.getParent(), job, filter);
-        }
-        return csvDownload(tmp, tmp.getFileName().toString());
+        Path dir = tmpDir().resolve("job_" + id + "_" + System.nanoTime());
+        Path out = "diff".equals(mode)
+                ? ExportAssembler.writeDiffCsv(dir, job, filter)
+                : ExportAssembler.writeFullCsv(dir, job, filter);
+        return csvDownload(out, out.getFileName().toString());
     }
 
     /** 单作业合并包：全量 + 差异。 */
