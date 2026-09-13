@@ -135,6 +135,7 @@ public final class JobManager implements AutoCloseable {
             }
             job.status = JobRecord.DONE;
             job.finishedAt = System.currentTimeMillis() / 1000;
+            autoExport(job);
         } catch (Exception e) {
             Future<?> f = tasks.get(jobId);
             if (f != null && f.isCancelled()) {
@@ -205,6 +206,20 @@ public final class JobManager implements AutoCloseable {
                 store.saveJob(job);
                 submit(job);
             }
+        }
+    }
+
+    /** 需求：任务完成后自动导出全量 + 差异 CSV 到 results/{batchId}/export/。失败不回滚比对状态。 */
+    private void autoExport(JobRecord job) {
+        try {
+            Path dir = resultsRoot.resolve(job.batchId == null ? "standalone" : job.batchId)
+                    .resolve("export");
+            com.textdiff.export.ExportAssembler.writeFullCsv(dir, job,
+                    com.textdiff.export.ExportAssembler.DATA);
+            com.textdiff.export.ExportAssembler.writeDiffCsv(dir, job,
+                    com.textdiff.export.ExportAssembler.DATA);
+        } catch (RuntimeException e) {
+            System.err.println("[export] 自动导出失败（作业继续完成）: " + e.getMessage());
         }
     }
 
