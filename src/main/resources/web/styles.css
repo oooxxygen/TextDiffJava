@@ -446,3 +446,6 @@ body {
 .zone-pager { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted,#555); }
 .zone-pager .pager-input { width:44px; text-align:center; padding:2px 4px; border:1px solid var(--border,#ccd); border-radius:4px; font-size:12px; }
 .pager-size { font-size:12px; padding:2px 4px; border:1px solid var(--border,#ccd); border-radius:4px; }
+
+/* 主键唯一性告警（需求：重复键醒目提示，配置需重检） */
+.badge-keywarn { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 700; background: #fff0f0; color: #d81e06; border: 1px solid #f3b6b0; cursor: help; }

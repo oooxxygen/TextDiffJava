@@ -796,7 +796,7 @@ const ResultView = {
           <span class="group-badge" v-if="(meta.config||{}).group" style="margin-left:6px;">归属组 {{ meta.config.group }}</span>
           <span class="group-badge" v-if="meta.label" style="margin-left:6px;" :title="meta.label">🏷 {{ meta.label }}</span>
           <button class="mini-btn" style="margin-left:6px;" @click="editLabel">{{ meta.label ? '改标签' : '加标签' }}</button>
-          <span class="badge-status" :class="meta.status">{{ meta.status }}</span>
+          <span class="badge-status" :class="meta.status">{{ meta.status }}</span><span v-if="meta.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
           <a class="mini-btn" style="margin-left:auto;" :href="'/api/jobs/' + jobId + '/export-all'"
              title="将三个数据分区（差异/未匹配/完全匹配）合并导出为单个 Excel（含概览/评议note，单元格全文本）">⬇ 全部导出 Excel</a>
         </div>
@@ -1312,7 +1312,7 @@ const JobList = {
           <input class="row-check" type="checkbox" :checked="isJobSel(j.job_id)" @click.stop="toggleJob(j.job_id)" />
           <span class="jid">{{ j.job_id }}</span>
           <span class="group-badge" v-if="(j.config||{}).group">{{ j.config.group }}</span>
-          <span class="badge-status" :class="j.status">{{ j.status }}</span>
+          <span class="badge-status" :class="j.status">{{ j.status }}</span><span v-if="j.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
           <span class="files">{{ j.file_a }} ↔ {{ j.file_b }}</span>
           <span class="group-badge" v-if="j.label" :title="j.label">🏷 {{ j.label }}</span>
           <span class="meta-time">{{ fmtTime(j.created_at) }}</span>
@@ -1473,7 +1473,7 @@ const BatchView = {
           <span class="nick-badge" v-if="nickOf(c)" :title="'配置昵称 ' + nickOf(c)">{{ nickOf(c) }}</span>
           <span class="jid">{{ baseName(c.file_a) }}</span>
           <span class="group-badge" v-if="(c.config||{}).group">{{ c.config.group }}</span>
-          <span class="badge-status" :class="c.status">{{ c.status }}</span>
+          <span class="badge-status" :class="c.status">{{ c.status }}</span><span v-if="c.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
           <span class="count" v-if="c.summary">匹配 {{ c.summary.equal }} · 差异 <b style="color:var(--diff-bar)">{{ c.summary.diff }}</b> · 缺失 {{ c.summary.only_a + c.summary.only_b }}（{{ srcA(c.config) }}有{{ srcB(c.config) }}无 {{ c.summary.only_a }} / {{ srcB(c.config) }}有{{ srcA(c.config) }}无 {{ c.summary.only_b }}）</span>
           <span class="lock-ico" v-if="c.locked" title="已锁定">🔒</span>
         </div>
@@ -1867,7 +1867,7 @@ const SplitResultView = {
     <div class="card">
       <div class="card-head">🪓 拆分结果 · {{ meta.job_id }}
         <span class="group-badge" v-if="meta.label" :title="meta.label">🏷 {{ meta.label }}</span>
-        <span class="badge-status" :class="meta.status">{{ meta.status }}</span>
+        <span class="badge-status" :class="meta.status">{{ meta.status }}</span><span v-if="meta.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
       </div>
       <div class="card-body" style="padding:12px 18px;">
         <div v-if="meta.error" class="err" style="color:var(--diff-bar);">{{ meta.error }}</div>
