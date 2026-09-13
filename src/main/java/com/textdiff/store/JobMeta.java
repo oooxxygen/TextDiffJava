@@ -20,6 +20,9 @@ public final class JobMeta {
     public Map<String, SummaryTrailerField> trailerFields;
     public Boolean recnumCheckA, recnumCheckB;
 
+    /** 三分区 + trailer 行数计数（result.jsonl 写入时统计）。 */
+    public long zoneEqual, zoneDiff, zoneUnmatched, zoneTrailer;
+
     /** Summary.TrailerField 的镜像（engine 类型不进 store 层 API 契约）。 */
     public static final class SummaryTrailerField {
         public String a, b;

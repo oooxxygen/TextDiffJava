@@ -76,8 +76,51 @@ public final class FileJobStore implements JobStore {
 
     @Override
     public synchronized void putNote(NoteRecord note) {
+        if (note.note() == null || note.note().isEmpty()) {
+            deleteNote(note.jobId(), note.key(), note.zone());
+            return;
+        }
         notes.put(noteKey(note), note);
         append("notes.jsonl", note);
+    }
+
+    @Override
+    public synchronized void deleteNote(String jobId, String key, String zone) {
+        notes.remove(jobId + "|" + key + "|" + zone);
+        compact("notes.jsonl", new ArrayList<>(notes.values()));
+    }
+
+    @Override
+    public synchronized boolean deleteJob(String jobId) {
+        JobRecord removed = jobs.remove(jobId);
+        if (removed == null) return false;
+        notes.keySet().removeIf(k -> k.startsWith(jobId + "|"));
+        compact("jobs.jsonl", new ArrayList<>(jobs.values()));
+        compact("notes.jsonl", new ArrayList<>(notes.values()));
+        return true;
+    }
+
+    @Override
+    public synchronized boolean deleteBatch(String batchId) {
+        BatchRecord removed = batches.remove(batchId);
+        if (removed == null) return false;
+        jobs.values().removeIf(j -> batchId.equals(j.batchId));
+        compact("batches.jsonl", new ArrayList<>(batches.values()));
+        compact("jobs.jsonl", new ArrayList<>(jobs.values()));
+        return true;
+    }
+
+    @Override
+    public synchronized java.util.Set<String> notedKeys(String jobId) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        String prefix = jobId + "|";
+        for (String k : notes.keySet()) {
+            if (k.startsWith(prefix)) {
+                String key = k.substring(prefix.length());
+                out.add(key.substring(0, key.lastIndexOf('|')));
+            }
+        }
+        return out;
     }
 
     @Override
@@ -127,6 +170,20 @@ public final class FileJobStore implements JobStore {
             w.newLine();
         } catch (IOException e) {
             throw new UncheckedIOException("FileJobStore 追加失败: " + file, e);
+        }
+    }
+
+    /** 删除后整体重写（记录量=任务元数据规模，量小可整写）。 */
+    private void compact(String fileName, List<?> records) {
+        Path file = dir.resolve(fileName);
+        try (BufferedWriter w = Files.newBufferedWriter(file, StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+            for (Object r : records) {
+                w.write(Json.write(r));
+                w.newLine();
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("FileJobStore 重写失败: " + file, e);
         }
     }
 }

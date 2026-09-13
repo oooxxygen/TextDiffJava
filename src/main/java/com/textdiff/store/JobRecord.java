@@ -29,6 +29,12 @@ public final class JobRecord {
     public long finishedAt;
     /** 结果目录（results/{jobId}），重启后加载展示依据。 */
     public String resultDir;
+    /** 用户标签（结果页/列表改名）。 */
+    public String label;
+    /** 锁定后禁止删除（bulk-delete 返回 locked 清单）。 */
+    public boolean locked;
+    /** 收藏星标。 */
+    public boolean starred;
 
     public JobRecord() {}
 

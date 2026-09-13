@@ -82,8 +82,61 @@ public final class H2JobStore implements JobStore {
 
     @Override
     public synchronized void putNote(NoteRecord note) {
+        if (note.note() == null || note.note().isEmpty()) {
+            deleteNote(note.jobId(), note.key(), note.zone());
+            return;
+        }
         exec("MERGE INTO notes(job_id, note_key, zone, data) KEY(job_id, note_key, zone) VALUES (?, ?, ?, ?)",
                 note.jobId(), note.key(), note.zone(), Json.write(note));
+    }
+
+    @Override
+    public synchronized void deleteNote(String jobId, String key, String zone) {
+        exec("DELETE FROM notes WHERE job_id = ? AND note_key = ? AND zone = ?", jobId, key, zone);
+    }
+
+    @Override
+    public synchronized boolean deleteJob(String jobId) {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT COUNT(*) FROM jobs WHERE id = ?")) {
+            ps.setString(1, jobId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next() || rs.getLong(1) == 0) return false;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
+        exec("DELETE FROM jobs WHERE id = ?", jobId);
+        exec("DELETE FROM notes WHERE job_id = ?", jobId);
+        return true;
+    }
+
+    @Override
+    public synchronized boolean deleteBatch(String batchId) {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT COUNT(*) FROM batches WHERE id = ?")) {
+            ps.setString(1, batchId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next() || rs.getLong(1) == 0) return false;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
+        exec("DELETE FROM jobs WHERE batch_id = ?", batchId);
+        exec("DELETE FROM batches WHERE id = ?", batchId);
+        return true;
+    }
+
+    @Override
+    public synchronized java.util.Set<String> notedKeys(String jobId) {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT note_key, zone FROM notes WHERE job_id = ?")) {
+            ps.setString(1, jobId);
+            try (ResultSet rs = ps.executeQuery()) {
+                java.util.Set<String> out = new java.util.HashSet<>();
+                while (rs.next()) out.add(rs.getString(1));
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Override

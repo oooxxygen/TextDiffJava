@@ -91,7 +91,7 @@ class FileJobStoreTest {
     @Test
     void toleratesCorruptTailLine(@TempDir Path dir) throws Exception {
         Path jobs = dir.resolve("jobs.jsonl");
-        Files.writeString(jobs, "{\"id\":\"j1\",\"batchId\":\"b1\",\"status\":\"done\"}\n"
+        Files.writeString(jobs, "{\"id\":\"j1\",\"batch_id\":\"b1\",\"status\":\"done\"}\n"
                 + "{\"id\":\"j1\",\"stat"); // 崩溃残留半行
         try (FileJobStore store = new FileJobStore(dir)) {
             JobRecord j = store.getJob("j1");

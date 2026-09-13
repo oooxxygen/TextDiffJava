@@ -11,6 +11,10 @@ public final class BatchRecord {
     public String configSource;
     public long createdAt;
     public int jobCount;
+    /** 锁定后禁止删除。 */
+    public boolean locked;
+    /** dirA 中未被任何配置 glob 命中的文件名（提交时算好存档）。 */
+    public java.util.List<String> noRuleFiles;
 
     public BatchRecord() {}
 

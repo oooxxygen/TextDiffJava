@@ -2,6 +2,7 @@ package com.textdiff.store;
 
 import com.textdiff.engine.ResultSink;
 import com.textdiff.engine.RowDiff;
+import com.textdiff.engine.Status;
 import com.textdiff.engine.Summary;
 
 import java.io.BufferedReader;
@@ -31,6 +32,7 @@ public final class ResultFiles {
     /** RowDiff → JSONL 追加写（实现 {@link ResultSink}，Comparator 逐行调用）。需 close。 */
     public static final class JsonlSink implements ResultSink, AutoCloseable {
         private final BufferedWriter w;
+        public long zoneEqual, zoneDiff, zoneUnmatched, zoneTrailer; // meta zone_counts 直接取用
 
         private JsonlSink(BufferedWriter w) {
             this.w = w;
@@ -48,6 +50,15 @@ public final class ResultFiles {
 
         @Override
         public void addRow(RowDiff row) {
+            if (Status.SECTION_TRAILER.equals(row.section)) {
+                zoneTrailer++;
+            } else if (Status.EQUAL.equals(row.status)) {
+                zoneEqual++;
+            } else if (Status.DIFF.equals(row.status)) {
+                zoneDiff++;
+            } else {
+                zoneUnmatched++;
+            }
             try {
                 w.write(Json.write(toDto(row)));
                 w.newLine();

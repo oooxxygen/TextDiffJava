@@ -98,6 +98,31 @@ public final class DualJobStore implements JobStore {
     }
 
     @Override
+    public void deleteNote(String jobId, String key, String zone) {
+        file.deleteNote(jobId, key, zone);
+        mirror(() -> h2.deleteNote(jobId, key, zone));
+    }
+
+    @Override
+    public boolean deleteJob(String jobId) {
+        boolean existed = file.deleteJob(jobId);
+        if (existed) mirror(() -> h2.deleteJob(jobId));
+        return existed;
+    }
+
+    @Override
+    public boolean deleteBatch(String batchId) {
+        boolean existed = file.deleteBatch(batchId);
+        if (existed) mirror(() -> h2.deleteBatch(batchId));
+        return existed;
+    }
+
+    @Override
+    public java.util.Set<String> notedKeys(String jobId) {
+        return file.notedKeys(jobId);
+    }
+
+    @Override
     public boolean dbAvailable() {
         return h2 != null;
     }

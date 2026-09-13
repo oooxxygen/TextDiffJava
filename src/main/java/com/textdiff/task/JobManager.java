@@ -114,15 +114,21 @@ public final class JobManager implements AutoCloseable {
         Path dir = Path.of(job.resultDir);
         try {
             CompareConfig cfg = Rules.parseLegacy(job.configLine, DEFAULT_DELIM, DEFAULT_TRAILER);
-            try (ResultFiles.JsonlSink sink = ResultFiles.JsonlSink.create(dir.resolve(ResultFiles.RESULT_JSONL))) {
+            ResultFiles.JsonlSink sink = ResultFiles.JsonlSink.create(dir.resolve(ResultFiles.RESULT_JSONL));
+            try (sink) {
                 CompareOutcome outcome = Comparator.compareFiles(Path.of(job.fileA), Path.of(job.fileB),
                         cfg, sink, maxInMemoryBytes, dir.resolve("tmp"));
                 Summary s = outcome.summary();
                 job.keyWarning = s.keyDupA > 0 || s.keyDupB > 0; // 需求：主键配置错误醒目提示
                 ResultFiles.writeSummary(dir, s);
                 job.aiStatus = "pending"; // M5 AI 分析器消费 pending 状态
-                ResultFiles.writeMeta(dir, ResultFiles.buildMeta(job,
-                        outcome.detectedEncodingA(), outcome.detectedEncodingB(), s));
+                JobMeta meta = ResultFiles.buildMeta(job,
+                        outcome.detectedEncodingA(), outcome.detectedEncodingB(), s);
+                meta.zoneEqual = sink.zoneEqual;
+                meta.zoneDiff = sink.zoneDiff;
+                meta.zoneUnmatched = sink.zoneUnmatched;
+                meta.zoneTrailer = sink.zoneTrailer;
+                ResultFiles.writeMeta(dir, meta);
             }
             job.status = JobRecord.DONE;
             job.finishedAt = System.currentTimeMillis() / 1000;

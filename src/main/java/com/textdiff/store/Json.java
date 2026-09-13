@@ -1,13 +1,16 @@
 package com.textdiff.store;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 
-/** JSON 序列化统一入口：记录/结果文件共用。 */
+/** JSON 序列化统一入口：记录/结果文件/REST 共用，snake_case 对齐前端契约。 */
 public final class Json {
-    public static final ObjectMapper MAPPER = new ObjectMapper();
+    public static final ObjectMapper MAPPER = new ObjectMapper()
+            .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+            .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     private Json() {}
 
