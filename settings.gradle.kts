@@ -1,1 +1,1 @@
-rootProject.name = "textdiff"
+rootProject.name = "TextDiffJava"

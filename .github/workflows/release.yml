@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build portable images (jpackage win/linux)
+        run: ./gradlew runtimeZip --no-daemon --console=plain
+
+      - name: Build jar
+        run: ./gradlew bootJar --no-daemon --console=plain
+
+      - name: Extract version
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Docker build & push GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/textdiffjava:${{ steps.ver.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/textdiffjava:latest
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/distributions/*.zip
+            build/libs/*.jar
+          generate_release_notes: true
