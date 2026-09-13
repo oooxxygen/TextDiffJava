@@ -26,7 +26,7 @@ jobs:
         run: ./gradlew runtimeZip --no-daemon --console=plain
 
       - name: Build jar
-        run: ./gradlew bootJar --no-daemon --console=plain
+        run: ./gradlew bootJar --no-daemon --console=plain -x test
 
       - name: Extract version
         id: ver

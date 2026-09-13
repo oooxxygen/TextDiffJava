@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     strategy:
+      # 两个 OS 独立跑完，便于同时看到各自的真实失败原因
+      fail-fast: false
       matrix:
         os: [ ubuntu-latest, windows-latest ]
     runs-on: ${{ matrix.os }}
@@ -24,8 +26,14 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build & Test
+      - name: Build & Test (unix)
+        if: runner.os != 'Windows'
         run: ./gradlew build --no-daemon --console=plain
+
+      - name: Build & Test (windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: gradlew.bat build --no-daemon --console=plain
 
       - name: Upload test reports
         if: always()
