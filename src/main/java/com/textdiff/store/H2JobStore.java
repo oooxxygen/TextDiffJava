@@ -14,6 +14,7 @@ import java.util.List;
 /**
  * H2 镜像 JobStore：仅存任务元数据/评议（JSON 整体列），文本行永不入库。
  * 与 FileJobStore 表结构解耦——整条记录序列化为 JSON，schema 演进零迁移。
+ * 另存 commands 命令信箱（外部运行期指挥程序的入口），信箱不参与镜像/重建。
  */
 public final class H2JobStore implements JobStore {
     private final Connection conn;
@@ -23,8 +24,8 @@ public final class H2JobStore implements JobStore {
         try {
             Class.forName("org.h2.Driver");
             Files.createDirectories(dir);
-            // 多半单进程使用，无需 AUTO_SERVER；整条记录 JSON 化存 CLOB，schema 演进零迁移
-            c = DriverManager.getConnection("jdbc:h2:file:" + dir.resolve("textdiff").toAbsolutePath());
+            // AUTO_SERVER 允许外部工具（IDE）运行期共用同一库文件；整条记录 JSON 化存 CLOB，schema 演进零迁移
+            c = DriverManager.getConnection("jdbc:h2:file:" + dir.resolve("textdiff").toAbsolutePath() + ";AUTO_SERVER=TRUE");
             this.conn = c;
             try (Statement st = conn.createStatement()) {
                 st.execute("CREATE TABLE IF NOT EXISTS batches (id VARCHAR(64) PRIMARY KEY, data CLOB)");
@@ -34,6 +35,13 @@ public final class H2JobStore implements JobStore {
                           job_id VARCHAR(64), note_key VARCHAR(512), zone VARCHAR(32), data CLOB,
                           PRIMARY KEY (job_id, note_key, zone))
                         """);
+                st.execute("""
+                        CREATE TABLE IF NOT EXISTS commands (
+                          id VARCHAR(64) PRIMARY KEY, type VARCHAR(32), payload CLOB,
+                          status VARCHAR(16), result CLOB, created_at BIGINT, completed_at BIGINT)
+                        """);
+                // 上次进程中断时停在 running 的命令重置回 pending，保证至少执行一次
+                st.execute("UPDATE commands SET status = 'pending' WHERE status = 'running'");
             }
         } catch (Exception e) {
             if (c != null) {
@@ -149,6 +157,63 @@ public final class H2JobStore implements JobStore {
         return true;
     }
 
+    /** 保存/更新命令（外部插入入口；幂等，同 id 覆盖）。 */
+    public synchronized void saveCommand(CommandRecord c) {
+        exec("MERGE INTO commands(id, type, payload, status, result, created_at, completed_at) KEY(id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                c.id, c.type, c.payload, c.status, c.result, c.createdAt, c.completedAt);
+    }
+
+    /** 取出全部 pending 命令并置为 running；中断残留由建表后的重置语句兜底重放。 */
+    public synchronized List<CommandRecord> pollPendingCommands() {
+        List<CommandRecord> out = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT id, type, payload, status, result, created_at, completed_at FROM commands WHERE status = ? ORDER BY created_at, id")) {
+            ps.setString(1, CommandRecord.PENDING);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) out.add(readCommand(rs));
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("H2 读取失败: commands", e);
+        }
+        for (CommandRecord c : out) {
+            exec("UPDATE commands SET status = ? WHERE id = ?", CommandRecord.RUNNING, c.id);
+            c.status = CommandRecord.RUNNING;
+        }
+        return out;
+    }
+
+    /** 执行完毕回写结果。 */
+    public synchronized void completeCommand(String id, boolean ok, String result) {
+        exec("UPDATE commands SET status = ?, result = ?, completed_at = ? WHERE id = ?",
+                ok ? CommandRecord.DONE : CommandRecord.ERROR, result,
+                System.currentTimeMillis() / 1000, id);
+    }
+
+    public synchronized CommandRecord getCommand(String id) {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT id, type, payload, status, result, created_at, completed_at FROM commands WHERE id = ?")) {
+            ps.setString(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? readCommand(rs) : null;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("H2 读取失败: commands", e);
+        }
+    }
+
+    private static CommandRecord readCommand(ResultSet rs) throws SQLException {
+        CommandRecord c = new CommandRecord();
+        c.id = rs.getString("id");
+        c.type = rs.getString("type");
+        c.payload = rs.getString("payload");
+        c.status = rs.getString("status");
+        c.result = rs.getString("result");
+        c.createdAt = rs.getLong("created_at");
+        long completed = rs.getLong("completed_at");
+        c.completedAt = rs.wasNull() ? null : completed;
+        return c;
+    }
+
     @Override
     public synchronized void close() {
         try {
@@ -157,7 +222,7 @@ public final class H2JobStore implements JobStore {
         }
     }
 
-    /** 供 DualJobStore 重建镜像后清库（可选运维操作）。 */
+    /** 供 DualJobStore 重建镜像后清库（可选运维操作）。命令信箱不属于镜像，保留不清。 */
     synchronized void clearAll() {
         try (Statement st = conn.createStatement()) {
             st.execute("DELETE FROM batches");

@@ -127,6 +127,32 @@ public final class DualJobStore implements JobStore {
         return h2 != null;
     }
 
+    // ---- 命令信箱（仅 H2，不镜像、不落文件）：外部经 IDE/SQL 写入，JobManager 轮询消费 ----
+
+    /** H2 不可用时静默丢弃（与镜像降级语义一致：文件层不受影响）。 */
+    public void saveCommand(CommandRecord c) {
+        H2JobStore db = h2;
+        if (db == null) return;
+        db.saveCommand(c);
+    }
+
+    /** H2 不可用时返回空列表，轮询方无需感知降级。 */
+    public List<CommandRecord> pollPendingCommands() {
+        H2JobStore db = h2;
+        return db == null ? List.of() : db.pollPendingCommands();
+    }
+
+    public void completeCommand(String id, boolean ok, String result) {
+        H2JobStore db = h2;
+        if (db == null) return;
+        db.completeCommand(id, ok, result);
+    }
+
+    public CommandRecord getCommand(String id) {
+        H2JobStore db = h2;
+        return db == null ? null : db.getCommand(id);
+    }
+
     @Override
     public void close() {
         H2JobStore db = h2;
