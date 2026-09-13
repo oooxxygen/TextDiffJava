@@ -87,8 +87,13 @@ public final class ResultFiles {
         return zone.equals(row.status);
     }
 
-    /** 流式分页切片：total 为该 zone 过滤后的总行数（供前端分页控件）。 */
+    /** 流式分页切片：total 为过滤后的总行数（供前端分页控件）。 */
     public static Page readPage(Path resultFile, String zone, long offset, long limit) {
+        return readPage(resultFile, zone, offset, limit, r -> true);
+    }
+
+    public static Page readPage(Path resultFile, String zone, long offset, long limit,
+                                java.util.function.Predicate<RowDiff> extra) {
         List<RowDiff> rows = new ArrayList<>();
         long total = 0;
         try (Stream<String> lines = Files.lines(resultFile, StandardCharsets.UTF_8)) {
@@ -100,7 +105,7 @@ public final class ResultFiles {
                 } catch (RuntimeException e) {
                     continue; // 半行损坏容错
                 }
-                if (!zoneMatches(zone, row)) continue;
+                if (!zoneMatches(zone, row) || !extra.test(row)) continue;
                 if (total >= offset && rows.size() < limit) rows.add(row);
                 total++;
             }

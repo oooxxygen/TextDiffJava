@@ -24,7 +24,7 @@ public final class Rules {
 
     private static final String[] EXT_KEYS = {
             "KEYSEQ", "OMITSEQ", "IGNORESEQ", "DELIM", "ENCA", "ENCB",
-            "SRCA", "SRCB", "TRAILER", "REPLACE", "MTIME"
+            "SRCA", "SRCB", "TRAILER", "REPLACE", "COLS", "MTIME"
     };
     private static final Pattern TOKEN_SPLIT =
             Pattern.compile(":(?=(?:" + String.join("|", EXT_KEYS) + ")=)");
@@ -76,6 +76,7 @@ public final class Rules {
                 case "SRCB" -> cfg.sourceB = blankTo(value.strip(), "B");
                 case "TRAILER" -> { if (!value.strip().isEmpty()) cfg.trailerPrefix = value.strip(); }
                 case "REPLACE" -> cfg.replaceRules = decodeReplace(value.strip());
+                case "COLS" -> cfg.columnNames = decodeStringList(value.strip());
                 default -> { /* MTIME 等忽略 */ }
             }
         }
@@ -98,6 +99,7 @@ public final class Rules {
             parts.add("SRCB=" + blankTo(cfg.sourceB, "B"));
             parts.add("TRAILER=" + (cfg.trailerPrefix == null ? "" : cfg.trailerPrefix));
             if (!cfg.replaceRules.isEmpty()) parts.add("REPLACE=" + encodeReplace(cfg.replaceRules));
+            if (!cfg.columnNames.isEmpty()) parts.add("COLS=" + encodeStringList(cfg.columnNames));
         }
         return String.join(":", parts);
     }
@@ -114,6 +116,27 @@ public final class Rules {
     }
 
     // ---- REPLACE base64(JSON) 编解码 ----
+
+    /** 列名列表 base64(JSON) 编解码（COLS= 令牌）。 */
+    static String encodeStringList(List<String> list) {
+        try {
+            return Base64.getEncoder().encodeToString(MAPPER.writeValueAsBytes(list));
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    static List<String> decodeStringList(String token) {
+        if (token == null || token.isEmpty()) return new ArrayList<>();
+        try {
+            JsonNode root = MAPPER.readTree(Base64.getDecoder().decode(token));
+            List<String> out = new ArrayList<>();
+            root.forEach(n -> out.add(n.asText()));
+            return out;
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
+    }
 
     static String encodeReplace(Map<Integer, List<String[]>> rr) {
         ObjectNode obj = MAPPER.createObjectNode();

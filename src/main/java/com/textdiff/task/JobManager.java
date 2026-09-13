@@ -59,12 +59,14 @@ public final class JobManager implements AutoCloseable {
                 configLines.size() + " 行配置", 0);
 
         List<JobRecord> jobs = new ArrayList<>();
+        java.util.Set<String> matched = new java.util.HashSet<>();
         for (String line : configLines) {
             if (line.strip().isEmpty() || line.strip().startsWith("#")) continue;
             CompareConfig cfg = Rules.parseLegacy(line, DEFAULT_DELIM, DEFAULT_TRAILER);
             String configLine = Rules.toLegacyLine(cfg, true); // 规范化全量行：结果页展示与重跑依据
             for (String[] pair : Rules.pairFiles(dirA, dirB, cfg.fileGlob)) {
                 String fileName = Path.of(pair[0]).getFileName().toString();
+                matched.add(fileName);
                 String jobId = newId();
                 JobRecord job = new JobRecord(jobId, batchId,
                         cfg.nickname + " · " + fileName, configLine, pair[0], pair[1],
@@ -72,6 +74,7 @@ public final class JobManager implements AutoCloseable {
                 jobs.add(job);
             }
         }
+        batch.noRuleFiles = unmatchedFiles(dirA, matched);
         batch.jobCount = jobs.size();
         store.saveBatch(batch);
         for (JobRecord job : jobs) {
@@ -203,6 +206,20 @@ public final class JobManager implements AutoCloseable {
                 submit(job);
             }
         }
+    }
+
+    /** dirA 中未被任何配置 glob 命中的普通文件（需求：无规则文件提示）。 */
+    private static List<String> unmatchedFiles(Path dirA, java.util.Set<String> matched) {
+        List<String> out = new ArrayList<>();
+        try (var s = java.nio.file.Files.list(dirA)) {
+            for (Path p : s.filter(java.nio.file.Files::isRegularFile).sorted().toList()) {
+                String name = p.getFileName().toString();
+                if (!matched.contains(name)) out.add(name);
+            }
+        } catch (IOException e) {
+            // 目录不可读时不阻断提交
+        }
+        return out;
     }
 
     private static String newId() {

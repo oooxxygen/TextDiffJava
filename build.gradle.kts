@@ -25,7 +25,13 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-tasks.withType<Test> { useJUnitPlatform() }
+tasks.withType<Test> {
+    useJUnitPlatform()
+    // 测试运行目录隔离：避免污染仓库根目录（store/results/configs 等）
+    systemProperty("textdiff.base.dir",
+            layout.buildDirectory.dir("test-run").get().asFile.absolutePath)
+    doFirst { delete(layout.buildDirectory.dir("test-run")) }
+}
 
 // 便携运行时（jlink）模块集 —— EBCDIC/UTF-16 依赖 jdk.charsets
 runtime {
