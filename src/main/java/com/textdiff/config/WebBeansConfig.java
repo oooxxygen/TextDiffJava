@@ -29,9 +29,16 @@ public class WebBeansConfig {
         return new DualJobStore(paths.baseDir().resolve("store"), cfg.store().enabled());
     }
 
+    /** 字段名映射（源系统字段配置）：JSONL 事实来源 + H2 镜像。 */
     @Bean(destroyMethod = "close")
-    public JobManager jobManager(DualJobStore store, AppPaths paths, AppConfig cfg) {
-        return new JobManager(store, paths.resultsDir(), cfg.engine());
+    public com.textdiff.store.FieldMapStore fieldMapStore(AppPaths paths, AppConfig cfg) {
+        return new com.textdiff.store.FieldMapStore(paths.baseDir().resolve("store"), cfg.store().enabled());
+    }
+
+    @Bean(destroyMethod = "close")
+    public JobManager jobManager(DualJobStore store, AppPaths paths, AppConfig cfg,
+                                 com.textdiff.store.FieldMapStore fieldMaps) {
+        return new JobManager(store, paths.resultsDir(), cfg.engine(), fieldMaps);
     }
 
     /** AI 分析器（构造即挂载 aiHook，作业 done 后自动触发 prompt.md/ai_analysis.json 产出）。 */

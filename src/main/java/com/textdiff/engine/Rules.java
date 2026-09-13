@@ -118,7 +118,7 @@ public final class Rules {
     // ---- REPLACE base64(JSON) 编解码 ----
 
     /** 列名列表 base64(JSON) 编解码（COLS= 令牌）。 */
-    static String encodeStringList(List<String> list) {
+    public static String encodeStringList(List<String> list) {
         try {
             return Base64.getEncoder().encodeToString(MAPPER.writeValueAsBytes(list));
         } catch (Exception e) {
@@ -126,7 +126,7 @@ public final class Rules {
         }
     }
 
-    static List<String> decodeStringList(String token) {
+    public static List<String> decodeStringList(String token) {
         if (token == null || token.isEmpty()) return new ArrayList<>();
         try {
             JsonNode root = MAPPER.readTree(Base64.getDecoder().decode(token));

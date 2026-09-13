@@ -36,6 +36,9 @@ final class ApiPayloads {
         sb.append(p.file_glob() == null || p.file_glob().isBlank() ? "*" : p.file_glob().strip());
         if (p.key_seq() != null && !p.key_seq().isBlank()) sb.append(":KEYSEQ=").append(p.key_seq().strip());
         if (p.omit_seq() != null && !p.omit_seq().isBlank()) sb.append(":OMITSEQ=").append(p.omit_seq().strip());
+        if (p.column_names() != null && !p.column_names().isEmpty()) {
+            sb.append(":COLS=").append(Rules.encodeStringList(p.column_names()));
+        }
         if (p.delimiter() != null) sb.append(":DELIM=").append(p.delimiter());
         sb.append(":ENCA=").append(p.encoding_a() == null || p.encoding_a().isBlank() ? "auto" : p.encoding_a().strip());
         sb.append(":ENCB=").append(p.encoding_b() == null || p.encoding_b().isBlank() ? "auto" : p.encoding_b().strip());

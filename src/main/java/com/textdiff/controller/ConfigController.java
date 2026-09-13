@@ -3,7 +3,9 @@ package com.textdiff.controller;
 import com.textdiff.config.AppPaths;
 import com.textdiff.engine.CompareConfig;
 import com.textdiff.engine.Rules;
+import com.textdiff.store.FieldMaps;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -15,14 +17,16 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/** 配置端点：configs 目录下的 legacy 配置行文件（{nickname}.conf）CRUD 与解析预览。 */
+/** 配置端点：configs 目录下的 legacy 配置行文件（{nickname}.conf）CRUD、解析预览、结构 CSV（列名映射）导入。 */
 @RestController
 @RequestMapping("/api")
 public class ConfigController {
     private final AppPaths paths;
+    private final com.textdiff.store.FieldMapStore fieldMaps;
 
-    public ConfigController(AppPaths paths) {
+    public ConfigController(AppPaths paths, com.textdiff.store.FieldMapStore fieldMaps) {
         this.paths = paths;
+        this.fieldMaps = fieldMaps;
     }
 
     @GetMapping("/configs")
@@ -120,15 +124,114 @@ public class ConfigController {
         return out;
     }
 
-    /** M6+ 再评估：Excel 导入导出非本次需求范围。 */
-    @PostMapping({"/configs/import-structure", "/configs/import-baseline"})
-    public Map<String, Object> importStub() {
-        throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Excel 导入未启用（CSV 配置请直接写入 configs/）");
+    /**
+     * 列名映射导入（源系统字段配置）：上传多个 CSV。
+     * bat_report_type_parm*.csv → 文件名/昵称/文件类型；bat_report_conf_field*.csv → 昵称/字段名/类型。
+     * 入库（JSONL + H2 双写）并为每个昵称生成 configs/{report_id}.conf（含 COLS 列名），在新建对比页可搜索。
+     */
+    @PostMapping("/configs/import-structure")
+    public Map<String, Object> importStructure(@RequestParam("files") List<MultipartFile> files)
+            throws IOException {
+        if (files == null || files.isEmpty()) throw new IllegalArgumentException("未选择 CSV 文件");
+        List<FieldMaps.ReportType> types = new ArrayList<>();
+        List<FieldMaps.ReportField> fields = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
+        for (MultipartFile f : files) {
+            String name = Path.of(f.getOriginalFilename() == null ? "file.csv" : f.getOriginalFilename())
+                    .getFileName().toString();
+            byte[] content = f.getBytes();
+            var kind = com.textdiff.store.StructureCsv.kindOf(name, content);
+            switch (kind) {
+                case TYPE_PARM -> types.addAll(com.textdiff.store.StructureCsv.parseTypes(content, name));
+                case CONF_FIELD -> fields.addAll(com.textdiff.store.StructureCsv.parseFields(content, name));
+                default -> skipped.add(name);
+            }
+            names.add(name);
+        }
+        if (types.isEmpty() && fields.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "未识别到 bat_report_type_parm*.csv / bat_report_conf_field*.csv（跳过: " + skipped + "）");
+        }
+        FieldMaps.ImportSummary sum = fieldMaps.importAll(types, fields, names);
+
+        // 生成可搜索配置：昵称 → 通配名（report_file_name）+ COLS 列名
+        Map<String, List<String>> namesByReport = new java.util.LinkedHashMap<>();
+        for (FieldMaps.ReportField rf : fields) {
+            namesByReport.computeIfAbsent(rf.reportId(), k -> new ArrayList<>()).add(rf.fieldName());
+        }
+        List<String> confFiles = new ArrayList<>();
+        Path dir = paths.configsDir();
+        Files.createDirectories(dir);
+        for (FieldMaps.ReportType t : types) {
+            CompareConfig cfg = new CompareConfig();
+            cfg.nickname = t.reportId();
+            cfg.fileGlob = t.reportFileName().isBlank() ? "*" : t.reportFileName();
+            cfg.group = t.parmReportType() == null || t.parmReportType().isBlank()
+                    ? t.reportId() : t.parmReportType();
+            cfg.columnNames = namesByReport.getOrDefault(t.reportId(), new ArrayList<>());
+            Path conf = dir.resolve(safeName(t.reportId()) + ".conf");
+            Files.writeString(conf, Rules.toLegacyLine(cfg, true) + System.lineSeparator(),
+                    StandardCharsets.UTF_8);
+            confFiles.add(conf.getFileName().toString());
+        }
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("imported", confFiles.size());
+        out.put("file", "configs/ " + String.join("、", confFiles));
+        out.put("types", sum.types());
+        out.put("fields", sum.fields());
+        out.put("nicknames", sum.nicknames());
+        if (!skipped.isEmpty()) out.put("skipped", skipped);
+        return out;
+    }
+
+    /** 字段映射浏览：全部报表（昵称/文件名/类型/字段数）。 */
+    @GetMapping("/fieldmaps")
+    public Map<String, Object> fieldmaps() {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (FieldMaps.ReportType t : fieldMaps.allTypes()) {
+            Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("report_id", t.reportId());
+            m.put("report_file_name", t.reportFileName());
+            m.put("parm_report_type", t.parmReportType());
+            m.put("field_count", fieldMaps.fieldNamesFor(t.reportId()).size());
+            m.put("source_file", t.sourceFile());
+            out.add(m);
+        }
+        return Map.of("reports", out, "db_available", fieldMaps.dbAvailable());
+    }
+
+    /** 指定报表的 0-based 字段名列表（对比界面/导出所用的最终形态）。 */
+    @GetMapping("/fieldmaps/get")
+    public Map<String, Object> fieldmapGet(@RequestParam("report_id") String reportId) {
+        FieldMaps.ReportType t = fieldMaps.typeByReport(reportId);
+        if (t == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "无此报表映射: " + reportId);
+        List<Map<String, Object>> cols = new ArrayList<>();
+        List<String> names = fieldMaps.fieldNamesFor(reportId);
+        for (int i = 0; i < names.size(); i++) {
+            Map<String, Object> c = new java.util.LinkedHashMap<>();
+            c.put("col_index", i);
+            c.put("field_name", names.get(i));
+            cols.add(c);
+        }
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("report_id", reportId);
+        out.put("report_file_name", t.reportFileName());
+        out.put("parm_report_type", t.parmReportType());
+        out.put("columns", cols);
+        return out;
     }
 
     @GetMapping("/configs/export")
     public Map<String, Object> exportStub() {
         throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Excel 导出未启用");
+    }
+
+    /** 配置文件名安全：报表昵称限字母数字下划线中划线点中文。 */
+    private static String safeName(String name) {
+        String n = name.strip();
+        if (!n.matches("[\\w.\\-\\u4e00-\\u9fff]+")) n = n.replaceAll("[^\\w.\\-\\u4e00-\\u9fff]", "_");
+        return n;
     }
 
     // ---- internals ----

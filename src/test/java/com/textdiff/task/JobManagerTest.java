@@ -2,8 +2,10 @@ package com.textdiff.task;
 
 import com.textdiff.config.EngineConfig;
 import com.textdiff.engine.Status;
+import com.textdiff.store.CommandRecord;
 import com.textdiff.store.DualJobStore;
 import com.textdiff.store.JobRecord;
+import com.textdiff.store.Json;
 import com.textdiff.store.ResultFiles;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -131,5 +133,96 @@ class JobManagerTest {
             assertEquals(JobRecord.DONE, mgr.getJob("jstuck").status);
             assertEquals(1, ResultFiles.readPage(Path.of(mgr.getJob("jstuck").resultDir)
                     .resolve("result.jsonl"), "all", 0, 10).total());        }
+    }
+
+    /** 等待后台轮询器把命令消费到终态，返回终态命令。 */
+    private static CommandRecord awaitCommand(DualJobStore store, String commandId) throws InterruptedException {
+        for (int i = 0; i < 100; i++) {
+            CommandRecord c = store.getCommand(commandId);
+            if (c != null && (CommandRecord.DONE.equals(c.status) || CommandRecord.ERROR.equals(c.status))) return c;
+            Thread.sleep(100);
+        }
+        return null;
+    }
+
+    @Test
+    void retryCommandViaMailbox(@TempDir Path dir) throws Exception {
+        makePair(dir, "f1.txt", "k1 | 1\n", "k1 | 1\n");
+        try (DualJobStore store = new DualJobStore(dir.resolve("store"), true);
+             JobManager mgr = new JobManager(store, dir.resolve("results"), EngineConfig.defaults())) {
+            var batch = mgr.createBatch(dir.resolve("a"), dir.resolve("b"), List.of("NICK:*.txt:KEYSEQ=1"));
+            assertTrue(mgr.awaitIdle(30, TimeUnit.SECONDS));
+            JobRecord job = mgr.listJobs(batch.id).get(0);
+            job.status = JobRecord.FAILED;
+            job.error = "模拟故障";
+            store.saveJob(job);
+
+            store.saveCommand(new CommandRecord("cmd-retry-1", "retry", "{\"jobId\":\"" + job.id + "\"}"));
+            CommandRecord done = awaitCommand(store, "cmd-retry-1");
+            assertNotNull(done, "命令未被轮询消费");
+            assertEquals(CommandRecord.DONE, done.status, done.result);
+            assertEquals("ok", done.result);
+            assertTrue(mgr.awaitIdle(30, TimeUnit.SECONDS));
+            assertEquals(JobRecord.DONE, mgr.getJob(job.id).status);
+        }
+    }
+
+    @Test
+    void createBatchCommandViaMailbox(@TempDir Path dir) throws Exception {
+        makePair(dir, "f1.txt", "k1 | 1\n", "k1 | 2\n");
+        try (DualJobStore store = new DualJobStore(dir.resolve("store"), true);
+             JobManager mgr = new JobManager(store, dir.resolve("results"), EngineConfig.defaults())) {
+            String payload = Json.write(java.util.Map.of(
+                    "dirA", dir.resolve("a").toString(),
+                    "dirB", dir.resolve("b").toString(),
+                    "configLines", List.of("NICK:*.txt:KEYSEQ=1")));
+            store.saveCommand(new CommandRecord("cmd-batch-1", "create_batch", payload));
+
+            CommandRecord done = awaitCommand(store, "cmd-batch-1");
+            assertNotNull(done, "命令未被轮询消费");
+            assertEquals(CommandRecord.DONE, done.status, done.result);
+            assertTrue(mgr.awaitIdle(30, TimeUnit.SECONDS));
+            JobRecord job = mgr.listJobs(done.result).get(0); // result = 新批次 id
+            assertEquals(JobRecord.DONE, job.status, job.error);
+        }
+    }
+
+    @Test
+    void unknownCommandTypeReportsError(@TempDir Path dir) throws Exception {
+        try (DualJobStore store = new DualJobStore(dir.resolve("store"), true);
+             JobManager mgr = new JobManager(store, dir.resolve("results"), EngineConfig.defaults())) {
+            store.saveCommand(new CommandRecord("cmd-bogus-1", "bogus", "{}"));
+            CommandRecord done = awaitCommand(store, "cmd-bogus-1");
+            assertNotNull(done, "命令未被轮询消费");
+            assertEquals(CommandRecord.ERROR, done.status);
+            assertTrue(done.result.contains("未知命令类型"), done.result);
+        }
+    }
+
+    @Test
+    void fieldMapInjectsColumnNamesIntoConfigLine(@TempDir Path dir) throws Exception {
+        makePair(dir, "f1.txt", "k1 | 1\nk2 | 2\n", "k1 | 1\nk2 | 9\n");
+        try (DualJobStore store = new DualJobStore(dir.resolve("store"), false);
+             com.textdiff.store.FieldMapStore maps = new com.textdiff.store.FieldMapStore(
+                     dir.resolve("fieldmaps"), false);
+             JobManager mgr = new JobManager(store, dir.resolve("results"),
+                     EngineConfig.defaults(), maps)) {
+            maps.importAll(
+                    List.of(new com.textdiff.store.FieldMaps.ReportType("R1", "f1.txt", "对公", "t.csv", 1L)),
+                    List.of(new com.textdiff.store.FieldMaps.ReportField("R1", 0, "客户号", "CHAR"),
+                            new com.textdiff.store.FieldMaps.ReportField("R1", 1, "余额", "DECIMAL")),
+                    List.of("t.csv"));
+            // 配置行本身无 COLS：作业运行时按文件名注入并持久化
+            var batch = mgr.createBatch(dir.resolve("a"), dir.resolve("b"), List.of("NICK:*.txt:KEYSEQ=1"));
+            assertTrue(mgr.awaitIdle(30, TimeUnit.SECONDS));
+            JobRecord job = mgr.listJobs(batch.id).get(0);
+            assertEquals(JobRecord.DONE, job.status, job.error);
+            assertTrue(job.configLine.contains("COLS="), job.configLine);
+            var cfg = com.textdiff.engine.Rules.parseLegacy(job.configLine, " | ", "|||||");
+            assertEquals(List.of("客户号", "余额"), cfg.columnNames);
+            // meta 携带同一配置行（前端 column_names 来源）
+            var meta = ResultFiles.readMeta(Path.of(job.resultDir));
+            assertTrue(meta.configLine.contains("COLS="), meta.configLine);
+        }
     }
 }
