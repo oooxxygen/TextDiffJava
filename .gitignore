@@ -5,3 +5,5 @@ build/
 results/
 results_split/
 data/
+acceptance-run/
+.zcode/plans/
