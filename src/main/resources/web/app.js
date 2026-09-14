@@ -1756,7 +1756,7 @@ const TaskManagerPage = {
   template: `
   <div>
     <div class="card"><div class="card-body" style="padding:12px 18px;">
-      <input v-model="q" placeholder="🔎 搜索任务（按批次/作业/文件/产物路径）" />
+      <div class="field"><input v-model="q" placeholder="🔎 搜索任务（按批次/作业/文件/产物路径）" /></div>
     </div></div>
 
     <div class="card" v-for="b in batches" :key="b.batch.batch_id">
@@ -2081,6 +2081,7 @@ const App = {
     const jobId = ref(null);
     const batchId = ref(null);
     const backBatch = ref(null);   // 结果页从某批次进入时记录，用于返回
+    const backTab = ref(null);     // 从任务管理进入结果/批次时记录，返回按钮回到任务管理
     const resultNonce = ref(0);    // 自增令牌：即使 job_id 不变（就地重跑）也强制结果页重挂载刷新
     const splitJobId = ref(null);  // 当前查看的拆分作业
     const encodings = ref(["auto", "utf-8"]);
@@ -2091,18 +2092,25 @@ const App = {
       if (ids && ids.length) { jobId.value = ids[0]; backBatch.value = null; resultNonce.value++; tab.value = "result"; }
     }
     function onBatched(bid) { batchId.value = bid; tab.value = "batch"; }
-    function openJob(id) { jobId.value = id; backBatch.value = null; resultNonce.value++; tab.value = "result"; }
-    function openBatch(id) { batchId.value = id; tab.value = "batch"; }
+    function openJob(id) { jobId.value = id; backBatch.value = null; backTab.value = null; resultNonce.value++; tab.value = "result"; }
+    function openBatch(id) { batchId.value = id; backTab.value = null; tab.value = "batch"; }
     function openChild(id) { jobId.value = id; backBatch.value = batchId.value; resultNonce.value++; tab.value = "result"; }
+    // 任务管理页跳转：记录来源，结果/批次页返回时回到任务管理
+    function openJobFromTasks(id) { jobId.value = id; backBatch.value = null; backTab.value = "tasks"; resultNonce.value++; tab.value = "result"; }
+    function openBatchFromTasks(id) { batchId.value = id; backTab.value = "tasks"; tab.value = "batch"; }
     // 就地重跑后：保留 backBatch（仍可返回批次），仅刷新结果页
     function onRerun(id) { jobId.value = id; resultNonce.value++; tab.value = "result"; }
-    // 结果页返回：从批次进入则回批次页，否则回作业列表
-    function onResultBack() { tab.value = backBatch.value ? "batch" : "jobs"; }
-    function backToJobs() { tab.value = "jobs"; }
+    // 结果页返回：从批次进入则回批次页（批次页返回再按来源处理）；从任务管理直接进入则回任务管理；否则回作业列表
+    function onResultBack() {
+      if (backBatch.value) { tab.value = "batch"; return; }
+      if (backTab.value === "tasks") { tab.value = "tasks"; return; }
+      tab.value = "jobs";
+    }
+    function backToJobs() { tab.value = backTab.value === "tasks" ? "tasks" : "jobs"; }
     function openSplit(id) { splitJobId.value = id; tab.value = "splitresult"; }
-    return { tab, jobId, batchId, backBatch, resultNonce, splitJobId, encodings,
-             onSubmitted, onBatched, openJob, openBatch, openChild, onRerun, onResultBack,
-             backToJobs, openSplit };
+    return { tab, jobId, batchId, backBatch, backTab, resultNonce, splitJobId, encodings,
+             onSubmitted, onBatched, openJob, openBatch, openChild, openJobFromTasks,
+             openBatchFromTasks, onRerun, onResultBack, backToJobs, openSplit };
   },
   template: `
   <div class="app-header">
@@ -2118,7 +2126,7 @@ const App = {
   <div class="container">
     <SubmitForm v-if="tab==='submit'" :encodings="encodings" @submitted="onSubmitted" @batched="onBatched" />
     <JobList v-else-if="tab==='jobs'" @open="openJob" @open-batch="openBatch" @open-split="openSplit" />
-    <TaskManagerPage v-else-if="tab==='tasks'" @open="openJob" @open-batch="openBatch" />
+    <TaskManagerPage v-else-if="tab==='tasks'" @open="openJobFromTasks" @open-batch="openBatchFromTasks" />
     <SplitPage v-else-if="tab==='split'" @open-split="openSplit" />
     <SplitResultView v-else-if="tab==='splitresult' && splitJobId" :job-id="splitJobId" :key="splitJobId" @back="backToJobs" />
     <BatchView v-else-if="tab==='batch' && batchId" :batch-id="batchId" :key="batchId" @open="openChild" @back="backToJobs" />
