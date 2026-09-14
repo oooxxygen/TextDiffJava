@@ -155,7 +155,13 @@ public final class TaskManager implements AutoCloseable {
         TaskRecord t = tasks.get(taskId);
         if (t == null || !TaskRecord.PENDING.equals(t.status)) return;
         JobRecord job = store.getJob(t.jobId);
-        if (job == null) return;
+        if (job == null) {
+            t.status = TaskRecord.FAILED; // 作业已被删除：明确失败而非永久待开始
+            t.error = "作业不存在（可能已删除）";
+            t.finishedAt = System.currentTimeMillis() / 1000;
+            tasks.save(t);
+            return;
+        }
         t.status = TaskRecord.RUNNING;
         t.startedAt = System.currentTimeMillis() / 1000;
         t.error = "";
