@@ -1769,7 +1769,7 @@ const TaskManagerPage = {
         <span class="count">共 {{ b.total_files }} 文件</span>
         <span class="row-actions" @click.stop>
           <button class="mini-btn" @click="openBatch(b.batch.batch_id)">批次详情</button>
-          <button class="mini-btn">{{ openBatches.has(b.batch.batch_id) ? '收起 ▲' : '展开 ▼' }}</button>
+          <button class="mini-btn" @click.stop="toggleBatch(b.batch.batch_id)">{{ openBatches.has(b.batch.batch_id) ? '收起 ▲' : '展开 ▼' }}</button>
         </span>
       </div>
       <template v-if="openBatches.has(b.batch.batch_id)">
@@ -1780,7 +1780,7 @@ const TaskManagerPage = {
             <span class="count">{{ tasksOf(c.job_id).length ? tasksOf(c.job_id).map(t => typeText(t) + '·' + statusText(t)).join('　') : (c.status==='done' ? '无任务记录' : '等待对比完成…') }}</span>
             <span class="row-actions" @click.stop>
               <button class="mini-btn" @click="open(c.job_id)">结果</button>
-              <button class="mini-btn" v-if="tasksOf(c.job_id).length">{{ openJobs.has(c.job_id) ? '收起 ▲' : '展开 ▼' }}</button>
+              <button class="mini-btn" v-if="tasksOf(c.job_id).length" @click.stop="toggle(openJobs, c.job_id)">{{ openJobs.has(c.job_id) ? '收起 ▲' : '展开 ▼' }}</button>
             </span>
           </div>
           <div class="job-row" style="padding-left:64px;" v-for="t in tasksOf(c.job_id)" :key="t.task_id">
@@ -1810,7 +1810,7 @@ const TaskManagerPage = {
             <span class="count">{{ tasksOf(j.job_id).length ? tasksOf(j.job_id).map(t => typeText(t) + '·' + statusText(t)).join('　') : (j.status==='done' ? '无任务记录' : '等待对比完成…') }}</span>
             <span class="row-actions" @click.stop>
               <button class="mini-btn" @click="open(j.job_id)">结果</button>
-              <button class="mini-btn" v-if="tasksOf(j.job_id).length">{{ openJobs.has(j.job_id) ? '收起 ▲' : '展开 ▼' }}</button>
+              <button class="mini-btn" v-if="tasksOf(j.job_id).length" @click.stop="toggle(openJobs, j.job_id)">{{ openJobs.has(j.job_id) ? '收起 ▲' : '展开 ▼' }}</button>
             </span>
           </div>
           <template v-if="openJobs.has(j.job_id)">
