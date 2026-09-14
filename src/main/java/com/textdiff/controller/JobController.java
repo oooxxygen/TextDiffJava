@@ -256,24 +256,31 @@ public class JobController {
         return out;
     }
 
-    /** 手动触发 AI 归纳分析，返回 {content, structured?}。 */
+    /** 手动触发 AI 归纳分析，返回 {content}（Markdown 全文）。 */
     @PostMapping("/jobs/{id}/analyze")
     public Map<String, Object> analyze(@PathVariable String id) {
         JobRecord job = require(id);
         java.nio.file.Path dir = java.nio.file.Path.of(job.resultDir);
-        java.nio.file.Path analysis = dir.resolve("ai_analysis.json");
-        if (!java.nio.file.Files.isRegularFile(analysis)) {
+        java.nio.file.Path md = dir.resolve("ai_analysis.md");
+        java.nio.file.Path legacy = dir.resolve("ai_analysis.json"); // 旧版本产物兜底
+        if (!java.nio.file.Files.isRegularFile(md) && !java.nio.file.Files.isRegularFile(legacy)) {
             analyzer.analyze(id); // 同步执行，前端等待结果
             job = require(id);
         }
         try {
-            if (!java.nio.file.Files.isRegularFile(analysis)) {
-                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                        "AI 未启用或分析未产出（aiStatus=" + job.aiStatus + "）");
+            if (java.nio.file.Files.isRegularFile(md)) {
+                return Map.of("content",
+                        java.nio.file.Files.readString(md, java.nio.charset.StandardCharsets.UTF_8));
             }
-            return com.textdiff.store.Json.MAPPER.readValue(analysis.toFile(), Map.class);
+            if (java.nio.file.Files.isRegularFile(legacy)) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> json = com.textdiff.store.Json.MAPPER.readValue(legacy.toFile(), Map.class);
+                return Map.of("content", String.valueOf(json.getOrDefault("content", "")));
+            }
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "AI 未启用或分析未产出（aiStatus=" + job.aiStatus + "）");
         } catch (java.io.IOException e) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "ai_analysis.json 读取失败");
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "AI 分析结果读取失败");
         }
     }
 

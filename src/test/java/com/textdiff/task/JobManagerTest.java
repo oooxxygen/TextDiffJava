@@ -208,9 +208,9 @@ class JobManagerTest {
              JobManager mgr = new JobManager(store, dir.resolve("results"),
                      EngineConfig.defaults(), maps)) {
             maps.importAll(
-                    List.of(new com.textdiff.store.FieldMaps.ReportType("R1", "f1.txt", "对公", "t.csv", 1L)),
-                    List.of(new com.textdiff.store.FieldMaps.ReportField("R1", 0, "客户号", "CHAR"),
-                            new com.textdiff.store.FieldMaps.ReportField("R1", 1, "余额", "DECIMAL")),
+                    List.of(new com.textdiff.store.FieldMaps.ReportType("R1", "f1.txt", "对公", "", "t.csv", 1L)),
+                    List.of(new com.textdiff.store.FieldMaps.ReportField("R1", 0, "客户号", "CHAR", ""),
+                            new com.textdiff.store.FieldMaps.ReportField("R1", 1, "余额", "DECIMAL", "")),
                     List.of("t.csv"));
             // 配置行本身无 COLS：作业运行时按文件名注入并持久化
             var batch = mgr.createBatch(dir.resolve("a"), dir.resolve("b"), List.of("NICK:*.txt:KEYSEQ=1"));

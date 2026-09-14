@@ -46,8 +46,8 @@ class E2eV01Test {
                      dir.resolve("store"), false)) {
             // 生成任务编排：作业 done → 差异CSV导出 + AI分析两条任务（AI 未启用 → prompt.md 仍产出）
             com.textdiff.ai.AiAnalyzer ai = new com.textdiff.ai.AiAnalyzer(store, fakeAppConfig(),
-                    new com.textdiff.config.AppPaths(dir, dir), null);
-            try (TaskManager tasks = new TaskManager(store, taskStore, ai,
+                    new com.textdiff.config.AppPaths(dir, dir), null, null);
+            try (TaskManager tasks = new TaskManager(store, taskStore, ai, null,
                     new com.textdiff.config.AppPaths(dir, dir), dir.resolve("results"))) {
                 mgr.doneHook = tasks::registerDefaults;
             var batch = mgr.createBatch(V01.resolve("bocso"), V01.resolve("bocsoxc"), configLines);

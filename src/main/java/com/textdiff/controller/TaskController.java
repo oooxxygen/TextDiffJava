@@ -55,22 +55,20 @@ public class TaskController {
         return Map.of("ok", true);
     }
 
-    /** 生成路径设置（配置管理界面）：空 = 默认（导出 → results/{batchId}/export，AI → 结果目录）。 */
+    /** 生成路径设置（配置管理界面）：空 = 默认 results/{batchId}/export；AI 分析结果随该目录。 */
     @GetMapping("/settings/tasks")
     public Map<String, Object> taskSettings() {
         TaskManager.TaskDirs d = tasks.settings();
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("export_dir", d.exportDir());
-        out.put("ai_dir", d.aiDir());
         return out;
     }
 
     @PostMapping("/settings/tasks")
     public Map<String, Object> saveTaskSettings(@RequestBody Map<String, Object> body) {
         String exportDir = str(body.get("export_dir"));
-        String aiDir = str(body.get("ai_dir"));
-        tasks.saveSettings(new TaskManager.TaskDirs(exportDir, aiDir));
-        return Map.of("ok", true, "export_dir", exportDir, "ai_dir", aiDir);
+        tasks.saveSettings(new TaskManager.TaskDirs(exportDir));
+        return Map.of("ok", true, "export_dir", exportDir);
     }
 
     private Map<String, Object> taskMap(TaskRecord t) {

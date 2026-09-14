@@ -19,21 +19,40 @@ import java.util.Map;
 
 /**
  * 提示词渲染：内置模板 resources/prompts/analysis-template.md（configs/analysis-template.md 可覆盖）
- * + 差异特征 → results/{jobId}/prompt.md 落盘（审计与跨环境移植载体）。
+ * + 差异特征 + 栏位属性（源系统字段配置的字段名/类型/长度）→ results/{jobId}/prompt.md 落盘
+ * （审计与跨环境移植载体）。
  */
 public final class PromptRenderer {
     public static final String TEMPLATE_NAME = "analysis-template.md";
     public static final String TEMPLATE_VERSION = "v1";
 
+    /**
+     * 提示词预算：适配小上下文窗口（≤256K）。
+     * FULL 适合大窗口；COMPACT 压缩采样、聚焦 top 差异列、裁剪栏位属性表。
+     */
+    public record Budget(int maxSamplesPerColumn, int maxColumns, int maxAttrRows, String note) {
+        public static final Budget FULL = new Budget(10, Integer.MAX_VALUE, 4096, "");
+        public static final Budget COMPACT = new Budget(3, 20, 64,
+                "\n> ⚠ 上下文预算压缩模式：仅保留差异行数最多的前 20 个差异列、每列 3 组采样与有限栏位属性；"
+                        + "完整特征可查看作业结果目录下的 result.jsonl 与 prompt 原件。\n");
+    }
+
     private PromptRenderer() {}
 
-    /** 渲染并写入 prompt.md，返回文件路径。 */
+    /** 渲染并写入 prompt.md（全量预算），返回文件路径。fieldMaps 可空（无栏位属性段）。 */
     public static Path render(Path resultDir, JobRecord job, JobMeta meta, Summary summary,
-                              Path overrideTemplateDir) {
+                              Path overrideTemplateDir, com.textdiff.store.FieldMapStore fieldMaps) {
+        return render(resultDir, job, meta, summary, overrideTemplateDir, fieldMaps, Budget.FULL);
+    }
+
+    /** 渲染并写入 prompt.md，返回文件路径。fieldMaps 可空（无栏位属性段）。 */
+    public static Path render(Path resultDir, JobRecord job, JobMeta meta, Summary summary,
+                              Path overrideTemplateDir, com.textdiff.store.FieldMapStore fieldMaps,
+                              Budget budget) {
         String template = loadTemplate(overrideTemplateDir);
         DiffFeatureExtractor.Features features = DiffFeatureExtractor.extract(
                 resultDir.resolve(ResultFiles.RESULT_JSONL));
-        String text = fill(template, placeholders(resultDir, job, meta, summary, features));
+        String text = fill(template, placeholders(resultDir, job, meta, summary, features, fieldMaps, budget));
         Path out = resultDir.resolve("prompt.md");
         try {
             Files.writeString(out, text, StandardCharsets.UTF_8);
@@ -62,7 +81,8 @@ public final class PromptRenderer {
     }
 
     static Map<String, String> placeholders(Path resultDir, JobRecord job, JobMeta meta, Summary summary,
-                                            DiffFeatureExtractor.Features features) {
+                                            DiffFeatureExtractor.Features features,
+                                            com.textdiff.store.FieldMapStore fieldMaps, Budget budget) {
         CompareConfig cfg = Rules.parseLegacy(job.configLine, " | ", "|||||");
         Map<String, String> ph = new LinkedHashMap<>();
         ph.put("generatedAt", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
@@ -77,6 +97,7 @@ public final class PromptRenderer {
         ph.put("omitSeq", ApiSeq.seq1based(cfg.omitColumns));
         ph.put("omitColumns", intList(cfg.omitColumns));
         ph.put("delimiter", cfg.delimiter);
+        ph.put("fieldAttributes", fieldAttributeTable(job, fieldMaps, budget));
 
         StringBuilder tt = new StringBuilder();
         if (summary != null && summary.trailerFields != null && !summary.trailerFields.isEmpty()) {
@@ -124,7 +145,15 @@ public final class PromptRenderer {
         ph.put("diffColOverview", ov.toString());
 
         StringBuilder cf = new StringBuilder();
-        for (DiffFeatureExtractor.ColumnFeature f : features.columns.values()) {
+        // 预算：紧凑模式按差异行数取 top N 列
+        java.util.List<DiffFeatureExtractor.ColumnFeature> cols =
+                new java.util.ArrayList<>(features.columns.values());
+        if (cols.size() > budget.maxColumns()) {
+            cols.sort(java.util.Comparator.comparingLong((DiffFeatureExtractor.ColumnFeature f) -> f.count)
+                    .reversed());
+            cols = cols.subList(0, budget.maxColumns());
+        }
+        for (DiffFeatureExtractor.ColumnFeature f : cols) {
             String name = cfg.columnNames.size() > f.col ? cfg.columnNames.get(f.col) : "栏位" + (f.col + 1);
             cf.append("### 列 ").append(f.col).append("（").append(name).append("），差异 ").append(f.count).append(" 行\n");
             if (!f.commonPrefix.isEmpty() || !f.commonSuffix.isEmpty()) {
@@ -146,7 +175,7 @@ public final class PromptRenderer {
             cf.append("- 采样值对（A → B）：\n");
             int shown = 0;
             for (String[] s : f.samples) {
-                if (shown++ >= 10) {
+                if (shown++ >= budget.maxSamplesPerColumn()) {
                     cf.append("  - …（其余 ").append(f.samples.size() - shown + 1).append(" 对省略）\n");
                     break;
                 }
@@ -173,6 +202,62 @@ public final class PromptRenderer {
         String out = template;
         for (Map.Entry<String, String> e : placeholders.entrySet()) {
             out = out.replace("{{" + e.getKey() + "}}", e.getValue());
+        }
+        return out;
+    }
+
+    /**
+     * 栏位属性表（源系统字段配置 bat_report_conf_field：字段名/field_format 类型/field_length 长度），
+     * 注入提示词辅助 AI 归纳分析；无映射时给出说明占位。行数按预算裁剪（compact 优先保留差异列）。
+     */
+    public static String fieldAttributeTable(JobRecord job, com.textdiff.store.FieldMapStore maps) {
+        return fieldAttributeTable(job, maps, Budget.FULL);
+    }
+
+    public static String fieldAttributeTable(JobRecord job, com.textdiff.store.FieldMapStore maps, Budget budget) {
+        if (maps == null || job.fileA == null || job.fileA.isBlank()) {
+            return "（未导入源系统字段配置，无栏位属性）";
+        }
+        String reportId = maps.reportIdForFile(job.fileA);
+        java.util.List<com.textdiff.store.FieldMaps.ReportField> fs =
+                reportId == null ? java.util.List.of() : maps.fieldsFor(reportId);
+        if (fs.isEmpty()) return "（该文件未匹配到源系统字段配置，无栏位属性）";
+        java.util.Set<Integer> diffCols = summaryDiffCols(job);
+        boolean filter = fs.size() > budget.maxAttrRows();
+        if (filter) {
+            java.util.List<com.textdiff.store.FieldMaps.ReportField> picked = new java.util.ArrayList<>();
+            for (com.textdiff.store.FieldMaps.ReportField f : fs) {
+                if (diffCols.contains(f.colIndex())) picked.add(f);
+            }
+            if (picked.isEmpty()) picked = fs.subList(0, budget.maxAttrRows());
+            fs = picked.size() > budget.maxAttrRows()
+                    ? picked.subList(0, budget.maxAttrRows()) : picked;
+        }
+        StringBuilder sb = new StringBuilder();
+        if (filter) {
+            sb.append("> 报表共 ").append(maps.fieldsFor(reportId).size())
+                    .append(" 个字段，此处仅保留与差异列相关的栏位属性。\n\n");
+        }
+        sb.append("| 列(1-based) | 字段名 | 类型 field_format | 长度 field_length |\n");
+        sb.append("|---|---|---|---|\n");
+        for (com.textdiff.store.FieldMaps.ReportField f : fs) {
+            sb.append("| ").append(f.colIndex() + 1)
+                    .append(" | ").append(f.fieldName())
+                    .append(" | ").append(f.fieldFormat().isEmpty() ? "—" : f.fieldFormat())
+                    .append(" | ").append(f.fieldLength() == null || f.fieldLength().isEmpty()
+                            ? "—" : f.fieldLength())
+                    .append(" |\n");
+        }
+        return sb.toString().stripTrailing();
+    }
+
+    /** 从 summary 提取差异列集合（0-based），供属性表裁剪时优先保留。读取失败返回空集。 */
+    private static java.util.Set<Integer> summaryDiffCols(JobRecord job) {
+        java.util.Set<Integer> out = new java.util.HashSet<>();
+        try {
+            Summary s = ResultFiles.readSummary(Path.of(job.resultDir));
+            if (s != null && s.diffColFreq != null) out.addAll(s.diffColFreq.keySet());
+        } catch (RuntimeException ignored) {
         }
         return out;
     }

@@ -11,11 +11,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-/** 列名映射导入端到端：multipart 上传结构 CSV → 生成配置 → 字段映射查询。 */
+/** 列名映射导入端到端：multipart 上传结构 CSV → 纯映射落库（不生成 .conf）→ 字段映射查询。 */
 @SpringBootTest
 @AutoConfigureMockMvc
 class FieldMapEndpointTest {
@@ -29,18 +29,15 @@ class FieldMapEndpointTest {
     }
 
     @Test
-    void importStructureGeneratesConfigsWithColumnNames() throws Exception {
-        byte[] typeCsv = """
-                report_id,report_file_name,parm_report_type
-                bocso_it,bocso_it.txt,对公存款
-                """.getBytes(StandardCharsets.UTF_8);
-        byte[] fieldCsv = """
-                report_id,field_name,field_format
-                bocso_it,客户号,CHAR
-                bocso_it,账户余额,DECIMAL
-                bocso_it,币种,CHAR
-                """.getBytes(StandardCharsets.UTF_8);
-        long tag = System.nanoTime();
+    void importStructureStoresMappingsWithoutGeneratingConf() throws Exception {
+        byte[] typeCsv = ("report_id,report_file_name,parm_report_type,ownership_group\n"
+                + "bocso_it,bocso_it.txt,对公存款,bocs_dep\n")
+                .getBytes(StandardCharsets.UTF_8);
+        byte[] fieldCsv = ("report_id,field_index,field_name,field_format,field_length\n"
+                + "bocso_it,1,客户号,CHAR,12\n"
+                + "bocso_it,2,账户余额,DECIMAL,16\n"
+                + "bocso_it,3,币种,CHAR,3\n")
+                .getBytes(StandardCharsets.UTF_8);
         MockMultipartFile f1 = new MockMultipartFile("files", "bat_report_type_parm_x.csv",
                 "text/csv", typeCsv);
         MockMultipartFile f2 = new MockMultipartFile("files", "bat_report_conf_field_x.csv",
@@ -48,35 +45,27 @@ class FieldMapEndpointTest {
 
         mvc.perform(multipart("/api/configs/import-structure").file(f1).file(f2))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.imported").value(1))
                 .andExpect(jsonPath("$.types").value(1))
                 .andExpect(jsonPath("$.fields").value(3))
-                .andExpect(jsonPath("$.nicknames[0]").value("bocso_it"))
-                .andExpect(jsonPath("$.file").value("configs/ bocso_it.conf"));
+                .andExpect(jsonPath("$.nicknames[0]").value("bocso_it"));
 
-        // 生成的配置：昵称可搜索、含 COLS 列名令牌
-        Path conf = baseDir().resolve("configs").resolve("bocso_it.conf");
-        assertTrue(Files.exists(conf), "配置文件未生成: " + conf);
-        String line = Files.readString(conf, StandardCharsets.UTF_8).strip();
-        assertTrue(line.startsWith("bocso_it:"), line);
-        assertTrue(line.contains("COLS="), line);
+        // 纯映射落库：不再生成 .conf 对比配置
+        assertFalse(Files.exists(baseDir().resolve("configs").resolve("bocso_it.conf")),
+                "导入不应生成 .conf 配置文件");
 
-        // 配置列表接口能看到该昵称
-        mvc.perform(get("/api/configs").param("q", "bocso_it"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.configs[0].nickname").value("bocso_it"));
-
-        // 字段映射浏览 + 详情
+        // 字段映射浏览 + 详情（含归属组与字段类型/长度）
         mvc.perform(get("/api/fieldmaps"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.reports[0].report_id").value("bocso_it"))
-                .andExpect(jsonPath("$.reports[0].field_count").value(3))
-                .andExpect(jsonPath("$.reports[0].parm_report_type").value("对公存款"));
+                .andExpect(jsonPath("$.reports[?(@.report_id=='bocso_it')].ownership_group").value("bocs_dep"))
+                .andExpect(jsonPath("$.reports[?(@.report_id=='bocso_it')].field_count").value(3));
         mvc.perform(get("/api/fieldmaps/get").param("report_id", "bocso_it"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.columns[0].col_index").value(0))
                 .andExpect(jsonPath("$.columns[0].field_name").value("客户号"))
-                .andExpect(jsonPath("$.columns[2].field_name").value("币种"));
+                .andExpect(jsonPath("$.columns[0].field_format").value("CHAR"))
+                .andExpect(jsonPath("$.columns[0].field_length").value("12"))
+                .andExpect(jsonPath("$.columns[2].field_name").value("币种"))
+                .andExpect(jsonPath("$.ownership_group").value("bocs_dep"));
     }
 
     @Test

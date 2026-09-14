@@ -125,9 +125,10 @@ public class ConfigController {
     }
 
     /**
-     * 列名映射导入（源系统字段配置）：上传多个 CSV。
-     * bat_report_type_parm*.csv → 文件名/昵称/文件类型；bat_report_conf_field*.csv → 昵称/字段名/类型。
-     * 入库（JSONL + H2 双写）并为每个昵称生成 configs/{report_id}.conf（含 COLS 列名），在新建对比页可搜索。
+     * 列名映射导入（源系统字段配置）：上传多个 CSV，纯映射落库（不生成 .conf）。
+     * bat_report_type_parm*.csv → 昵称(report_id) ↔ 文件名(report_file_name) ↔ 文件类型/归属组；
+     * bat_report_conf_field*.csv → 昵称 ↔ 字段清单及类型（field_index 定序）。
+     * 对比作业运行时按文件名自动注入列名（JobManager COLS 注入），归属组用于 AI 分析产物命名。
      */
     @PostMapping("/configs/import-structure")
     public Map<String, Object> importStructure(@RequestParam("files") List<MultipartFile> files)
@@ -155,29 +156,7 @@ public class ConfigController {
         }
         FieldMaps.ImportSummary sum = fieldMaps.importAll(types, fields, names);
 
-        // 生成可搜索配置：昵称 → 通配名（report_file_name）+ COLS 列名
-        Map<String, List<String>> namesByReport = new java.util.LinkedHashMap<>();
-        for (FieldMaps.ReportField rf : fields) {
-            namesByReport.computeIfAbsent(rf.reportId(), k -> new ArrayList<>()).add(rf.fieldName());
-        }
-        List<String> confFiles = new ArrayList<>();
-        Path dir = paths.configsDir();
-        Files.createDirectories(dir);
-        for (FieldMaps.ReportType t : types) {
-            CompareConfig cfg = new CompareConfig();
-            cfg.nickname = t.reportId();
-            cfg.fileGlob = t.reportFileName().isBlank() ? "*" : t.reportFileName();
-            cfg.group = t.parmReportType() == null || t.parmReportType().isBlank()
-                    ? t.reportId() : t.parmReportType();
-            cfg.columnNames = namesByReport.getOrDefault(t.reportId(), new ArrayList<>());
-            Path conf = dir.resolve(safeName(t.reportId()) + ".conf");
-            Files.writeString(conf, Rules.toLegacyLine(cfg, true) + System.lineSeparator(),
-                    StandardCharsets.UTF_8);
-            confFiles.add(conf.getFileName().toString());
-        }
         Map<String, Object> out = new java.util.LinkedHashMap<>();
-        out.put("imported", confFiles.size());
-        out.put("file", "configs/ " + String.join("、", confFiles));
         out.put("types", sum.types());
         out.put("fields", sum.fields());
         out.put("nicknames", sum.nicknames());
@@ -185,7 +164,7 @@ public class ConfigController {
         return out;
     }
 
-    /** 字段映射浏览：全部报表（昵称/文件名/类型/字段数）。 */
+    /** 字段映射浏览：全部报表（昵称/文件名/类型/归属组/字段数）。 */
     @GetMapping("/fieldmaps")
     public Map<String, Object> fieldmaps() {
         List<Map<String, Object>> out = new ArrayList<>();
@@ -194,6 +173,7 @@ public class ConfigController {
             m.put("report_id", t.reportId());
             m.put("report_file_name", t.reportFileName());
             m.put("parm_report_type", t.parmReportType());
+            m.put("ownership_group", t.ownershipGroup());
             m.put("field_count", fieldMaps.fieldNamesFor(t.reportId()).size());
             m.put("source_file", t.sourceFile());
             out.add(m);
@@ -201,23 +181,26 @@ public class ConfigController {
         return Map.of("reports", out, "db_available", fieldMaps.dbAvailable());
     }
 
-    /** 指定报表的 0-based 字段名列表（对比界面/导出所用的最终形态）。 */
+    /** 指定报表的字段清单（0-based 列号 + 字段名/类型/长度，对比界面/导出所用的最终形态）。 */
     @GetMapping("/fieldmaps/get")
     public Map<String, Object> fieldmapGet(@RequestParam("report_id") String reportId) {
         FieldMaps.ReportType t = fieldMaps.typeByReport(reportId);
         if (t == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "无此报表映射: " + reportId);
         List<Map<String, Object>> cols = new ArrayList<>();
-        List<String> names = fieldMaps.fieldNamesFor(reportId);
-        for (int i = 0; i < names.size(); i++) {
+        List<FieldMaps.ReportField> fs = fieldMaps.fieldsFor(reportId);
+        for (FieldMaps.ReportField f : fs) {
             Map<String, Object> c = new java.util.LinkedHashMap<>();
-            c.put("col_index", i);
-            c.put("field_name", names.get(i));
+            c.put("col_index", f.colIndex());
+            c.put("field_name", f.fieldName());
+            c.put("field_format", f.fieldFormat());
+            c.put("field_length", f.fieldLength());
             cols.add(c);
         }
         Map<String, Object> out = new java.util.LinkedHashMap<>();
         out.put("report_id", reportId);
         out.put("report_file_name", t.reportFileName());
         out.put("parm_report_type", t.parmReportType());
+        out.put("ownership_group", t.ownershipGroup());
         out.put("columns", cols);
         return out;
     }
@@ -225,13 +208,6 @@ public class ConfigController {
     @GetMapping("/configs/export")
     public Map<String, Object> exportStub() {
         throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Excel 导出未启用");
-    }
-
-    /** 配置文件名安全：报表昵称限字母数字下划线中划线点中文。 */
-    private static String safeName(String name) {
-        String n = name.strip();
-        if (!n.matches("[\\w.\\-\\u4e00-\\u9fff]+")) n = n.replaceAll("[^\\w.\\-\\u4e00-\\u9fff]", "_");
-        return n;
     }
 
     // ---- internals ----

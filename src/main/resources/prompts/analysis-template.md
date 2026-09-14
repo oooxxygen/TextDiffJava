@@ -18,6 +18,12 @@
 - 跳过列：OMITSEQ={{omitSeq}}（0-based 列：{{omitColumns}}）
 - 分隔符：{{delimiter}}
 
+### 栏位属性（源系统字段配置）
+
+分析时请结合各栏位的类型与长度判断差异成因（如补位、截断、格式化、精度重算等）。
+
+{{fieldAttributes}}
+
 ### 文件尾部（trailer）对比
 
 {{trailerTable}}

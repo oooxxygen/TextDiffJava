@@ -23,7 +23,7 @@ class TaskManagerTest {
     void jobDoneRegistersAndRunsDefaults(@TempDir Path dir) throws Exception {
         try (DualJobStore store = new DualJobStore(dir.resolve("store"), false);
              TaskStore tasks = new TaskStore(dir.resolve("store2"), false);
-             TaskManager mgr = new TaskManager(store, tasks, null,
+             TaskManager mgr = new TaskManager(store, tasks, null, null,
                      new com.textdiff.config.AppPaths(dir, dir), dir.resolve("results"))) {
             JobRecord job = makeDoneJob(dir, store);
             mgr.registerDefaults(job);
@@ -54,7 +54,7 @@ class TaskManagerTest {
     void regenerateRerunsExportTask(@TempDir Path dir) throws Exception {
         try (DualJobStore store = new DualJobStore(dir.resolve("store"), false);
              TaskStore tasks = new TaskStore(dir.resolve("store2"), false);
-             TaskManager mgr = new TaskManager(store, tasks, null,
+             TaskManager mgr = new TaskManager(store, tasks, null, null,
                      new com.textdiff.config.AppPaths(dir, dir), dir.resolve("results"))) {
             JobRecord job = makeDoneJob(dir, store);
             mgr.registerDefaults(job);
@@ -83,12 +83,12 @@ class TaskManagerTest {
              TaskStore tasks = new TaskStore(dir.resolve("store2"), false)) {
             JobRecord job = makeDoneJob(dir, store);
             // 先写设置再建 manager：验证启动加载
-            TaskManager first = new TaskManager(store, tasks, null,
+            TaskManager first = new TaskManager(store, tasks, null, null,
                     new com.textdiff.config.AppPaths(dir, dir), dir.resolve("results"));
-            first.saveSettings(new TaskManager.TaskDirs(custom.toString(), ""));
+            first.saveSettings(new TaskManager.TaskDirs(custom.toString()));
             first.close();
 
-            try (TaskManager mgr = new TaskManager(store, tasks, null,
+            try (TaskManager mgr = new TaskManager(store, tasks, null, null,
                     new com.textdiff.config.AppPaths(dir, dir), dir.resolve("results"))) {
                 assertEquals(custom.toString(), mgr.settings().exportDir());
                 mgr.registerDefaults(job);

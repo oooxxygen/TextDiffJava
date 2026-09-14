@@ -1559,7 +1559,9 @@ const SettingsPage = {
         const fd = new FormData();
         for (const f of imp.files) fd.append("files", f);
         const r = await api("/api/configs/import-structure", { method: "POST", body: fd });
-        imp.ok = true; imp.msg = "导入成功：生成 " + r.imported + " 条配置（写入 " + r.file + "）。在新建对比页可搜索使用，对比结果将显示列名。";
+        imp.ok = true;
+        imp.msg = "导入成功，映射已落库：报表类型 " + r.types + " 个（昵称↔文件名/归属组）、字段 "
+          + r.fields + " 条（昵称↔字段名/类型）。对比作业按文件名自动注入列名，AI 分析产物按归属组命名。";
       } catch (e) { imp.ok = false; imp.msg = "导入失败: " + e.message; }
       finally { imp.busy = false; }
     }
@@ -1580,18 +1582,18 @@ const SettingsPage = {
     }
     function exportConfigs() { window.location = "/api/configs/export"; }
 
-    // 生成路径设置（任务管理：差异CSV导出 / AI分析产物目录；留空 = 默认）
-    const dirs = reactive({ export_dir: "", ai_dir: "", msg: "", ok: null });
+    // 生成路径设置（任务管理：差异CSV导出目录；AI 分析结果随该目录）
+    const dirs = reactive({ export_dir: "", msg: "", ok: null });
     async function loadDirs() {
       try {
         const r = await api("/api/settings/tasks");
-        dirs.export_dir = r.export_dir || ""; dirs.ai_dir = r.ai_dir || "";
+        dirs.export_dir = r.export_dir || "";
       } catch (e) {}
     }
     async function saveDirs() {
       dirs.msg = "保存中…"; dirs.ok = null;
       try {
-        await jpost("/api/settings/tasks", { export_dir: dirs.export_dir.trim(), ai_dir: dirs.ai_dir.trim() });
+        await jpost("/api/settings/tasks", { export_dir: dirs.export_dir.trim() });
         dirs.ok = true; dirs.msg = "已保存，重新生成的任务将使用新路径";
         setTimeout(() => dirs.msg = "", 2500);
       } catch (e) { dirs.ok = false; dirs.msg = "保存失败: " + e.message; }
@@ -1655,7 +1657,7 @@ const SettingsPage = {
     <div class="card">
       <div class="card-head">🗺️ 列名映射导入（源系统字段配置）</div>
       <div class="card-body">
-        <p class="ai-hint" style="margin-top:0;">上传源系统的<b>报表类型表</b>（含 report_id、report_file_name）与<b>字段配置表</b>（含 report_id、field_index、field_name）两个 CSV。系统按 report_id 生成带<b>列名</b>与通配名的配置，对比结果将展示真实列名而非「第几列」。仅本地解析，不外发。</p>
+        <p class="ai-hint" style="margin-top:0;">上传源系统的两个 CSV，<b>纯映射落库</b>（不生成 .conf 对比配置）：<b>报表类型表</b> bat_report_type_parm（report_id 昵称 ↔ report_file_name 文件名、文件类型、归属组 ownership_group）；<b>字段配置表</b> bat_report_conf_field（report_id 昵称 ↔ field_index 定序的字段清单，含 field_name 字段名、field_format 类型、field_length 长度）。数据落库 H2 表 report_type_parm / report_conf_field：对比作业按文件名自动注入列名，AI 分析阶段附栏位属性辅助归纳。仅本地解析，不外发。</p>
         <div class="field"><label>选择 CSV 文件（可多选，含类型表 + 字段表）</label>
           <input type="file" accept=".csv" multiple @change="onImpFiles" /></div>
         <div class="btn-row">
@@ -1670,7 +1672,7 @@ const SettingsPage = {
       <div class="card-body">
         <p class="ai-hint" style="margin-top:0;">
           <b>基线导入</b>：上传 .conf/.txt/.json 配置文件，合并写入 <code>default.conf</code> 作为基线（初次导入用）。
-          基线导入会写入 <code>default.conf</code> 并复制生成一份 <code>current.conf</code>。此后页面上的所有配置修改**只写入 <code>current.conf</code>**（扩展文本，含全部字段与修改时间），不改动基线；列名信息来自结构导入的 <code>structure.json</code>。
+          基线导入会写入 <code>default.conf</code> 并复制生成一份 <code>current.conf</code>。此后页面上的所有配置修改**只写入 <code>current.conf</code>**（扩展文本，含全部字段与修改时间），不改动基线；列名信息来自【列名映射导入】落库的字段映射（对比时按文件名自动注入）。
           <b>配置导出</b>：导出 Excel（Sheet1 现生效版本；Sheet2 基线↔生效对比，含修改标识与修改时间）。
         </p>
         <div class="field"><label>基线配置文件（.conf/.txt/.json，可多选）</label>
@@ -1685,12 +1687,10 @@ const SettingsPage = {
     <div class="card">
       <div class="card-head">📁 任务生成路径设置</div>
       <div class="card-body">
-        <p class="ai-hint" style="margin-top:0;">「任务管理」页中每次对比完成自动生成的产物目录。留空使用默认：<b>差异CSV导出</b> → <code>results/{批次ID}/export</code>；<b>AI分析</b> → 结果目录原件 + 此处指定时额外产出副本。修改即时生效，对之后（重新）生成的任务生效。</p>
+        <p class="ai-hint" style="margin-top:0;">「任务管理」页中每次对比完成自动生成的产物目录。留空使用默认 <code>results/{批次ID}/export</code>。<b>差异CSV导出</b>与<b>AI分析（Markdown）</b>均写入该目录；AI 分析文件名为 <code>[归属组]文件昵称_实际文件名.md</code>。修改即时生效，对之后（重新）生成的任务生效。</p>
         <div class="form-grid">
-          <div class="field mono"><label>差异 CSV 导出目录</label>
+          <div class="field mono"><label>导出目录（差异 CSV + AI 分析）</label>
             <input v-model="dirs.export_dir" placeholder="默认 results/{batch}/export" /></div>
-          <div class="field mono"><label>AI 分析产物目录</label>
-            <input v-model="dirs.ai_dir" placeholder="默认作业结果目录（可选副本目录）" /></div>
         </div>
         <div class="btn-row">
           <button class="btn" @click="saveDirs">保存路径设置</button>

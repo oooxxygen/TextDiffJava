@@ -34,15 +34,30 @@ public record AppConfig(ServerConfig server, EngineConfig engine, StoreConfig st
                 pick(env.apply("TEXTDIFF_AI_BASE_URL"), aiSec.get("base_url"), ""),
                 pick(env.apply("TEXTDIFF_AI_API_KEY"), aiSec.get("api_key"), ""),
                 pick(env.apply("TEXTDIFF_AI_MODEL"), aiSec.get("model"), ""),
-                Integer.parseInt(pick(env.apply("TEXTDIFF_AI_TIMEOUT"), aiSec.get("timeout"), "60")));
+                Integer.parseInt(pick(env.apply("TEXTDIFF_AI_TIMEOUT"), aiSec.get("timeout"), "60")),
+                Long.parseLong(pick(env.apply("TEXTDIFF_AI_MAX_PROMPT_CHARS"), aiSec.get("max-prompt-chars"),
+                        "120000")),
+                Integer.parseInt(pick(env.apply("TEXTDIFF_AI_RETRIES"), aiSec.get("retries"), "3")),
+                Long.parseLong(pick(env.apply("TEXTDIFF_AI_RETRY_BACKOFF_MS"), aiSec.get("retry-backoff-ms"),
+                        "2000")));
 
         return new AppConfig(new ServerConfig(host, port),
                 new EngineConfig(maxThreads, maxInMemoryBytes),
                 new StoreConfig(storeEnabled), ai);
     }
 
-    /** AI 归纳分析（OpenAI 兼容 /chat/completions）。 */
-    public record AiConfig(boolean enabled, String baseUrl, String apiKey, String model, int timeoutSeconds) {
+    /**
+     * AI 归纳分析（OpenAI 兼容 /chat/completions）。
+     * maxPromptChars：提示词字符预算（超限自动压缩重渲，适配 ≤256K 小上下文窗口）；
+     * retries / retryBackoffMs：弱网容错重试次数与退避基数（指数退避）。
+     */
+    public record AiConfig(boolean enabled, String baseUrl, String apiKey, String model, int timeoutSeconds,
+                           long maxPromptChars, int retries, long retryBackoffMs) {
+        /** 兼容旧 5 参构造（测试/外部调用）。 */
+        public AiConfig(boolean enabled, String baseUrl, String apiKey, String model, int timeoutSeconds) {
+            this(enabled, baseUrl, apiKey, model, timeoutSeconds, 120000, 3, 2000);
+        }
+
         public boolean usable() {
             return enabled && baseUrl != null && !baseUrl.isBlank() && model != null && !model.isBlank();
         }

@@ -61,7 +61,7 @@ class AiPipelineTest {
                 dir.toString());
         JobMeta meta = ResultFiles.buildMeta(job, "utf-8", "utf-8", s);
         ResultFiles.writeMeta(dir, meta);
-        Path prompt = PromptRenderer.render(dir, job, meta, s, null);
+        Path prompt = PromptRenderer.render(dir, job, meta, s, null, null);
         String text = Files.readString(prompt, StandardCharsets.UTF_8);
         assertFalse(text.contains("{{")); // 占位符全部填充
         assertTrue(text.contains("2024-01-01")); // 采样值对
@@ -80,19 +80,20 @@ class AiPipelineTest {
         s.totalA = 1;
         s.equal = 1;
         JobRecord job = new JobRecord("j2", "b1", "n", "NICK:*.txt:KEYSEQ=1", "a", "b", dir.toString());
-        Path prompt = PromptRenderer.render(dir, job, null, s, null);
+        Path prompt = PromptRenderer.render(dir, job, null, s, null, null);
         String text = Files.readString(prompt, StandardCharsets.UTF_8);
         assertTrue(text.contains("无差异列") || text.contains("动态分析部分省略"));
         assertFalse(text.contains("## 四、AI 动态分析要求"));
     }
 
     @Test
-    void aiCallProducesAnalysisJson(@TempDir Path dir) throws Exception {
+    void aiCallProducesMarkdownAnalysis(@TempDir Path dir) throws Exception {
         writeResult(dir);
         Summary s = new Summary();
         s.diff = 2;
         s.diffColFreq.put(1, 2L);
-        JobRecord job = new JobRecord("jAI", "b1", "n", "NICK:*.txt:KEYSEQ=1", "a", "b", dir.toString());
+        JobRecord job = new JobRecord("jAI", "b1", "昵称A", "NICK:*.txt:KEYSEQ=1",
+                dir.resolve("01A3020D.v01").toString(), "b", dir.toString());
         job.status = JobRecord.DONE;
         ResultFiles.writeSummary(dir, s);
 
@@ -125,18 +126,39 @@ class AiPipelineTest {
 
         var store = new com.textdiff.store.FileJobStore(dir.resolve("store"));
         store.saveJob(job);
-        var analyzer = new AiAnalyzer(store, cfg, new com.textdiff.config.AppPaths(dir, dir), null);
-        // JobManager 为 null 时 aiHook 挂载跳过（测试直接调 analyze）
-        analyzer.analyze("jAI");
+        // 字段映射：归属组 + 栏位属性（字段名/类型/长度）
+        var maps = new com.textdiff.store.FieldMapStore(dir.resolve("fmaps"), false);
+        maps.importAll(
+                java.util.List.of(new com.textdiff.store.FieldMaps.ReportType(
+                        "R1", "01A3020D.v01", "T0-222", "bocs_cif", "t.csv", 1L)),
+                java.util.List.of(new com.textdiff.store.FieldMaps.ReportField(
+                        "R1", 0, "字段甲", "LCHAR,0", "1")),
+                java.util.List.of("f.csv"));
+        try {
+            var analyzer = new AiAnalyzer(store, cfg, new com.textdiff.config.AppPaths(dir, dir), null, maps);
+            analyzer.analyze("jAI");
 
-        assertEquals("done", store.getJob("jAI").aiStatus);
-        Path analysis = dir.resolve("ai_analysis.json");
-        assertTrue(Files.exists(analysis));
-        var json = com.textdiff.store.Json.MAPPER.readTree(analysis.toFile());
-        assertTrue(json.path("content").asText().contains("整体后移"));
-        assertEquals("日期位移+数值递增", json.path("structured").path("overall").asText());
-        assertTrue(json.path("structured").path("columns").get(0).path("confidence").asText().equals("high"));
-        assertTrue(Files.exists(dir.resolve("prompt.md")));
+            assertEquals("done", store.getJob("jAI").aiStatus);
+            Path md = dir.resolve("ai_analysis.md");
+            assertTrue(Files.exists(md), "应产出 ai_analysis.md");
+            assertFalse(Files.exists(dir.resolve("ai_analysis.json")), "不再产出 JSON 产物");
+            String text = Files.readString(md, StandardCharsets.UTF_8);
+            // 开头 AI 生成提示
+            assertTrue(text.startsWith("> 🤖 本文件由 AI 自动生成"), text.substring(0, 60));
+            assertTrue(text.contains("模型：test-model"));
+            // 一级标题：[归属组]文件昵称_实际文件名（* 为文件名非法字符，标题保留原文）
+            assertTrue(text.contains("\n# [bocs_cif]昵称A_01A3020D.v01\n"));
+            assertTrue(text.contains("整体后移"));
+            // 栏位属性附录
+            assertTrue(text.contains("## 附：栏位属性（源系统字段配置）"));
+            assertTrue(text.contains("字段甲"));
+            assertTrue(Files.exists(dir.resolve("prompt.md")));
+            String prompt = Files.readString(dir.resolve("prompt.md"), StandardCharsets.UTF_8);
+            assertTrue(prompt.contains("栏位属性（源系统字段配置）"), "提示词应含栏位属性段");
+            assertTrue(prompt.contains("LCHAR,0"));
+        } finally {
+            maps.close();
+        }
         server.stop(0);
     }
 

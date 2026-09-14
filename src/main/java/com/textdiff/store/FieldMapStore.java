@@ -23,10 +23,12 @@ import java.util.Map;
  * 字段名映射存储（源系统字段配置）：JSONL 追加为事实来源 + H2 双表镜像（禁用/失败自动降级）。
  *
  * H2 schema：
- *   report_type_parm(report_id PK, report_file_name, parm_report_type, source_file, imported_at)
- *   report_conf_field(report_id + col_index PK, field_name, field_format)
+ *   report_type_parm(report_id PK, report_file_name, parm_report_type, ownership_group, source_file, imported_at)
+ *   report_conf_field(report_id + col_index PK, field_name, field_format, field_length)
  *
- * 查询主链路：对比文件名 → report_id → 0-based 有序字段名列表（填充 CompareConfig.columnNames）。
+ * 查询主链路：对比文件名 → report_id → 0-based 有序字段名列表（填充 CompareConfig.columnNames）；
+ * 归属组/文件名映射供 AI 分析产物命名（[归属组]文件昵称_实际文件名.md）；
+ * 字段名/类型(field_format)/长度(field_length) 供提示词「栏位属性」表辅助 AI 归纳分析。
  */
 public final class FieldMapStore implements AutoCloseable {
     private final Path dir;
@@ -58,17 +60,23 @@ public final class FieldMapStore implements AutoCloseable {
                           report_id VARCHAR(64) PRIMARY KEY,
                           report_file_name VARCHAR(256) NOT NULL,
                           parm_report_type VARCHAR(128),
+                          ownership_group VARCHAR(128),
                           source_file VARCHAR(256),
                           imported_at BIGINT)
                         """);
+                // 旧库迁移：早于归属组字段建立的表补列（H2 支持 ADD COLUMN IF NOT EXISTS）
+                st.execute("ALTER TABLE report_type_parm ADD COLUMN IF NOT EXISTS ownership_group VARCHAR(128)");
                 st.execute("""
                         CREATE TABLE IF NOT EXISTS report_conf_field (
                           report_id VARCHAR(64) NOT NULL,
                           col_index INT NOT NULL,
                           field_name VARCHAR(256),
                           field_format VARCHAR(64),
+                          field_length VARCHAR(32),
                           PRIMARY KEY (report_id, col_index))
                         """);
+                // 旧库迁移：早于长度字段建立的表补列
+                st.execute("ALTER TABLE report_conf_field ADD COLUMN IF NOT EXISTS field_length VARCHAR(32)");
                 st.execute("CREATE INDEX IF NOT EXISTS idx_rtp_file ON report_type_parm(report_file_name)");
             }
             this.h2 = c;
@@ -126,7 +134,19 @@ public final class FieldMapStore implements AutoCloseable {
         return out;
     }
 
-    /** 对比文件名 → report_id：精确匹配 report_file_name，其次去扩展名茎匹配。 */
+    /** 0-based 有序字段记录（字段名/类型/长度，供栏位属性表）；无映射返回空列表。 */
+    public synchronized List<FieldMaps.ReportField> fieldsFor(String reportId) {
+        Map<Integer, FieldMaps.ReportField> m = fields.get(reportId);
+        if (m == null || m.isEmpty()) return List.of();
+        List<FieldMaps.ReportField> out = new ArrayList<>();
+        for (Integer i : new java.util.TreeSet<>(m.keySet())) out.add(m.get(i));
+        return out;
+    }
+
+    /**
+     * 对比文件名 → report_id。匹配优先级：report_file_name 精确 → 去扩展名茎精确 →
+     * 通配匹配（report_file_name 常为 01A**&#42;0&#42;.v01 这类模式，星号匹配任意串、问号单字符，大小写不敏感）。
+     */
     public synchronized String reportIdForFile(String fileName) {
         String name = Path.of(fileName).getFileName().toString();
         String stem = stripExt(name);
@@ -136,7 +156,29 @@ public final class FieldMapStore implements AutoCloseable {
         for (FieldMaps.ReportType t : types.values()) {
             if (t.reportFileName() != null && stripExt(t.reportFileName()).equalsIgnoreCase(stem)) return t.reportId();
         }
+        for (FieldMaps.ReportType t : types.values()) {
+            if (t.reportFileName() != null && globMatches(t.reportFileName(), name)) return t.reportId();
+        }
+        for (FieldMaps.ReportType t : types.values()) {
+            if (t.reportFileName() != null && globMatches(stripExt(t.reportFileName()), stem)) return t.reportId();
+        }
         return null;
+    }
+
+    /** 通配匹配：* / *** 任意串，? 单字符；其余字符按字面（大小写不敏感）。 */
+    static boolean globMatches(String pattern, String name) {
+        if (pattern == null || pattern.isBlank()) return false;
+        StringBuilder re = new StringBuilder();
+        for (char c : pattern.toLowerCase().toCharArray()) {
+            switch (c) {
+                case '*' -> re.append(".*");
+                case '?' -> re.append('.');
+                case '.' -> re.append("\\.");
+                case '\\' -> re.append("\\\\");
+                default -> re.append(c);
+            }
+        }
+        return name.toLowerCase().matches(re.toString());
     }
 
     /** 字段总数（状态展示）。 */
@@ -223,13 +265,14 @@ public final class FieldMapStore implements AutoCloseable {
     private void mirrorType(FieldMaps.ReportType r) {
         if (h2 == null) return;
         try (PreparedStatement ps = h2.prepareStatement(
-                "MERGE INTO report_type_parm(report_id, report_file_name, parm_report_type, source_file, imported_at) "
-                        + "KEY(report_id) VALUES (?, ?, ?, ?, ?)")) {
+                "MERGE INTO report_type_parm(report_id, report_file_name, parm_report_type, ownership_group, "
+                        + "source_file, imported_at) KEY(report_id) VALUES (?, ?, ?, ?, ?, ?)")) {
             ps.setString(1, r.reportId());
             ps.setString(2, r.reportFileName());
             ps.setString(3, r.parmReportType());
-            ps.setString(4, r.sourceFile());
-            ps.setLong(5, r.importedAt());
+            ps.setString(4, r.ownershipGroup());
+            ps.setString(5, r.sourceFile());
+            ps.setLong(6, r.importedAt());
             ps.executeUpdate();
         } catch (SQLException e) {
             degrade(e);
@@ -245,13 +288,14 @@ public final class FieldMapStore implements AutoCloseable {
             return;
         }
         try (PreparedStatement ps = h2.prepareStatement(
-                "MERGE INTO report_conf_field(report_id, col_index, field_name, field_format) "
-                        + "KEY(report_id, col_index) VALUES (?, ?, ?, ?)")) {
+                "MERGE INTO report_conf_field(report_id, col_index, field_name, field_format, field_length) "
+                        + "KEY(report_id, col_index) VALUES (?, ?, ?, ?, ?)")) {
             for (FieldMaps.ReportField r : all) {
                 ps.setString(1, r.reportId());
                 ps.setInt(2, r.colIndex());
                 ps.setString(3, r.fieldName());
                 ps.setString(4, r.fieldFormat());
+                ps.setString(5, r.fieldLength());
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -278,14 +322,15 @@ public final class FieldMapStore implements AutoCloseable {
     private void mirrorType(List<FieldMaps.ReportType> list) {
         if (h2 == null) return;
         try (PreparedStatement ps = h2.prepareStatement(
-                "MERGE INTO report_type_parm(report_id, report_file_name, parm_report_type, source_file, imported_at) "
-                        + "KEY(report_id) VALUES (?, ?, ?, ?, ?)")) {
+                "MERGE INTO report_type_parm(report_id, report_file_name, parm_report_type, ownership_group, "
+                        + "source_file, imported_at) KEY(report_id) VALUES (?, ?, ?, ?, ?, ?)")) {
             for (FieldMaps.ReportType r : list) {
                 ps.setString(1, r.reportId());
                 ps.setString(2, r.reportFileName());
                 ps.setString(3, r.parmReportType());
-                ps.setString(4, r.sourceFile());
-                ps.setLong(5, r.importedAt());
+                ps.setString(4, r.ownershipGroup());
+                ps.setString(5, r.sourceFile());
+                ps.setLong(6, r.importedAt());
                 ps.addBatch();
             }
             ps.executeBatch();

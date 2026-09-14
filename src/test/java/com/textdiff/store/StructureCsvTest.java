@@ -46,6 +46,49 @@ class StructureCsvTest {
     }
 
     @Test
+    void parseTypesReadsOwnershipGroup() {
+        byte[] csv = ("\"bank_no\",\"report_id\",\"parm_report_type\",\"report_file_name\",\"ownership_group\"\n"
+                + "\"000\",T0-CUSVD401,T0-222,\"01A***0#SEQ.i51\",bocs_cif\n"
+                + "\"000\",T0-CUSVD404,T0-222,\"01A***0#SEQ.i54\",\n")
+                .getBytes(StandardCharsets.UTF_8);
+        List<FieldMaps.ReportType> out = StructureCsv.parseTypes(csv, "t.csv");
+        assertEquals(2, out.size());
+        assertEquals("bocs_cif", out.get(0).ownershipGroup());
+        assertEquals("", out.get(1).ownershipGroup());
+    }
+
+    @Test
+    void parseFieldsReadsFieldIndexAndLength() {
+        byte[] csv = ("report_id,field_index,field_name,field_format,field_length\n"
+                + "AARH,2,APPG_DATE,\"NUMBER,ZERO\",8\n"
+                + "AARH,1,APPG_MODE,\"LCHAR,0\",1\n")
+                .getBytes(StandardCharsets.UTF_8);
+        List<FieldMaps.ReportField> out = StructureCsv.parseFields(csv, "f.csv");
+        // 记录按输入行序返回；field_index 1-based 定序写入 colIndex（Store 层按其排序）
+        assertEquals("APPG_DATE", out.get(0).fieldName());
+        assertEquals(1, out.get(0).colIndex());
+        assertEquals("NUMBER,ZERO", out.get(0).fieldFormat());
+        assertEquals("8", out.get(0).fieldLength());
+        assertEquals("APPG_MODE", out.get(1).fieldName());
+        assertEquals(0, out.get(1).colIndex());
+        assertEquals("LCHAR,0", out.get(1).fieldFormat());
+        assertEquals("1", out.get(1).fieldLength());
+    }
+
+    @Test
+    void quotedFieldWithEmbeddedNewlineKeepsRecordIntact() {
+        // 真实 conf_field 导出的备注列存在引号内换行：不得把备注第二行误认为新记录
+        byte[] csv = ("report_id,field_name,field_format,field_remark_01\n"
+                + "R1,金额,DECIMAL,\"跨行备注第一行\n第二行\"\n"
+                + "R1,币种,CHAR,\n")
+                .getBytes(StandardCharsets.UTF_8);
+        List<FieldMaps.ReportField> out = StructureCsv.parseFields(csv, "f.csv");
+        assertEquals(2, out.size());
+        assertEquals("金额", out.get(0).fieldName());
+        assertEquals("币种", out.get(1).fieldName());
+    }
+
+    @Test
     void parseFieldsRowOrderPerReport() {
         byte[] csv = """
                 report_id,field_name,field_format

@@ -16,11 +16,11 @@ import static org.junit.jupiter.api.Assertions.*;
 class FieldMapStoreTest {
 
     private static FieldMaps.ReportType type(String id, String file) {
-        return new FieldMaps.ReportType(id, file, "对公", "t.csv", 1700000000L);
+        return new FieldMaps.ReportType(id, file, "对公", "bocs_dep", "t.csv", 1700000000L);
     }
 
     private static FieldMaps.ReportField field(String id, int idx, String name) {
-        return new FieldMaps.ReportField(id, idx, name, "CHAR");
+        return new FieldMaps.ReportField(id, idx, name, "CHAR", "8");
     }
 
     @Test
@@ -34,6 +34,7 @@ class FieldMapStoreTest {
 
             assertEquals(2, store.allTypes().size());
             assertEquals("对公", store.typeByReport("R1").parmReportType());
+            assertEquals("bocs_dep", store.typeByReport("R1").ownershipGroup());
             assertEquals(List.of("客户号", "余额"), store.fieldNamesFor("R1"));
             assertEquals(List.of("序号"), store.fieldNamesFor("R2"));
             assertEquals(List.of(), store.fieldNamesFor("NOPE"));
@@ -67,6 +68,18 @@ class FieldMapStoreTest {
     }
 
     @Test
+    void reportIdForFileWildcardPattern(@TempDir Path dir) {
+        // report_file_name 常为通配模式：01A***0*.v01（*** 与 * 均为任意串）
+        try (FieldMapStore store = new FieldMapStore(dir, false)) {
+            store.importAll(List.of(type("R1", "01A***0*.v01")), List.of(), List.of("t.csv"));
+            assertEquals("R1", store.reportIdForFile("01A3020D.v01"));
+            assertEquals("R1", store.reportIdForFile("/x/01A39990.v01"));
+            assertNull(store.reportIdForFile("01B3020D.v01"));
+            assertNull(store.reportIdForFile("bocso.txt"));
+        }
+    }
+
+    @Test
     void h2MirrorReceivesImportedRows(@TempDir Path dir) throws Exception {
         try (FieldMapStore store = new FieldMapStore(dir, true)) {
             store.importAll(
@@ -79,10 +92,20 @@ class FieldMapStoreTest {
                 "jdbc:h2:file:" + dir.resolve("h2").resolve("textdiff").toAbsolutePath());
              Statement st = c.createStatement()) {
             try (ResultSet rs = st.executeQuery(
-                    "SELECT report_file_name, parm_report_type FROM report_type_parm WHERE report_id='R1'")) {
+                    "SELECT report_file_name, parm_report_type, ownership_group FROM report_type_parm "
+                            + "WHERE report_id='R1'")) {
                 assertTrue(rs.next());
                 assertEquals("bocso.txt", rs.getString(1));
                 assertEquals("对公", rs.getString(2));
+                assertEquals("bocs_dep", rs.getString(3));
+            }
+            try (ResultSet rs = st.executeQuery(
+                    "SELECT field_name, field_format, field_length FROM report_conf_field "
+                            + "WHERE report_id='R1' AND col_index=1")) {
+                assertTrue(rs.next());
+                assertEquals("余额", rs.getString(1));
+                assertEquals("CHAR", rs.getString(2));
+                assertEquals("8", rs.getString(3));
             }
             try (ResultSet rs = st.executeQuery(
                     "SELECT COUNT(*) FROM report_conf_field WHERE report_id='R1'")) {

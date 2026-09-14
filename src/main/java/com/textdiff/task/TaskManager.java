@@ -21,20 +21,22 @@ import java.util.concurrent.TimeUnit;
  * 生成任务管理器（任务管理页后端）：跟踪作业完成后衍生的默认行为——差异 CSV 导出、文本模板 AI 分析。
  *
  * 作业 done 后经 JobManager.doneHook 注册两条任务（trigger=auto）并异步执行；
- * 任务页可重新生成（trigger=manual）/删除。生成路径可在设置页配置（store/task_settings.json，
- * 留空 = 默认：导出 → results/{batchId}/export，AI → 作业结果目录）。
+ * 任务页可重新生成（trigger=manual）/删除。导出路径可在设置页配置（store/task_settings.json，
+ * 留空 = 默认 results/{batchId}/export）；AI 分析结果（Markdown）与差异 CSV 同目录，
+ * 文件名 [归属组]文件昵称_实际文件名.md，结果目录另存原件 ai_analysis.md 供结果页展示。
  */
 public final class TaskManager implements AutoCloseable {
-    /** 生成路径设置（blank = 使用默认）。 */
-    public record TaskDirs(String exportDir, String aiDir) {
+    /** 生成路径设置（blank = 使用默认导出目录；AI 分析结果随差异 CSV 同目录）。 */
+    public record TaskDirs(String exportDir) {
         public static TaskDirs empty() {
-            return new TaskDirs("", "");
+            return new TaskDirs("");
         }
     }
 
     private final JobStore store;
     private final TaskStore tasks;
     private final com.textdiff.ai.AiAnalyzer ai; // 可空：无 AI 分析器时任务标记失败
+    private final com.textdiff.store.FieldMapStore aiFieldMaps; // 可空：AI 产物归属组命名
     private final Path resultsRoot;
     private final Path settingsFile;
     private volatile TaskDirs dirs = TaskDirs.empty();
@@ -45,10 +47,12 @@ public final class TaskManager implements AutoCloseable {
     });
 
     public TaskManager(JobStore store, TaskStore tasks, com.textdiff.ai.AiAnalyzer ai,
+                       com.textdiff.store.FieldMapStore aiFieldMaps,
                        AppPaths paths, Path resultsRoot) {
         this.store = store;
         this.tasks = tasks;
         this.ai = ai;
+        this.aiFieldMaps = aiFieldMaps;
         this.resultsRoot = resultsRoot;
         this.settingsFile = paths.baseDir().resolve("store").resolve("task_settings.json");
         loadSettings();
@@ -67,7 +71,6 @@ public final class TaskManager implements AutoCloseable {
             Files.createDirectories(settingsFile.getParent());
             Map<String, String> out = new LinkedHashMap<>();
             out.put("export_dir", dirs.exportDir() == null ? "" : dirs.exportDir());
-            out.put("ai_dir", dirs.aiDir() == null ? "" : dirs.aiDir());
             Files.writeString(settingsFile, Json.write(out), StandardCharsets.UTF_8);
         } catch (Exception e) {
             System.err.println("[task] 生成路径设置落盘失败: " + e.getMessage());
@@ -82,7 +85,7 @@ public final class TaskManager implements AutoCloseable {
         try {
             if (!Files.isRegularFile(settingsFile)) return;
             Map<String, Object> m = Json.read(Files.readString(settingsFile, StandardCharsets.UTF_8), Map.class);
-            dirs = new TaskDirs(str(m.get("export_dir")), str(m.get("ai_dir")));
+            dirs = new TaskDirs(str(m.get("export_dir"))); // 旧文件中的 ai_dir 已废弃（AI 随导出目录）
         } catch (Exception e) {
             System.err.println("[task] 生成路径设置加载失败（使用默认）: " + e.getMessage());
         }
@@ -178,46 +181,45 @@ public final class TaskManager implements AutoCloseable {
         tasks.save(t);
     }
 
-    /** 差异 CSV 导出：写配置目录（默认 results/{batchId}/export），同时保留全量 CSV 以维持既有行为。 */
-    private String runExport(JobRecord job) throws Exception {
+    /** 导出目录：配置优先，默认 results/{batchId}/export（差异 CSV 与 AI 分析 Markdown 共用）。 */
+    private Path exportDir(JobRecord job) {
         String configured = dirs.exportDir();
-        Path dir = configured == null || configured.isBlank()
+        return configured == null || configured.isBlank()
                 ? resultsRoot.resolve(job.batchId == null ? "standalone" : job.batchId).resolve("export")
                 : Path.of(configured);
+    }
+
+    /** 差异 CSV 导出：写导出目录（默认 results/{batchId}/export），同时保留全量 CSV 以维持既有行为。 */
+    private String runExport(JobRecord job) throws Exception {
+        Path dir = exportDir(job);
         Files.createDirectories(dir);
         ExportAssembler.writeFullCsv(dir, job, ExportAssembler.DATA);
         Path diff = ExportAssembler.writeDiffCsv(dir, job, ExportAssembler.DATA);
         return diff.toAbsolutePath().toString();
     }
 
-    /** AI 分析（文本模板）：委托 AiAnalyzer（prompt.md 恒产出；产物 ai_analysis.json）。 */
+    /**
+     * AI 分析（文本模板）：委托 AiAnalyzer 阻塞执行（prompt.md 恒产出；ai_analysis.md 为原件），
+     * 成功后将 Markdown 复制到差异 CSV 同目录，命名 [归属组]文件昵称_实际文件名.md。
+     */
     private String runAi(JobRecord job) throws Exception {
         if (ai == null) throw new IllegalStateException("AI 分析器不可用");
-        ai.analyze(job.id); // 阻塞执行；内部已落盘 prompt.md / ai_analysis.json 并更新 aiStatus
+        ai.analyze(job.id); // 阻塞执行；内部已落盘 prompt.md / ai_analysis.md 并更新 aiStatus
         JobRecord fresh = store.getJob(job.id);
         String st = fresh == null ? "" : fresh.aiStatus;
         Path canonical = Path.of(job.resultDir);
-        Path analysis = canonical.resolve("ai_analysis.json");
         boolean ok = "done".equals(st);
         boolean disabled = "disabled".equals(st); // AI 未启用：模板已产出，视为完成
         if (!ok && !disabled) {
             throw new IllegalStateException("AI 分析失败: " + (fresh == null ? "?" : fresh.error));
         }
-        // 配置了生成目录时：产物复制到该目录（结果页读取的原件仍在 resultDir，UI 契约不变）
-        String configured = dirs.aiDir();
-        if (configured != null && !configured.isBlank()) {
-            Path target = Path.of(configured);
-            Files.createDirectories(target);
-            Path dst = target.resolve(job.id + "_ai_analysis.json");
-            Files.copy(analysis, dst, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            Path prompt = canonical.resolve("prompt.md");
-            if (Files.isRegularFile(prompt)) {
-                Files.copy(prompt, target.resolve(job.id + "_prompt.md"),
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            }
-            return dst.toAbsolutePath().toString();
-        }
-        return (ok ? analysis : canonical.resolve("prompt.md")).toAbsolutePath().toString();
+        if (!ok) return canonical.resolve("prompt.md").toAbsolutePath().toString();
+        Path dir = exportDir(job);
+        Files.createDirectories(dir);
+        Path dst = dir.resolve(com.textdiff.ai.AiReportNamer.fileName(job, aiFieldMaps) + ".md");
+        Files.copy(canonical.resolve("ai_analysis.md"), dst,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        return dst.toAbsolutePath().toString();
     }
 
     public boolean awaitIdle(long timeout, TimeUnit unit) throws InterruptedException {

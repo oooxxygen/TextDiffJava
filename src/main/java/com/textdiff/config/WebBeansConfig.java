@@ -47,20 +47,22 @@ public class WebBeansConfig {
         return new com.textdiff.store.TaskStore(paths.baseDir().resolve("store"), cfg.store().enabled());
     }
 
-    /** AI 分析器（自动触发改由 TaskManager 编排，不再直接挂载 aiHook）。 */
+    /** AI 分析器（自动触发改由 TaskManager 编排；归属组命名来自字段映射）。 */
     @Bean(destroyMethod = "shutdown")
-    public com.textdiff.ai.AiAnalyzer aiAnalyzer(DualJobStore store, AppConfig cfg, AppPaths paths) {
-        return new com.textdiff.ai.AiAnalyzer(store, cfg, paths, null);
+    public com.textdiff.ai.AiAnalyzer aiAnalyzer(DualJobStore store, AppConfig cfg, AppPaths paths,
+                                                 com.textdiff.store.FieldMapStore fieldMaps) {
+        return new com.textdiff.ai.AiAnalyzer(store, cfg, paths, null, fieldMaps);
     }
 
     @Bean(destroyMethod = "close")
     public com.textdiff.task.TaskManager taskManager(DualJobStore store,
                                                      com.textdiff.store.TaskStore taskStore,
                                                      com.textdiff.ai.AiAnalyzer aiAnalyzer,
+                                                     com.textdiff.store.FieldMapStore fieldMaps,
                                                      AppPaths paths, AppConfig cfg,
                                                      JobManager jobManager) {
         com.textdiff.task.TaskManager tm = new com.textdiff.task.TaskManager(
-                store, taskStore, aiAnalyzer, paths, paths.resultsDir());
+                store, taskStore, aiAnalyzer, fieldMaps, paths, paths.resultsDir());
         jobManager.doneHook = tm::registerDefaults; // 作业 done → 登记差异CSV导出 + AI分析两条任务
         return tm;
     }
