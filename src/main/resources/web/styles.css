@@ -176,6 +176,7 @@ body {
 .badge-status { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
 .badge-status.done { background: var(--eq-bg); color: var(--eq-bar); }
 .badge-status.running, .badge-status.pending { background: #fff4e0; color: #b76e00; }
+.badge-status.failed { background: var(--diff-bg); color: var(--diff-bar); }
 .badge-status.error { background: var(--diff-bg); color: var(--diff-bar); }
 
 /* ---------- 进度条 ---------- */

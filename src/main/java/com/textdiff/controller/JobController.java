@@ -26,11 +26,14 @@ public class JobController {
     private final JobManager jobs;
     private final JobStore store;
     private final com.textdiff.ai.AiAnalyzer analyzer;
+    private final com.textdiff.store.TaskStore taskStore;
 
-    public JobController(JobManager jobs, JobStore store, com.textdiff.ai.AiAnalyzer analyzer) {
+    public JobController(JobManager jobs, JobStore store, com.textdiff.ai.AiAnalyzer analyzer,
+                         com.textdiff.store.TaskStore taskStore) {
         this.jobs = jobs;
         this.store = store;
         this.analyzer = analyzer;
+        this.taskStore = taskStore;
     }
 
     @GetMapping("/joblist")
@@ -205,6 +208,7 @@ public class JobController {
         JobRecord job = require(id);
         if (job.locked) throw new ResponseStatusException(HttpStatus.CONFLICT, "作业已锁定");
         store.deleteJob(id);
+        taskStore.deleteForJobs(List.of(id)); // 级联清理任务管理中的跟踪记录
         ApiViews.deleteRecursively(Path.of(job.resultDir));
         return Map.of("ok", true);
     }
@@ -229,6 +233,7 @@ public class JobController {
             deletedJobs++;
         }
         int deletedBatches = 0;
+        List<String> deletedBatchJobIds = new ArrayList<>();
         for (String bid : batchIds) {
             var batch = store.getBatch(bid);
             if (batch == null) continue;
@@ -238,10 +243,12 @@ public class JobController {
             }
             for (JobRecord j : store.listJobs(bid)) {
                 ApiViews.deleteRecursively(Path.of(j.resultDir));
+                deletedBatchJobIds.add(j.id);
             }
             store.deleteBatch(bid);
             deletedBatches++;
         }
+        if (!deletedBatchJobIds.isEmpty()) taskStore.deleteForJobs(deletedBatchJobIds);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("deleted_jobs", deletedJobs);
         out.put("deleted_batches", deletedBatches);

@@ -39,7 +39,7 @@ public final class AiAnalyzer {
         this.store = store;
         this.cfg = cfg;
         this.configsDir = paths.configsDir();
-        if (manager != null) manager.aiHook = this::enqueue;
+        if (manager != null) manager.doneHook = this::enqueue;
     }
 
     /** 作业完成后由 JobManager 回调。 */

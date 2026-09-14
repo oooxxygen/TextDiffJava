@@ -1580,9 +1580,28 @@ const SettingsPage = {
     }
     function exportConfigs() { window.location = "/api/configs/export"; }
 
+    // 生成路径设置（任务管理：差异CSV导出 / AI分析产物目录；留空 = 默认）
+    const dirs = reactive({ export_dir: "", ai_dir: "", msg: "", ok: null });
+    async function loadDirs() {
+      try {
+        const r = await api("/api/settings/tasks");
+        dirs.export_dir = r.export_dir || ""; dirs.ai_dir = r.ai_dir || "";
+      } catch (e) {}
+    }
+    async function saveDirs() {
+      dirs.msg = "保存中…"; dirs.ok = null;
+      try {
+        await jpost("/api/settings/tasks", { export_dir: dirs.export_dir.trim(), ai_dir: dirs.ai_dir.trim() });
+        dirs.ok = true; dirs.msg = "已保存，重新生成的任务将使用新路径";
+        setTimeout(() => dirs.msg = "", 2500);
+      } catch (e) { dirs.ok = false; dirs.msg = "保存失败: " + e.message; }
+    }
+    onMounted(loadDirs);
+
     return { providers, form, apiKeySet, busy, toast, test, curModels, pickProvider, save, testConn,
              rt, saveRuntime, imp, onImpFiles, importStructure,
-             base, onBaseFiles, importBaseline, exportConfigs };
+             base, onBaseFiles, importBaseline, exportConfigs,
+             dirs, loadDirs, saveDirs };
   },
   template: `
   <div class="card">
@@ -1663,7 +1682,153 @@ const SettingsPage = {
         </div>
       </div>
     </div>
+    <div class="card">
+      <div class="card-head">📁 任务生成路径设置</div>
+      <div class="card-body">
+        <p class="ai-hint" style="margin-top:0;">「任务管理」页中每次对比完成自动生成的产物目录。留空使用默认：<b>差异CSV导出</b> → <code>results/{批次ID}/export</code>；<b>AI分析</b> → 结果目录原件 + 此处指定时额外产出副本。修改即时生效，对之后（重新）生成的任务生效。</p>
+        <div class="form-grid">
+          <div class="field mono"><label>差异 CSV 导出目录</label>
+            <input v-model="dirs.export_dir" placeholder="默认 results/{batch}/export" /></div>
+          <div class="field mono"><label>AI 分析产物目录</label>
+            <input v-model="dirs.ai_dir" placeholder="默认作业结果目录（可选副本目录）" /></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn" @click="saveDirs">保存路径设置</button>
+          <span v-if="dirs.msg" :style="{ color: dirs.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ dirs.msg }}</span>
+        </div>
+      </div>
+    </div>
     <div class="toast" v-if="toast">{{ toast }}</div>
+  </div>`,
+};
+
+/* ---------- 任务管理页（批次 → 作业 → 默认生成任务：差异CSV导出 / AI分析） ---------- */
+const TASK_TYPE_TEXT = { export_diff: "差异CSV导出", ai_analysis: "AI分析（文本模板）" };
+const TASK_STATUS_TEXT = { pending: "待开始", running: "进行中", done: "已完成", failed: "失败" };
+const TaskManagerPage = {
+  emits: ["open", "open-batch"],
+  setup(props, { emit }) {
+    const batches = ref([]); const standalone = ref([]);
+    const tasks = ref([]);           // 全量任务记录（含 job 元信息）
+    const openBatches = reactive(new Set());
+    const openJobs = reactive(new Set());
+    const q = ref("");
+    let timer = null; let stopped = false;
+    async function load() {
+      try {
+        const [jl, tl] = await Promise.all([api("/api/joblist"), api("/api/tasks")]);
+        batches.value = jl.batches; standalone.value = jl.standalone;
+        tasks.value = tl.tasks || [];
+      } catch (e) {}
+      if (!stopped) timer = setTimeout(load, 2500);
+    }
+    onMounted(load);
+
+    const tasksOf = (jobId) => tasks.value.filter(t => t.job_id === jobId);
+    const typeText = (t) => TASK_TYPE_TEXT[t.task_type] || t.task_type;
+    const statusText = (t) => TASK_STATUS_TEXT[t.status] || t.status;
+    const fileName = (t) => (t.file_a || "").split(/[\\/]/).pop();
+    function toggle(set, id) { set.has(id) ? set.delete(id) : set.add(id); }
+    // 展开批次时懒加载其子作业列表（层级与对比结果批次页一致）
+    const batchChildren = reactive({});
+    async function toggleBatch(id) {
+      if (!openBatches.has(id) && !batchChildren[id]) {
+        try {
+          const r = await api("/api/batches/" + id);
+          batchChildren[id] = r.children || [];
+        } catch (e) { batchChildren[id] = []; }
+      }
+      toggle(openBatches, id);
+    }
+    async function regen(id) {
+      try { await api("/api/tasks/" + id + "/regenerate", { method: "POST" }); await load(); }
+      catch (e) { alert("重新生成失败: " + e.message); }
+    }
+    async function delTask(id) {
+      if (!window.confirm("确认删除该任务记录？（不删除已生成的产物文件）")) return;
+      try { await api("/api/tasks/" + id, { method: "DELETE" }); await load(); }
+      catch (e) { alert(e.message); }
+    }
+    return { batches, standalone, openBatches, openJobs, q, tasksOf, typeText, statusText, fileName,
+             toggle, toggleBatch, batchChildren, regen, delTask, fmtTime,
+             open: (id) => emit("open", id), openBatch: (id) => emit("open-batch", id) };
+  },
+  template: `
+  <div>
+    <div class="card"><div class="card-body" style="padding:12px 18px;">
+      <input v-model="q" placeholder="🔎 搜索任务（按批次/作业/文件/产物路径）" />
+    </div></div>
+
+    <div class="card" v-for="b in batches" :key="b.batch.batch_id">
+      <div class="job-row batch-row" @click="toggleBatch(b.batch.batch_id)">
+        <span class="jid">{{ b.batch.batch_id }}</span>
+        <span class="badge-status" :class="b.status">{{ b.status }}</span>
+        <span class="files">{{ b.batch.dir_a }} ↔ {{ b.batch.dir_b }}</span>
+        <span class="group-badge" v-if="b.batch.label">🏷 {{ b.batch.label }}</span>
+        <span class="meta-time">{{ fmtTime(b.batch.created_at) }}</span>
+        <span class="count">共 {{ b.total_files }} 文件</span>
+        <span class="row-actions" @click.stop>
+          <button class="mini-btn" @click="openBatch(b.batch.batch_id)">批次详情</button>
+          <button class="mini-btn">{{ openBatches.has(b.batch.batch_id) ? '收起 ▲' : '展开 ▼' }}</button>
+        </span>
+      </div>
+      <template v-if="openBatches.has(b.batch.batch_id)">
+        <template v-for="c in (batchChildren[b.batch.batch_id] || [])" :key="c.job_id">
+          <div class="job-row" style="padding-left:32px;" @click="toggle(openJobs, c.job_id)">
+            <span class="jid">{{ (c.file_a||'').split(/[\\\\/]/).pop() }}</span>
+            <span class="badge-status" :class="c.status">{{ c.status }}</span>
+            <span class="count">{{ tasksOf(c.job_id).length ? tasksOf(c.job_id).map(t => typeText(t) + '·' + statusText(t)).join('　') : (c.status==='done' ? '无任务记录' : '等待对比完成…') }}</span>
+            <span class="row-actions" @click.stop>
+              <button class="mini-btn" @click="open(c.job_id)">结果</button>
+              <button class="mini-btn" v-if="tasksOf(c.job_id).length">{{ openJobs.has(c.job_id) ? '收起 ▲' : '展开 ▼' }}</button>
+            </span>
+          </div>
+          <div class="job-row" style="padding-left:64px;" v-for="t in tasksOf(c.job_id)" :key="t.task_id">
+            <span class="jid">{{ typeText(t) }}</span>
+            <span class="badge-status" :class="t.status">{{ statusText(t) }}</span>
+            <span class="files" :title="t.output_path">{{ t.output_path || (t.error ? '✗ ' + t.error : '—') }}</span>
+            <span class="group-badge" v-if="t.trigger==='manual'">手动</span>
+            <span class="meta-time" v-if="t.finished_at">{{ fmtTime(t.finished_at) }}</span>
+            <span class="row-actions">
+              <button class="mini-btn" @click="regen(t.task_id)" :disabled="t.status==='running'">↻ 重新生成</button>
+              <button class="mini-btn danger" @click="delTask(t.task_id)">删除</button>
+            </span>
+          </div>
+        </template>
+      </template>
+    </div>
+
+    <div class="card">
+      <div class="card-head">🗂️ 单文件作业任务</div>
+      <div>
+        <div class="empty" v-if="!standalone.length">无作业</div>
+        <template v-for="j in standalone" :key="j.job_id">
+          <div class="job-row" @click="toggle(openJobs, j.job_id)">
+            <span class="jid">{{ j.job_id }}</span>
+            <span class="badge-status" :class="j.status">{{ j.status }}</span>
+            <span class="files">{{ j.file_a }} ↔ {{ j.file_b }}</span>
+            <span class="count">{{ tasksOf(j.job_id).length ? tasksOf(j.job_id).map(t => typeText(t) + '·' + statusText(t)).join('　') : (j.status==='done' ? '无任务记录' : '等待对比完成…') }}</span>
+            <span class="row-actions" @click.stop>
+              <button class="mini-btn" @click="open(j.job_id)">结果</button>
+              <button class="mini-btn" v-if="tasksOf(j.job_id).length">{{ openJobs.has(j.job_id) ? '收起 ▲' : '展开 ▼' }}</button>
+            </span>
+          </div>
+          <template v-if="openJobs.has(j.job_id)">
+            <div class="job-row" style="padding-left:32px;" v-for="t in tasksOf(j.job_id)" :key="t.task_id">
+              <span class="jid">{{ typeText(t) }}</span>
+              <span class="badge-status" :class="t.status">{{ statusText(t) }}</span>
+              <span class="files" :title="t.output_path">{{ t.output_path || (t.error ? '✗ ' + t.error : '—') }}</span>
+              <span class="group-badge" v-if="t.trigger==='manual'">手动</span>
+              <span class="meta-time" v-if="t.finished_at">{{ fmtTime(t.finished_at) }}</span>
+              <span class="row-actions">
+                <button class="mini-btn" @click="regen(t.task_id)" :disabled="t.status==='running'">↻ 重新生成</button>
+                <button class="mini-btn danger" @click="delTask(t.task_id)">删除</button>
+              </span>
+            </div>
+          </template>
+        </template>
+      </div>
+    </div>
   </div>`,
 };
 
@@ -1909,7 +2074,8 @@ const SplitResultView = {
 };
 
 const App = {
-  components: { SubmitForm, JobList, BatchView, ResultView, SettingsPage, SplitPage, SplitResultView },
+  components: { SubmitForm, JobList, BatchView, ResultView, SettingsPage, SplitPage, SplitResultView,
+                TaskManagerPage },
   setup() {
     const tab = ref("submit");
     const jobId = ref(null);
@@ -1945,12 +2111,14 @@ const App = {
     <button class="nav-btn" :class="tab==='submit'?'active':''" @click="tab='submit'">新建对比</button>
     <button class="nav-btn" :class="tab==='split'?'active':''" @click="tab='split'">文本拆分</button>
     <button class="nav-btn" :class="(tab==='jobs'||tab==='batch')?'active':''" @click="tab='jobs'">作业列表</button>
+    <button class="nav-btn" :class="tab==='tasks'?'active':''" @click="tab='tasks'">任务管理</button>
     <button class="nav-btn" :class="tab==='result'?'active':''" @click="tab='result'" :disabled="!jobId">结果</button>
     <button class="nav-btn" :class="tab==='settings'?'active':''" @click="tab='settings'">设置</button>
   </div>
   <div class="container">
     <SubmitForm v-if="tab==='submit'" :encodings="encodings" @submitted="onSubmitted" @batched="onBatched" />
     <JobList v-else-if="tab==='jobs'" @open="openJob" @open-batch="openBatch" @open-split="openSplit" />
+    <TaskManagerPage v-else-if="tab==='tasks'" @open="openJob" @open-batch="openBatch" />
     <SplitPage v-else-if="tab==='split'" @open-split="openSplit" />
     <SplitResultView v-else-if="tab==='splitresult' && splitJobId" :job-id="splitJobId" :key="splitJobId" @back="backToJobs" />
     <BatchView v-else-if="tab==='batch' && batchId" :batch-id="batchId" :key="batchId" @open="openChild" @back="backToJobs" />

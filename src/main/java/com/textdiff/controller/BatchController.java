@@ -17,9 +17,11 @@ import java.util.Map;
 @RequestMapping("/api/batches")
 public class BatchController {
     private final JobStore store;
+    private final com.textdiff.store.TaskStore taskStore;
 
-    public BatchController(JobStore store) {
+    public BatchController(JobStore store, com.textdiff.store.TaskStore taskStore) {
         this.store = store;
+        this.taskStore = taskStore;
     }
 
     @GetMapping("/{id}")
@@ -63,10 +65,13 @@ public class BatchController {
     public Map<String, Object> delete(@PathVariable String id) {
         BatchRecord batch = require(id);
         if (batch.locked) throw new ResponseStatusException(HttpStatus.CONFLICT, "批次已锁定");
+        List<String> jobIds = new ArrayList<>();
         for (JobRecord j : store.listJobs(id)) {
             ApiViews.deleteRecursively(java.nio.file.Path.of(j.resultDir));
+            jobIds.add(j.id);
         }
         store.deleteBatch(id);
+        taskStore.deleteForJobs(jobIds); // 级联清理任务管理中的跟踪记录
         return Map.of("ok", true);
     }
 

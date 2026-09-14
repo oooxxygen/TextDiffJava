@@ -48,8 +48,8 @@ public final class JobManager implements AutoCloseable {
     private final ConcurrentMap<String, Future<?>> tasks = new ConcurrentHashMap<>();
     /** 字段名映射（可空：测试/未导入场景）。作业运行时按文件名自动填充列名。 */
     private final com.textdiff.store.FieldMapStore fieldMaps;
-    /** 作业完成回调（AI 归纳分析挂载点，WebBeansConfig 注入）。 */
-    public volatile java.util.function.Consumer<JobRecord> aiHook;
+    /** 作业完成回调（任务管理器挂载点：登记差异 CSV 导出 + AI 分析两条默认生成任务）。 */
+    public volatile java.util.function.Consumer<JobRecord> doneHook;
 
     public JobManager(JobStore store, Path resultsRoot, EngineConfig engine) {
         this(store, resultsRoot, engine, null);
@@ -171,7 +171,6 @@ public final class JobManager implements AutoCloseable {
             }
             job.status = JobRecord.DONE;
             job.finishedAt = System.currentTimeMillis() / 1000;
-            autoExport(job);
         } catch (Exception e) {
             Future<?> f = tasks.get(jobId);
             if (f != null && f.isCancelled()) {
@@ -183,8 +182,8 @@ public final class JobManager implements AutoCloseable {
             job.finishedAt = System.currentTimeMillis() / 1000;
         }
         store.saveJob(job);
-        java.util.function.Consumer<JobRecord> hook = aiHook;
-        if (hook != null && JobRecord.DONE.equals(job.status)) hook.accept(job); // 状态落盘后再触发 AI
+        java.util.function.Consumer<JobRecord> hook = doneHook;
+        if (hook != null && JobRecord.DONE.equals(job.status)) hook.accept(job); // 状态落盘后登记生成任务
         tasks.remove(jobId);
     }
 
@@ -303,20 +302,6 @@ public final class JobManager implements AutoCloseable {
     private void requireJob(String jobId) {
         if (jobId == null || store.getJob(jobId) == null) {
             throw new IllegalArgumentException("作业不存在: " + jobId);
-        }
-    }
-
-    /** 需求：任务完成后自动导出全量 + 差异 CSV 到 results/{batchId}/export/。失败不回滚比对状态。 */
-    private void autoExport(JobRecord job) {
-        try {
-            Path dir = resultsRoot.resolve(job.batchId == null ? "standalone" : job.batchId)
-                    .resolve("export");
-            com.textdiff.export.ExportAssembler.writeFullCsv(dir, job,
-                    com.textdiff.export.ExportAssembler.DATA);
-            com.textdiff.export.ExportAssembler.writeDiffCsv(dir, job,
-                    com.textdiff.export.ExportAssembler.DATA);
-        } catch (RuntimeException e) {
-            System.err.println("[export] 自动导出失败（作业继续完成）: " + e.getMessage());
         }
     }
 

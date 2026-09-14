@@ -41,9 +41,15 @@ class E2eV01Test {
         Assumptions.assumeTrue(!configLines.isEmpty(), "配置为空，跳过");
 
         try (DualJobStore store = new DualJobStore(dir.resolve("store"), false);
-             JobManager mgr = new JobManager(store, dir.resolve("results"), EngineConfig.defaults())) {
-            // 挂载 AI 分析器（AI 未启用 → prompt.md 仍产出，aiStatus=disabled）
-            new com.textdiff.ai.AiAnalyzer(store, fakeAppConfig(), new com.textdiff.config.AppPaths(dir, dir), mgr);
+             JobManager mgr = new JobManager(store, dir.resolve("results"), EngineConfig.defaults());
+             com.textdiff.store.TaskStore taskStore = new com.textdiff.store.TaskStore(
+                     dir.resolve("store"), false)) {
+            // 生成任务编排：作业 done → 差异CSV导出 + AI分析两条任务（AI 未启用 → prompt.md 仍产出）
+            com.textdiff.ai.AiAnalyzer ai = new com.textdiff.ai.AiAnalyzer(store, fakeAppConfig(),
+                    new com.textdiff.config.AppPaths(dir, dir), null);
+            try (TaskManager tasks = new TaskManager(store, taskStore, ai,
+                    new com.textdiff.config.AppPaths(dir, dir), dir.resolve("results"))) {
+                mgr.doneHook = tasks::registerDefaults;
             var batch = mgr.createBatch(V01.resolve("bocso"), V01.resolve("bocsoxc"), configLines);
             assertTrue(batch.jobCount >= 1, "应至少配对一个文件对，实际 " + batch.jobCount);
             assertTrue(mgr.awaitIdle(120, TimeUnit.SECONDS));
@@ -78,6 +84,22 @@ class E2eV01Test {
                         + " totalA=" + meta.totalA + " totalB=" + meta.totalB
                         + " diff=" + meta.diff + " onlyA=" + meta.onlyA + " onlyB=" + meta.onlyB
                         + " keyWarn=" + job.keyWarning);
+                // 生成任务跟踪：作业完成 → 两条默认任务（差异CSV导出 / AI分析）已完成
+                boolean tasksReady = false;
+                for (int i = 0; i < 150 && !tasksReady; i++) {
+                    var ts = taskStore.listForJob(job.id);
+                    tasksReady = ts.size() == 2 && ts.stream().allMatch(t ->
+                            com.textdiff.store.TaskRecord.DONE.equals(t.status));
+                    if (!tasksReady) Thread.sleep(200);
+                }
+                var ts = taskStore.listForJob(job.id);
+                assertEquals(2, ts.size(), "应登记差异CSV导出 + AI分析两条任务");
+                for (var t : ts) {
+                    assertEquals(com.textdiff.store.TaskRecord.DONE, t.status,
+                            t.taskType + " err=" + t.error);
+                    assertFalse(t.outputPath.isBlank(), t.taskType + " 应记录产物路径");
+                }
+            }
             }
         }
     }
