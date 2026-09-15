@@ -24,7 +24,7 @@ import java.util.Map;
  */
 public final class PromptRenderer {
     public static final String TEMPLATE_NAME = "analysis-template.md";
-    public static final String TEMPLATE_VERSION = "v1";
+    public static final String TEMPLATE_VERSION = "v2";
 
     /**
      * 提示词预算：适配小上下文窗口（≤256K）。
@@ -96,6 +96,9 @@ public final class PromptRenderer {
         ph.put("keyColumns", intList(cfg.keyColumns));
         ph.put("omitSeq", ApiSeq.seq1based(cfg.omitColumns));
         ph.put("omitColumns", intList(cfg.omitColumns));
+        java.util.Map<Integer, String> names = colNames(job, cfg, fieldMaps);
+        ph.put("keyColumnsDesc", describeCols(cfg.keyColumns, names));
+        ph.put("omitColumnsDesc", describeCols(cfg.omitColumns, names));
         ph.put("delimiter", cfg.delimiter);
         ph.put("fieldAttributes", fieldAttributeTable(job, fieldMaps, budget));
 
@@ -114,12 +117,12 @@ public final class PromptRenderer {
         StringBuilder ku = new StringBuilder();
         if (summary != null) {
             if (summary.keyDupA == 0 && summary.keyDupB == 0) {
-                ku.append("A/B 两侧主键均唯一，无需重检。");
+                ku.append("A/B 两侧主键均能唯一定位记录，无需重检。");
             } else {
-                ku.append("⚠ 主键存在重复：A 侧重复 ").append(summary.keyDupA)
-                        .append(" 次，B 侧重复 ").append(summary.keyDupB).append(" 次。样例：")
-                        .append(String.join("、", summary.dupKeySamples))
-                        .append("。请提示用户：该对比配置需要重检。");
+                ku.append("<span style=\"color:red\">**🔴 主键存在重复，无法唯一定位记录：A 侧重复 ")
+                        .append(summary.keyDupA).append(" 次，B 侧重复 ").append(summary.keyDupB)
+                        .append(" 次（样例：").append(String.join("、", summary.dupKeySamples))
+                        .append("），该对比配置需重检**</span>");
             }
             if (summary.malformedA > 0 || summary.malformedB > 0) {
                 ku.append("（空键/解析异常行：A=").append(summary.malformedA).append("，B=").append(summary.malformedB).append("）");
@@ -129,14 +132,22 @@ public final class PromptRenderer {
 
         StringBuilder ov = new StringBuilder();
         if (summary != null) {
-            ov.append("- A 总行数 ").append(summary.totalA).append("，B 总行数 ").append(summary.totalB)
-                    .append("；完全一致 ").append(summary.equal).append("，有差异 ").append(summary.diff)
-                    .append("，仅 A ").append(summary.onlyA).append("，仅 B ").append(summary.onlyB).append("\n");
+            long dev = summary.totalB - summary.totalA;
+            double devPct = summary.totalA == 0 ? 0 : Math.abs(dev) * 100.0 / summary.totalA;
+            ov.append("- A（旧）总条数 ").append(summary.totalA).append("，B（新）总条数 ").append(summary.totalB)
+                    .append("；B 相对 A 偏离 ").append(dev >= 0 ? "+" : "").append(dev).append(" 条（")
+                    .append(String.format("%.2f", devPct)).append("%）\n");
+            ov.append("- 完全一致 ").append(summary.equal).append(" 条，有差异 ").append(summary.diff)
+                    .append(" 条，仅 A（B 中缺失）").append(summary.onlyA).append(" 条，仅 B（新增）")
+                    .append(summary.onlyB).append(" 条\n");
             if (summary.diffColFreq != null && !summary.diffColFreq.isEmpty()) {
-                ov.append("\n| 差异列(0-based) | 差异行数 |\n|---|---|\n");
+                ov.append("\n| 差异栏位 | 差异条数 | 占 B 总条数比 |\n|---|---|---|\n");
                 summary.diffColFreq.forEach((c, n) -> {
-                    String name = cfg.columnNames.size() > c ? cfg.columnNames.get(c) : "栏位" + (c + 1);
-                    ov.append("| ").append(c).append("（").append(name).append("） | ").append(n).append(" |\n");
+                    String name = names.getOrDefault(c, "栏位" + (c + 1));
+                    double pct = summary.totalB == 0 ? 0 : n * 100.0 / summary.totalB;
+                    ov.append("| 第").append(c + 1).append("列 ").append(name)
+                            .append(" | ").append(n)
+                            .append(" | ").append(String.format("%.2f", pct)).append("% |\n");
                 });
             } else {
                 ov.append("\n本次对比无任何差异列——动态分析部分省略。");
@@ -154,7 +165,7 @@ public final class PromptRenderer {
             cols = cols.subList(0, budget.maxColumns());
         }
         for (DiffFeatureExtractor.ColumnFeature f : cols) {
-            String name = cfg.columnNames.size() > f.col ? cfg.columnNames.get(f.col) : "栏位" + (f.col + 1);
+            String name = names.getOrDefault(f.col, "栏位" + (f.col + 1));
             cf.append("### 列 ").append(f.col).append("（").append(name).append("），差异 ").append(f.count).append(" 行\n");
             if (!f.commonPrefix.isEmpty() || !f.commonSuffix.isEmpty()) {
                 cf.append("- 公共前缀：`").append(f.commonPrefix).append("`；公共后缀：`").append(f.commonSuffix).append("`\n");
@@ -264,6 +275,37 @@ public final class PromptRenderer {
 
     private static String oneLine(String s) {
         return s == null ? "" : s.replace("\n", "\\n").replace("\r", "\\r");
+    }
+
+    /**
+     * 0-based 列号 → 字段名。优先源系统字段配置（bat_report_conf_field），次选规则解析到的表头，
+     * 均无时回落"栏位N"。供主键/跳过栏位"列数+字段名"描述与差异栏位表使用。
+     */
+    private static java.util.Map<Integer, String> colNames(JobRecord job, CompareConfig cfg,
+                                                           com.textdiff.store.FieldMapStore maps) {
+        java.util.Map<Integer, String> out = new java.util.HashMap<>();
+        for (int i = 0; i < cfg.columnNames.size(); i++) out.put(i, cfg.columnNames.get(i));
+        if (maps != null && job.fileA != null && !job.fileA.isBlank()) {
+            String reportId = maps.reportIdForFile(job.fileA);
+            if (reportId != null) {
+                for (com.textdiff.store.FieldMaps.ReportField f : maps.fieldsFor(reportId)) {
+                    out.putIfAbsent(f.colIndex(), f.fieldName());
+                }
+            }
+        }
+        return out;
+    }
+
+    /** "共 N 列（第X列 字段A、第Y列 字段B…）"描述；空序列返回"无"。 */
+    private static String describeCols(java.util.List<Integer> cols, java.util.Map<Integer, String> names) {
+        if (cols == null || cols.isEmpty()) return "无";
+        StringBuilder sb = new StringBuilder("共 ").append(cols.size()).append(" 列（");
+        for (int i = 0; i < cols.size(); i++) {
+            int c = cols.get(i);
+            if (i > 0) sb.append("、");
+            sb.append("第").append(c + 1).append("列 ").append(names.getOrDefault(c, "栏位" + (c + 1)));
+        }
+        return sb.append("）").toString();
     }
 
     private static String intList(java.util.List<Integer> list) {

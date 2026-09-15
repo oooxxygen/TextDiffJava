@@ -67,7 +67,7 @@ class AiPipelineTest {
         assertTrue(text.contains("2024-01-01")); // 采样值对
         assertTrue(text.contains("+1")); // 数值差规律
         assertTrue(text.contains("KEYSEQ=1"));
-        assertTrue(text.contains("主键均唯一"));
+        assertTrue(text.contains("主键均能唯一定位记录"));
         assertTrue(text.contains("## 四、AI 动态分析要求")); // 有差异时动态段存在
     }
 
