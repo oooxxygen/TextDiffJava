@@ -5,10 +5,12 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.function.Function;
 
-/** config.ini 加载 + 环境变量覆盖；优先级 env > ini > default。对等 Python config.py。 */
+/** config.ini 加载 + 环境变量覆盖；优先级 env > ini > default。对等 Python config.py。
+ *  首次启动（ini 不存在）自动生成带注释的默认配置文件，用户修改后重启生效。 */
 public record AppConfig(ServerConfig server, EngineConfig engine, StoreConfig store, AiConfig ai) {
 
     public static AppConfig load(Path iniPath, Function<String, String> env) {
+        ensureDefaultIni(iniPath);
         Map<String, Map<String, String>> ini = parseIni(iniPath);
         Map<String, String> srv = ini.getOrDefault("server", Map.of());
         Map<String, String> eng = ini.getOrDefault("engine", Map.of());
@@ -67,6 +69,52 @@ public record AppConfig(ServerConfig server, EngineConfig engine, StoreConfig st
         if (env != null && !env.isBlank()) return env.trim();
         if (ini != null && !ini.isBlank()) return ini.trim();
         return def;
+    }
+
+    /** 首次启动生成默认 ini（填充内置默认值与注释，供用户自行修改）；已有文件绝不覆盖。 */
+    private static void ensureDefaultIni(Path path) {
+        if (path == null || Files.isRegularFile(path)) return;
+        EngineConfig defEng = EngineConfig.defaults();
+        String tpl = """
+                # TextDiff 配置文件（首次启动自动生成默认值；修改后重启生效；同名键可用环境变量覆盖，如 TEXTDIFF_PORT）
+
+                [server]
+                # 监听地址与端口
+                host = 0.0.0.0
+                port = 8080
+
+                [engine]
+                # 后台对比线程池上限 / 单作业内存态最大字节数（超出自动落盘）
+                max-threads = %d
+                in-memory-bytes = %d
+
+                [store]
+                # H2 双写镜像开关（false = 纯文件模式，查询仍可用但无数据库表）
+                enabled = true
+
+                [ai]
+                # AI 归纳分析（OpenAI 兼容 /chat/completions 或 Anthropic 原生 /v1/messages）
+                enabled = false
+                base_url =
+                api_key =
+                model =
+                # 单次请求超时（秒）；生成完整分析报告建议 ≥300
+                timeout = 60
+                # 提示词字符预算：超限自动压缩重渲，适配小上下文窗口（建议 ≤ 上下文窗口 token 数 × 2）
+                max-prompt-chars = 120000
+                # 弱网容错：瞬时错误（超时/5xx/429）重试次数与退避基数（指数退避）
+                retries = 3
+                retry-backoff-ms = 2000
+                """.formatted(defEng.maxThreads(), defEng.maxInMemoryBytes());
+        try {
+            Path parent = path.getParent();
+            if (parent != null) Files.createDirectories(parent);
+            Files.writeString(path, tpl);
+            System.out.println("[config] 已生成默认配置文件: " + path.toAbsolutePath()
+                    + "（请按需修改后重启生效）");
+        } catch (Exception e) {
+            System.err.println("[config] 默认配置文件生成失败（按内置默认值继续运行）: " + e.getMessage());
+        }
     }
 
     private static Map<String, Map<String, String>> parseIni(Path path) {

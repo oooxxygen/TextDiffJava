@@ -7,3 +7,5 @@ results_split/
 data/
 acceptance-run/
 .zcode/plans/
+
+server.log
