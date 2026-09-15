@@ -31,7 +31,7 @@ public final class PromptRenderer {
      * FULL 适合大窗口；COMPACT 压缩采样、聚焦 top 差异列、裁剪栏位属性表。
      */
     public record Budget(int maxSamplesPerColumn, int maxColumns, int maxAttrRows, String note) {
-        public static final Budget FULL = new Budget(20, Integer.MAX_VALUE, 4096, "");
+        public static final Budget FULL = new Budget(10, Integer.MAX_VALUE, 4096, "");
         public static final Budget COMPACT = new Budget(3, 20, 64,
                 "\n> ⚠ 上下文预算压缩模式：仅保留差异行数最多的前 20 个差异列、每列 3 组采样与有限栏位属性；"
                         + "完整特征可查看作业结果目录下的 result.jsonl 与 prompt 原件。\n");

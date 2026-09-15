@@ -1747,6 +1747,17 @@ const TaskManagerPage = {
       catch (e) { alert("重新生成失败: " + e.message); }
     }
     function toggleTask(id) { selTasks.has(id) ? selTasks.delete(id) : selTasks.add(id); }
+    // 作业级选择：勾选=选中该作业全部任务（差异CSV + AI分析），再点取消
+    const jobAllSel = (jobId) => {
+      const ts = tasksOf(jobId);
+      return ts.length > 0 && ts.every(t => selTasks.has(t.task_id));
+    };
+    const toggleJobSel = (jobId) => {
+      const ids = tasksOf(jobId).map(t => t.task_id);
+      if (!ids.length) return;
+      if (ids.every(id => selTasks.has(id))) ids.forEach(id => selTasks.delete(id));
+      else ids.forEach(id => selTasks.add(id));
+    };
     async function batchRegen() {
       if (!selTasks.size) return;
       const ids = [...selTasks];
@@ -1772,19 +1783,19 @@ const TaskManagerPage = {
     }
     return { batches, standalone, openBatches, openJobs, q, tasksOf, typeText, statusText, fileName,
              toggle, toggleBatch, batchChildren, regen, delTask, fmtTime,
-             selTasks, runAt, toggleTask, batchRegen,
+             selTasks, runAt, jobAllSel, toggleJobSel, batchRegen,
              open: (id) => emit("open", id), openBatch: (id) => emit("open-batch", id) };
   },
   template: `
   <div>
     <div class="card"><div class="card-body" style="padding:12px 18px;">
       <div class="field"><input v-model="q" placeholder="🔎 搜索任务（按批次/作业/文件/产物路径）" /></div>
-      <div class="field" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px;">
-        <span class="count">已选 {{ selTasks.size }} 项</span>
-        <input type="datetime-local" v-model="runAt" style="width:auto;" title="留空 = 立即执行；选择未来时间 = 定时执行" />
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+        <span class="count">已选 {{ selTasks.size }} 项任务</span>
+        <input type="datetime-local" v-model="runAt" style="width:210px;" title="留空 = 立即执行；选择未来时间 = 定时执行" />
         <button class="mini-btn" @click="batchRegen" :disabled="!selTasks.size">⚡ 批量重新生成（差异CSV / AI分析）</button>
         <button class="mini-btn" @click="selTasks.clear()" :disabled="!selTasks.size">清空选择</button>
-        <span class="count" style="opacity:.7;">勾选任务行后提交；填了时间则到点自动执行（重启后仍恢复）</span>
+        <span class="count" style="opacity:.7;">勾选作业后提交；填了时间则到点自动执行（重启后仍恢复）</span>
       </div>
     </div></div>
 
@@ -1804,28 +1815,29 @@ const TaskManagerPage = {
       <template v-if="openBatches.has(b.batch.batch_id)">
         <template v-for="c in (batchChildren[b.batch.batch_id] || [])" :key="c.job_id">
           <div class="job-row" style="padding-left:32px;" @click="toggle(openJobs, c.job_id)">
+            <label class="sel-all" style="margin-left:0;margin-right:10px;" @click.stop title="选中该作业的差异CSV + AI分析任务"><input type="checkbox" :checked="jobAllSel(c.job_id)" @change="toggleJobSel(c.job_id)" /></label>
             <span class="jid">{{ (c.file_a||'').split(/[\\\\/]/).pop() }}</span>
             <span class="badge-status" :class="c.status">{{ c.status }}</span>
-            <span class="count">{{ tasksOf(c.job_id).length ? tasksOf(c.job_id).map(t => typeText(t) + '·' + statusText(t)).join('　') : (c.status==='done' ? '无任务记录' : '等待对比完成…') }}</span>
             <span class="row-actions" @click.stop>
               <button class="mini-btn" @click="open(c.job_id)">结果</button>
               <button class="mini-btn" v-if="tasksOf(c.job_id).length" @click.stop="toggle(openJobs, c.job_id)">{{ openJobs.has(c.job_id) ? '收起 ▲' : '展开 ▼' }}</button>
             </span>
           </div>
-          <div class="job-row" style="padding-left:64px;" v-for="t in tasksOf(c.job_id)" :key="t.task_id">
-            <label class="sel-all" @click.stop><input type="checkbox" :checked="selTasks.has(t.task_id)" @change="toggleTask(t.task_id)" /></label>
-            <span class="jid">{{ typeText(t) }}</span>
-            <span class="badge-status" :class="t.status">{{ statusText(t) }}</span>
-            <span class="files" :title="t.output_path">{{ t.output_path || (t.error ? '✗ ' + t.error : '—') }}</span>
-            <span class="group-badge" v-if="t.trigger==='manual'">手动</span>
-            <span class="group-badge" v-if="t.trigger==='batch'">批量</span>
-            <span class="group-badge" v-if="t.scheduled_at>0 && t.status==='pending'">⏰ {{ fmtTime(t.scheduled_at) }} 执行</span>
-            <span class="meta-time" v-if="t.finished_at">{{ fmtTime(t.finished_at) }}</span>
-            <span class="row-actions">
-              <button class="mini-btn" @click="regen(t.task_id)" :disabled="t.status==='running'">↻ 重新生成</button>
-              <button class="mini-btn danger" @click="delTask(t.task_id)">删除</button>
-            </span>
-          </div>
+          <template v-if="openJobs.has(c.job_id)">
+            <div class="job-row" style="padding-left:64px;" v-for="t in tasksOf(c.job_id)" :key="t.task_id">
+              <span class="jid">{{ typeText(t) }}</span>
+              <span class="badge-status" :class="t.status">{{ statusText(t) }}</span>
+              <span class="files" :title="t.output_path">{{ t.output_path || (t.error ? '✗ ' + t.error : '—') }}</span>
+              <span class="group-badge" v-if="t.trigger==='manual'">手动</span>
+              <span class="group-badge" v-if="t.trigger==='batch'">批量</span>
+              <span class="group-badge" v-if="t.scheduled_at>0 && t.status==='pending'">⏰ {{ fmtTime(t.scheduled_at) }} 执行</span>
+              <span class="meta-time" v-if="t.finished_at">{{ fmtTime(t.finished_at) }}</span>
+              <span class="row-actions">
+                <button class="mini-btn" @click="regen(t.task_id)" :disabled="t.status==='running'">↻ 重新生成</button>
+                <button class="mini-btn danger" @click="delTask(t.task_id)">删除</button>
+              </span>
+            </div>
+          </template>
         </template>
       </template>
     </div>
@@ -1836,10 +1848,10 @@ const TaskManagerPage = {
         <div class="empty" v-if="!standalone.length">无作业</div>
         <template v-for="j in standalone" :key="j.job_id">
           <div class="job-row" @click="toggle(openJobs, j.job_id)">
+            <label class="sel-all" style="margin-left:0;margin-right:10px;" @click.stop title="选中该作业的差异CSV + AI分析任务"><input type="checkbox" :checked="jobAllSel(j.job_id)" @change="toggleJobSel(j.job_id)" /></label>
             <span class="jid">{{ j.job_id }}</span>
             <span class="badge-status" :class="j.status">{{ j.status }}</span>
             <span class="files">{{ j.file_a }} ↔ {{ j.file_b }}</span>
-            <span class="count">{{ tasksOf(j.job_id).length ? tasksOf(j.job_id).map(t => typeText(t) + '·' + statusText(t)).join('　') : (j.status==='done' ? '无任务记录' : '等待对比完成…') }}</span>
             <span class="row-actions" @click.stop>
               <button class="mini-btn" @click="open(j.job_id)">结果</button>
               <button class="mini-btn" v-if="tasksOf(j.job_id).length" @click.stop="toggle(openJobs, j.job_id)">{{ openJobs.has(j.job_id) ? '收起 ▲' : '展开 ▼' }}</button>
@@ -1847,7 +1859,6 @@ const TaskManagerPage = {
           </div>
           <template v-if="openJobs.has(j.job_id)">
             <div class="job-row" style="padding-left:32px;" v-for="t in tasksOf(j.job_id)" :key="t.task_id">
-              <label class="sel-all" @click.stop><input type="checkbox" :checked="selTasks.has(t.task_id)" @change="toggleTask(t.task_id)" /></label>
               <span class="jid">{{ typeText(t) }}</span>
               <span class="badge-status" :class="t.status">{{ statusText(t) }}</span>
               <span class="files" :title="t.output_path">{{ t.output_path || (t.error ? '✗ ' + t.error : '—') }}</span>
