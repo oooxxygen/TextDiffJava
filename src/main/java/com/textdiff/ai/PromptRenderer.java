@@ -31,7 +31,7 @@ public final class PromptRenderer {
      * FULL 适合大窗口；COMPACT 压缩采样、聚焦 top 差异列、裁剪栏位属性表。
      */
     public record Budget(int maxSamplesPerColumn, int maxColumns, int maxAttrRows, String note) {
-        public static final Budget FULL = new Budget(10, Integer.MAX_VALUE, 4096, "");
+        public static final Budget FULL = new Budget(20, Integer.MAX_VALUE, 4096, "");
         public static final Budget COMPACT = new Budget(3, 20, 64,
                 "\n> ⚠ 上下文预算压缩模式：仅保留差异行数最多的前 20 个差异列、每列 3 组采样与有限栏位属性；"
                         + "完整特征可查看作业结果目录下的 result.jsonl 与 prompt 原件。\n");
@@ -183,14 +183,18 @@ public final class PromptRenderer {
             if (f.lengthGrows + f.lengthShrinks > 0) {
                 cf.append("- 长度变化：变长 ").append(f.lengthGrows).append("，变短 ").append(f.lengthShrinks).append("\n");
             }
-            cf.append("- 采样值对（A → B）：\n");
+            cf.append("- 差异数据明细（TOP ").append(Math.min(budget.maxSamplesPerColumn(), f.samples.size()))
+                    .append("，共 ").append(f.count).append(" 行差异）：\n\n");
+            cf.append("| 主键 | A（旧）值 | B（新）值 |\n|---|---|---|\n");
             int shown = 0;
             for (String[] s : f.samples) {
                 if (shown++ >= budget.maxSamplesPerColumn()) {
-                    cf.append("  - …（其余 ").append(f.samples.size() - shown + 1).append(" 对省略）\n");
+                    cf.append("\n（其余 ").append(f.samples.size() - shown + 1).append(" 组明细省略）\n");
                     break;
                 }
-                cf.append("  - `").append(oneLine(s[0])).append("` → `").append(oneLine(s[1])).append("`\n");
+                cf.append("| ").append(cell(s.length > 2 ? s[2] : ""))
+                        .append(" | ").append(cell(s[0]))
+                        .append(" | ").append(cell(s[1])).append(" |\n");
             }
         }
         if (cf.isEmpty()) cf.append("（无差异列——动态分析部分省略）");
@@ -275,6 +279,11 @@ public final class PromptRenderer {
 
     private static String oneLine(String s) {
         return s == null ? "" : s.replace("\n", "\\n").replace("\r", "\\r");
+    }
+
+    /** Markdown 表格单元格：压平换行并转义竖线。 */
+    private static String cell(String s) {
+        return oneLine(s).replace("|", "\\|");
     }
 
     /**

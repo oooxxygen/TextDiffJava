@@ -97,6 +97,28 @@ class TaskStoreTest {
     }
 
     @Test
+    void scheduledAtPersistsJsonlAndH2(@TempDir Path dir) throws Exception {
+        try (TaskStore store = new TaskStore(dir, true)) {
+            TaskRecord t = rec("t1", "j1", TaskRecord.AI_ANALYSIS);
+            t.scheduledAt = 1799999999L;
+            store.save(t);
+            assertEquals(1799999999L, store.get("t1").scheduledAt);
+        }
+        // JSONL 重载
+        try (TaskStore reopened = new TaskStore(dir, false)) {
+            assertEquals(1799999999L, reopened.get("t1").scheduledAt);
+        }
+        // H2 镜像列
+        try (Connection c = DriverManager.getConnection(
+                "jdbc:h2:file:" + dir.resolve("h2").resolve("textdiff").toAbsolutePath());
+             Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery("SELECT scheduled_at FROM task_record WHERE task_id='t1'")) {
+            assertTrue(rs.next());
+            assertEquals(1799999999L, rs.getLong(1));
+        }
+    }
+
+    @Test
     void h2MirrorReceivesSaves(@TempDir Path dir) throws Exception {
         try (TaskStore store = new TaskStore(dir, true)) {
             TaskRecord t = rec("t1", "j1", TaskRecord.AI_ANALYSIS);

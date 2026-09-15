@@ -12,6 +12,7 @@ public final class TaskRecord {
 
     public static final String TRIGGER_AUTO = "auto";     // 作业完成自动触发
     public static final String TRIGGER_MANUAL = "manual"; // 任务管理页手动重新生成
+    public static final String TRIGGER_BATCH = "batch";   // 任务管理页批量重新生成（可定时）
 
     public String taskId;
     public String batchId;   // 可空（单文件作业）
@@ -24,6 +25,8 @@ public final class TaskRecord {
     public long createdAt;
     public long startedAt;
     public long finishedAt;
+    /** 定时执行时间（epoch 秒）；0 = 立即。未来时间时任务保持 pending，由调度器到点执行。 */
+    public long scheduledAt;
 
     public TaskRecord() {}
 

@@ -21,9 +21,11 @@ import java.util.concurrent.TimeUnit;
  * 生成任务管理器（任务管理页后端）：跟踪作业完成后衍生的默认行为——差异 CSV 导出、文本模板 AI 分析。
  *
  * 作业 done 后经 JobManager.doneHook 注册两条任务（trigger=auto）并异步执行；
- * 任务页可重新生成（trigger=manual）/删除。导出路径可在设置页配置（store/task_settings.json，
- * 留空 = 默认 results/{batchId}/export）；AI 分析结果（Markdown）与差异 CSV 同目录，
- * 文件名 [归属组]文件昵称_实际文件名.md，结果目录另存原件 ai_analysis.md 供结果页展示。
+ * 任务页可重新生成（trigger=manual）/批量重新生成（trigger=batch，可指定未来执行时间）/删除。
+ * AI 调用并发受 aiConcurrency（config.ini [ai] max-concurrency）信号量限制，防止批量任务冲击服务方。
+ * 导出路径可在设置页配置（store/task_settings.json，留空 = 默认 results/{batchId}/export）；
+ * AI 分析结果（Markdown）与差异 CSV 同目录，文件名 [归属组]文件昵称_实际文件名.md，
+ * 结果目录另存原件 ai_analysis.md 供结果页展示。
  */
 public final class TaskManager implements AutoCloseable {
     /** 生成路径设置（blank = 使用默认导出目录；AI 分析结果随差异 CSV 同目录）。 */
@@ -33,6 +35,9 @@ public final class TaskManager implements AutoCloseable {
         }
     }
 
+    /** 批量重新生成的单条结果。 */
+    public record BatchResult(String taskId, boolean ok, String reason) {}
+
     private final JobStore store;
     private final TaskStore tasks;
     private final com.textdiff.ai.AiAnalyzer ai; // 可空：无 AI 分析器时任务标记失败
@@ -40,23 +45,45 @@ public final class TaskManager implements AutoCloseable {
     private final Path resultsRoot;
     private final Path settingsFile;
     private volatile TaskDirs dirs = TaskDirs.empty();
-    private final ExecutorService pool = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "task-runner");
-        t.setDaemon(true);
-        return t;
-    });
+    private final int aiConcurrency;
+    private final java.util.concurrent.Semaphore aiPermits;
+    /** 已提交到执行池但尚未开始运行的任务（防止定时调度器重复入队）。 */
+    private final java.util.Set<String> queued = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final ExecutorService pool;
+    private final java.util.concurrent.ScheduledExecutorService scheduler;
 
     public TaskManager(JobStore store, TaskStore tasks, com.textdiff.ai.AiAnalyzer ai,
                        com.textdiff.store.FieldMapStore aiFieldMaps,
                        AppPaths paths, Path resultsRoot) {
+        this(store, tasks, ai, aiFieldMaps, paths, resultsRoot, 2);
+    }
+
+    public TaskManager(JobStore store, TaskStore tasks, com.textdiff.ai.AiAnalyzer ai,
+                       com.textdiff.store.FieldMapStore aiFieldMaps,
+                       AppPaths paths, Path resultsRoot, int aiConcurrency) {
         this.store = store;
         this.tasks = tasks;
         this.ai = ai;
         this.aiFieldMaps = aiFieldMaps;
         this.resultsRoot = resultsRoot;
+        this.aiConcurrency = Math.max(1, aiConcurrency);
+        this.aiPermits = new java.util.concurrent.Semaphore(this.aiConcurrency);
+        this.pool = Executors.newFixedThreadPool(this.aiConcurrency, r -> {
+            Thread t = new Thread(r, "task-runner");
+            t.setDaemon(true);
+            return t;
+        });
+        this.scheduler = java.util.concurrent.Executors
+                .newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "task-scheduler");
+                    t.setDaemon(true);
+                    return t;
+                });
         this.settingsFile = paths.baseDir().resolve("store").resolve("task_settings.json");
         loadSettings();
         backfill();
+        // 定时调度：周期扫描到点的 pending 任务（含重启恢复的未来定时任务）
+        scheduler.scheduleWithFixedDelay(this::dispatchDue, 15, 15, java.util.concurrent.TimeUnit.SECONDS);
     }
 
     /** 全部任务记录（任务管理页列表）。 */
@@ -95,8 +122,9 @@ public final class TaskManager implements AutoCloseable {
         return o == null ? "" : o.toString();
     }
 
-    /** 启动重放：DONE 作业补登记缺失任务；中断残留的 running/pending 重新入队（重启恢复）。 */
+    /** 启动重放：DONE 作业补登记缺失任务；中断残留的 running/pending 重新入队（未来定时任务留给调度器到点执行）。 */
     private void backfill() {
+        long now = System.currentTimeMillis() / 1000;
         for (JobRecord job : store.listJobs(null)) {
             if (!JobRecord.DONE.equals(job.status)) continue;
             var existing = tasks.listForJob(job.id);
@@ -108,6 +136,7 @@ public final class TaskManager implements AutoCloseable {
                 if (TaskRecord.RUNNING.equals(t.status) || TaskRecord.PENDING.equals(t.status)) {
                     t.status = TaskRecord.PENDING;
                     tasks.save(t);
+                    if (t.scheduledAt > now) continue; // 未来定时：由调度器到点入队
                     enqueue(t);
                 }
             }
@@ -140,9 +169,50 @@ public final class TaskManager implements AutoCloseable {
         t.error = "";
         t.startedAt = 0;
         t.finishedAt = 0;
+        t.scheduledAt = 0;
         tasks.save(t);
         enqueue(t);
         return true;
+    }
+
+    /**
+     * 任务管理页「批量重新生成」：对选中任务（可由作业 id 展开）置为 pending，可指定未来执行时间。
+     * runAtEpochSec <= now 立即入队；未来时间由调度器到点执行（scheduledAt 持久化，重启恢复）。
+     */
+    public synchronized java.util.List<BatchResult> regenerateBatch(java.util.List<String> taskIds, long runAtEpochSec) {
+        java.util.List<BatchResult> out = new java.util.ArrayList<>();
+        long now = System.currentTimeMillis() / 1000;
+        for (String id : taskIds) {
+            TaskRecord t = tasks.get(id);
+            if (t == null) {
+                out.add(new BatchResult(id, false, "任务不存在"));
+                continue;
+            }
+            if (TaskRecord.RUNNING.equals(t.status)) {
+                out.add(new BatchResult(id, false, "任务进行中"));
+                continue;
+            }
+            t.status = TaskRecord.PENDING;
+            t.trigger = TaskRecord.TRIGGER_BATCH;
+            t.error = "";
+            t.startedAt = 0;
+            t.finishedAt = 0;
+            t.scheduledAt = Math.max(0, runAtEpochSec);
+            tasks.save(t);
+            if (t.scheduledAt <= now) enqueue(t);
+            out.add(new BatchResult(id, true, t.scheduledAt > now ? "scheduled" : "queued"));
+        }
+        return out;
+    }
+
+    /** 调度器周期调用：把到点的未来定时任务（仍 pending 且未入队）加入执行池。 */
+    synchronized void dispatchDue() {
+        long now = System.currentTimeMillis() / 1000;
+        for (TaskRecord t : tasks.listAll()) {
+            if (!TaskRecord.PENDING.equals(t.status) || t.scheduledAt > now) continue;
+            if (!queued.add(t.taskId)) continue; // 已在执行池队列
+            pool.submit(() -> run(t.taskId));
+        }
     }
 
     /** 任务管理页「删除」：仅移除跟踪记录，不动生成产物文件。 */
@@ -151,10 +221,12 @@ public final class TaskManager implements AutoCloseable {
     }
 
     private void enqueue(TaskRecord t) {
+        if (!queued.add(t.taskId)) return;
         pool.submit(() -> run(t.taskId));
     }
 
     void run(String taskId) {
+        queued.remove(taskId);
         TaskRecord t = tasks.get(taskId);
         if (t == null || !TaskRecord.PENDING.equals(t.status)) return;
         JobRecord job = store.getJob(t.jobId);
@@ -201,10 +273,16 @@ public final class TaskManager implements AutoCloseable {
     /**
      * AI 分析（文本模板）：委托 AiAnalyzer 阻塞执行（prompt.md 恒产出；ai_analysis.md 为原件），
      * 成功后将 Markdown 复制到差异 CSV 同目录，命名 [归属组]文件昵称_实际文件名.md。
+     * 并发受 aiPermits 信号量限制（config.ini [ai] max-concurrency），防止批量任务冲击服务方。
      */
     private String runAi(JobRecord job) throws Exception {
         if (ai == null) throw new IllegalStateException("AI 分析器不可用");
-        ai.analyze(job.id); // 阻塞执行；内部已落盘 prompt.md / ai_analysis.md 并更新 aiStatus
+        aiPermits.acquire();
+        try {
+            ai.analyze(job.id); // 阻塞执行；内部已落盘 prompt.md / ai_analysis.md 并更新 aiStatus
+        } finally {
+            aiPermits.release();
+        }
         JobRecord fresh = store.getJob(job.id);
         String st = fresh == null ? "" : fresh.aiStatus;
         Path canonical = Path.of(job.resultDir);
@@ -235,6 +313,7 @@ public final class TaskManager implements AutoCloseable {
 
     @Override
     public void close() {
+        scheduler.shutdownNow();
         pool.shutdownNow();
     }
 

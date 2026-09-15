@@ -68,6 +68,7 @@ class AiPipelineTest {
         assertTrue(text.contains("+1")); // 数值差规律
         assertTrue(text.contains("KEYSEQ=1"));
         assertTrue(text.contains("主键均能唯一定位记录"));
+        assertTrue(text.contains("| 主键 | A（旧）值 | B（新）值 |"), "TOP20 差异明细表头"); // 明细表
         assertTrue(text.contains("## 四、AI 动态分析要求")); // 有差异时动态段存在
     }
 

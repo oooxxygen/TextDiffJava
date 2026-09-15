@@ -62,7 +62,8 @@ public class WebBeansConfig {
                                                      AppPaths paths, AppConfig cfg,
                                                      JobManager jobManager) {
         com.textdiff.task.TaskManager tm = new com.textdiff.task.TaskManager(
-                store, taskStore, aiAnalyzer, fieldMaps, paths, paths.resultsDir());
+                store, taskStore, aiAnalyzer, fieldMaps, paths, paths.resultsDir(),
+                Math.max(1, cfg.ai().maxConcurrency()));
         jobManager.doneHook = tm::registerDefaults; // 作业 done → 登记差异CSV导出 + AI分析两条任务
         return tm;
     }

@@ -68,6 +68,7 @@ public final class TaskStore implements AutoCloseable {
                         """);
                 st.execute("CREATE INDEX IF NOT EXISTS idx_task_job ON task_record(job_id)");
                 st.execute("CREATE INDEX IF NOT EXISTS idx_task_batch ON task_record(batch_id)");
+                st.execute("ALTER TABLE task_record ADD COLUMN IF NOT EXISTS scheduled_at BIGINT");
             }
             this.h2 = c;
             resyncMirror();
@@ -157,6 +158,7 @@ public final class TaskStore implements AutoCloseable {
         c.createdAt = t.createdAt;
         c.startedAt = t.startedAt;
         c.finishedAt = t.finishedAt;
+        c.scheduledAt = t.scheduledAt;
         return c;
     }
 
@@ -217,8 +219,8 @@ public final class TaskStore implements AutoCloseable {
         if (h2 == null) return;
         try (PreparedStatement ps = h2.prepareStatement(
                 "MERGE INTO task_record(task_id, batch_id, job_id, task_type, status, task_trigger, "
-                        + "output_path, error, created_at, started_at, finished_at) "
-                        + "KEY(task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                        + "output_path, error, created_at, started_at, finished_at, scheduled_at) "
+                        + "KEY(task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
             bind(ps, t);
             ps.executeUpdate();
         } catch (SQLException e) {
@@ -241,8 +243,8 @@ public final class TaskStore implements AutoCloseable {
         }
         try (PreparedStatement ps = h2.prepareStatement(
                 "MERGE INTO task_record(task_id, batch_id, job_id, task_type, status, task_trigger, "
-                        + "output_path, error, created_at, started_at, finished_at) "
-                        + "KEY(task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                        + "output_path, error, created_at, started_at, finished_at, scheduled_at) "
+                        + "KEY(task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
             for (TaskRecord t : records) {
                 bind(ps, t);
                 ps.addBatch();
@@ -265,6 +267,7 @@ public final class TaskStore implements AutoCloseable {
         ps.setLong(9, t.createdAt);
         ps.setLong(10, t.startedAt);
         ps.setLong(11, t.finishedAt);
+        ps.setLong(12, t.scheduledAt);
     }
 
     private synchronized void degrade(SQLException e) {

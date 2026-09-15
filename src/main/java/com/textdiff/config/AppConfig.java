@@ -41,7 +41,9 @@ public record AppConfig(ServerConfig server, EngineConfig engine, StoreConfig st
                         "120000")),
                 Integer.parseInt(pick(env.apply("TEXTDIFF_AI_RETRIES"), aiSec.get("retries"), "3")),
                 Long.parseLong(pick(env.apply("TEXTDIFF_AI_RETRY_BACKOFF_MS"), aiSec.get("retry-backoff-ms"),
-                        "2000")));
+                        "2000")),
+                Integer.parseInt(pick(env.apply("TEXTDIFF_AI_MAX_CONCURRENCY"), aiSec.get("max-concurrency"),
+                        "2")));
 
         return new AppConfig(new ServerConfig(host, port),
                 new EngineConfig(maxThreads, maxInMemoryBytes),
@@ -51,13 +53,20 @@ public record AppConfig(ServerConfig server, EngineConfig engine, StoreConfig st
     /**
      * AI 归纳分析（OpenAI 兼容 /chat/completions）。
      * maxPromptChars：提示词字符预算（超限自动压缩重渲，适配 ≤256K 小上下文窗口）；
-     * retries / retryBackoffMs：弱网容错重试次数与退避基数（指数退避）。
+     * retries / retryBackoffMs：弱网容错重试次数与退避基数（指数退避）；
+     * maxConcurrency：批量任务并行时同时调用 AI 的最大并发数（保护调用方服务）。
      */
     public record AiConfig(boolean enabled, String baseUrl, String apiKey, String model, int timeoutSeconds,
-                           long maxPromptChars, int retries, long retryBackoffMs) {
+                           long maxPromptChars, int retries, long retryBackoffMs, int maxConcurrency) {
         /** 兼容旧 5 参构造（测试/外部调用）。 */
         public AiConfig(boolean enabled, String baseUrl, String apiKey, String model, int timeoutSeconds) {
-            this(enabled, baseUrl, apiKey, model, timeoutSeconds, 120000, 3, 2000);
+            this(enabled, baseUrl, apiKey, model, timeoutSeconds, 120000, 3, 2000, 2);
+        }
+
+        /** 兼容旧 8 参构造（未引入并发度前的全参形式）。 */
+        public AiConfig(boolean enabled, String baseUrl, String apiKey, String model, int timeoutSeconds,
+                        long maxPromptChars, int retries, long retryBackoffMs) {
+            this(enabled, baseUrl, apiKey, model, timeoutSeconds, maxPromptChars, retries, retryBackoffMs, 2);
         }
 
         public boolean usable() {
@@ -105,6 +114,8 @@ public record AppConfig(ServerConfig server, EngineConfig engine, StoreConfig st
                 # 弱网容错：瞬时错误（超时/5xx/429）重试次数与退避基数（指数退避）
                 retries = 3
                 retry-backoff-ms = 2000
+                # AI 任务并发上限：批量作业并行完成时同时调用 AI 的最大并发数（防止冲击服务方）
+                max-concurrency = 2
                 """.formatted(defEng.maxThreads(), defEng.maxInMemoryBytes());
         try {
             Path parent = path.getParent();

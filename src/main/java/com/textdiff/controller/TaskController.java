@@ -48,6 +48,50 @@ public class TaskController {
         return Map.of("ok", true, "task_id", t.taskId, "status", TaskRecord.PENDING);
     }
 
+    /**
+     * 批量重新生成：task_ids 直接指定任务；job_ids 展开为其全部任务（差异 CSV + AI 分析）。
+     * run_at 为未来 epoch 秒时定时执行（持久化跟踪，重启恢复）；缺省或 <= now 立即执行。
+     */
+    @PostMapping("/tasks/batch-regenerate")
+    public Map<String, Object> batchRegenerate(@RequestBody Map<String, Object> body) {
+        List<String> ids = new ArrayList<>();
+        Object taskIds = body.get("task_ids");
+        if (taskIds instanceof List<?> l) {
+            for (Object o : l) ids.add(str(o));
+        }
+        Object jobIds = body.get("job_ids");
+        if (jobIds instanceof List<?> l) {
+            for (Object o : l) {
+                String jobId = str(o);
+                tasks.listAll().stream().filter(t -> jobId.equals(t.jobId))
+                        .map(t -> t.taskId).forEach(ids::add);
+            }
+        }
+        ids = ids.stream().distinct().filter(s -> !s.isEmpty()).toList();
+        if (ids.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "未选择任务（task_ids / job_ids）");
+        }
+        long runAt = 0;
+        try {
+            Object v = body.get("run_at");
+            if (v != null && !str(v).isEmpty()) runAt = Long.parseLong(str(v));
+        } catch (NumberFormatException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "run_at 格式错误（应为 epoch 秒）");
+        }
+        List<Map<String, Object>> results = new ArrayList<>();
+        int updated = 0;
+        for (TaskManager.BatchResult r : tasks.regenerateBatch(ids, runAt)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("task_id", r.taskId());
+            m.put("ok", r.ok());
+            m.put("reason", r.reason());
+            results.add(m);
+            if (r.ok()) updated++;
+        }
+        return Map.of("ok", true, "updated", updated, "requested", ids.size(),
+                "run_at", runAt, "results", results);
+    }
+
     @DeleteMapping("/tasks/{id}")
     public Map<String, Object> delete(@PathVariable String id) {
         require(id);
@@ -84,6 +128,7 @@ public class TaskController {
         m.put("created_at", t.createdAt);
         m.put("started_at", t.startedAt);
         m.put("finished_at", t.finishedAt);
+        m.put("scheduled_at", t.scheduledAt);
         JobRecord job = store.getJob(t.jobId);
         if (job != null) {
             m.put("nickname", job.nickname);

@@ -77,6 +77,54 @@ class TaskManagerTest {
     }
 
     @Test
+    void batchRegenerateImmediateAndScheduled(@TempDir Path dir) throws Exception {
+        try (DualJobStore store = new DualJobStore(dir.resolve("store"), false);
+             TaskStore tasks = new TaskStore(dir.resolve("store2"), false);
+             TaskManager mgr = new TaskManager(store, tasks, null, null,
+                     new com.textdiff.config.AppPaths(dir, dir), dir.resolve("results"))) {
+            JobRecord job = makeDoneJob(dir, store);
+            mgr.registerDefaults(job);
+            assertTrue(mgr.awaitIdle(30, TimeUnit.SECONDS));
+
+            // 未来定时：置 pending + scheduledAt，不入队执行
+            long future = System.currentTimeMillis() / 1000 + 3600;
+            var both = tasks.listForJob(job.id).stream().map(t -> t.taskId).toList();
+            var results = mgr.regenerateBatch(both, future);
+            assertEquals(2, results.size());
+            assertTrue(results.stream().allMatch(TaskManager.BatchResult::ok), results.toString());
+            var unknown = mgr.regenerateBatch(java.util.List.of("nope"), 0);
+            assertFalse(unknown.get(0).ok());
+            for (String id : both) {
+                TaskRecord t = tasks.get(id);
+                assertEquals(TaskRecord.PENDING, t.status);
+                assertEquals(TaskRecord.TRIGGER_BATCH, t.trigger);
+                assertEquals(future, t.scheduledAt);
+                assertEquals(0, t.startedAt);
+            }
+            Thread.sleep(500); // 定时任务不应被提前执行
+            for (String id : both) assertEquals(TaskRecord.PENDING, tasks.get(id).status);
+
+            // 到点：拨回过去模拟到期，dispatchDue 入队执行（导出成功、AI 因分析器缺失失败）
+            for (String id : both) {
+                TaskRecord t = tasks.get(id);
+                t.scheduledAt = System.currentTimeMillis() / 1000 - 1;
+                tasks.save(t);
+            }
+            mgr.dispatchDue();
+            assertTrue(mgr.awaitIdle(30, TimeUnit.SECONDS));
+            assertEquals(TaskRecord.DONE, tasks.get(both.get(0)).status,
+                    tasks.get(both.get(0)).error);
+
+            // 立即批量：直接重跑至完成
+            var again = mgr.regenerateBatch(both, 0);
+            assertTrue(again.stream().allMatch(TaskManager.BatchResult::ok));
+            assertTrue(mgr.awaitIdle(30, TimeUnit.SECONDS));
+            assertEquals(TaskRecord.DONE, tasks.get(both.get(0)).status);
+            assertEquals(TaskRecord.TRIGGER_BATCH, tasks.get(both.get(0)).trigger);
+        }
+    }
+
+    @Test
     void settingsPersistAndAffectExportDir(@TempDir Path dir) throws Exception {
         Path custom = dir.resolve("custom-export");
         try (DualJobStore store = new DualJobStore(dir.resolve("store"), false);

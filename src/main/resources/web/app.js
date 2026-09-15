@@ -1712,6 +1712,8 @@ const TaskManagerPage = {
     const tasks = ref([]);           // 全量任务记录（含 job 元信息）
     const openBatches = reactive(new Set());
     const openJobs = reactive(new Set());
+    const selTasks = reactive(new Set()); // 批量重新生成选中的任务
+    const runAt = ref("");                // 可选执行时间（datetime-local；空 = 立即）
     const q = ref("");
     let timer = null; let stopped = false;
     async function load() {
@@ -1744,6 +1746,25 @@ const TaskManagerPage = {
       try { await api("/api/tasks/" + id + "/regenerate", { method: "POST" }); await load(); }
       catch (e) { alert("重新生成失败: " + e.message); }
     }
+    function toggleTask(id) { selTasks.has(id) ? selTasks.delete(id) : selTasks.add(id); }
+    async function batchRegen() {
+      if (!selTasks.size) return;
+      const ids = [...selTasks];
+      let run_at = 0;
+      if (runAt.value) {
+        const ms = new Date(runAt.value).getTime();
+        if (isNaN(ms)) { alert("执行时间格式错误"); return; }
+        run_at = Math.floor(ms / 1000);
+      }
+      const when = run_at ? "定时 " + new Date(run_at * 1000).toLocaleString() : "立即";
+      if (!window.confirm(`将重新生成选中的 ${ids.length} 个任务（差异CSV/AI分析），执行方式：${when}。确认？`)) return;
+      try {
+        const r = await jpost("/api/tasks/batch-regenerate", { task_ids: ids, run_at });
+        alert(`已提交 ${r.updated}/${r.requested} 个任务` + (run_at ? "（到点自动执行，可在任务行查看定时标记）" : ""));
+        selTasks.clear(); runAt.value = "";
+        await load();
+      } catch (e) { alert("批量重新生成失败: " + e.message); }
+    }
     async function delTask(id) {
       if (!window.confirm("确认删除该任务记录？（不删除已生成的产物文件）")) return;
       try { await api("/api/tasks/" + id, { method: "DELETE" }); await load(); }
@@ -1751,12 +1772,20 @@ const TaskManagerPage = {
     }
     return { batches, standalone, openBatches, openJobs, q, tasksOf, typeText, statusText, fileName,
              toggle, toggleBatch, batchChildren, regen, delTask, fmtTime,
+             selTasks, runAt, toggleTask, batchRegen,
              open: (id) => emit("open", id), openBatch: (id) => emit("open-batch", id) };
   },
   template: `
   <div>
     <div class="card"><div class="card-body" style="padding:12px 18px;">
       <div class="field"><input v-model="q" placeholder="🔎 搜索任务（按批次/作业/文件/产物路径）" /></div>
+      <div class="field" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+        <span class="count">已选 {{ selTasks.size }} 项</span>
+        <input type="datetime-local" v-model="runAt" style="width:auto;" title="留空 = 立即执行；选择未来时间 = 定时执行" />
+        <button class="mini-btn" @click="batchRegen" :disabled="!selTasks.size">⚡ 批量重新生成（差异CSV / AI分析）</button>
+        <button class="mini-btn" @click="selTasks.clear()" :disabled="!selTasks.size">清空选择</button>
+        <span class="count" style="opacity:.7;">勾选任务行后提交；填了时间则到点自动执行（重启后仍恢复）</span>
+      </div>
     </div></div>
 
     <div class="card" v-for="b in batches" :key="b.batch.batch_id">
@@ -1784,10 +1813,13 @@ const TaskManagerPage = {
             </span>
           </div>
           <div class="job-row" style="padding-left:64px;" v-for="t in tasksOf(c.job_id)" :key="t.task_id">
+            <label class="sel-all" @click.stop><input type="checkbox" :checked="selTasks.has(t.task_id)" @change="toggleTask(t.task_id)" /></label>
             <span class="jid">{{ typeText(t) }}</span>
             <span class="badge-status" :class="t.status">{{ statusText(t) }}</span>
             <span class="files" :title="t.output_path">{{ t.output_path || (t.error ? '✗ ' + t.error : '—') }}</span>
             <span class="group-badge" v-if="t.trigger==='manual'">手动</span>
+            <span class="group-badge" v-if="t.trigger==='batch'">批量</span>
+            <span class="group-badge" v-if="t.scheduled_at>0 && t.status==='pending'">⏰ {{ fmtTime(t.scheduled_at) }} 执行</span>
             <span class="meta-time" v-if="t.finished_at">{{ fmtTime(t.finished_at) }}</span>
             <span class="row-actions">
               <button class="mini-btn" @click="regen(t.task_id)" :disabled="t.status==='running'">↻ 重新生成</button>
@@ -1815,10 +1847,13 @@ const TaskManagerPage = {
           </div>
           <template v-if="openJobs.has(j.job_id)">
             <div class="job-row" style="padding-left:32px;" v-for="t in tasksOf(j.job_id)" :key="t.task_id">
+              <label class="sel-all" @click.stop><input type="checkbox" :checked="selTasks.has(t.task_id)" @change="toggleTask(t.task_id)" /></label>
               <span class="jid">{{ typeText(t) }}</span>
               <span class="badge-status" :class="t.status">{{ statusText(t) }}</span>
               <span class="files" :title="t.output_path">{{ t.output_path || (t.error ? '✗ ' + t.error : '—') }}</span>
               <span class="group-badge" v-if="t.trigger==='manual'">手动</span>
+              <span class="group-badge" v-if="t.trigger==='batch'">批量</span>
+              <span class="group-badge" v-if="t.scheduled_at>0 && t.status==='pending'">⏰ {{ fmtTime(t.scheduled_at) }} 执行</span>
               <span class="meta-time" v-if="t.finished_at">{{ fmtTime(t.finished_at) }}</span>
               <span class="row-actions">
                 <button class="mini-btn" @click="regen(t.task_id)" :disabled="t.status==='running'">↻ 重新生成</button>

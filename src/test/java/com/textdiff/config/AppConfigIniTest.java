@@ -29,6 +29,7 @@ class AppConfigIniTest {
         assertTrue(text.contains("[ai]"));
         assertTrue(text.contains("enabled = false"));
         assertTrue(text.contains("max-prompt-chars = 120000"));
+        assertTrue(text.contains("max-concurrency = 2"));
         // 生成文件解析结果 = 内置默认值
         assertEquals(8080, cfg.server().port());
         assertTrue(cfg.store().enabled());
@@ -61,6 +62,7 @@ class AppConfigIniTest {
                 max-prompt-chars = 48000
                 retries = 5
                 retry-backoff-ms = 500
+                max-concurrency = 4
 
                 [engine]
                 max-threads = 8
@@ -72,6 +74,7 @@ class AppConfigIniTest {
         assertEquals(48000, cfg.ai().maxPromptChars());
         assertEquals(5, cfg.ai().retries());
         assertEquals(500, cfg.ai().retryBackoffMs());
+        assertEquals(4, cfg.ai().maxConcurrency());
         assertEquals(8, cfg.engine().maxThreads());
     }
 }

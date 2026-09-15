@@ -21,7 +21,7 @@ public final class DiffFeatureExtractor {
     public static final class ColumnFeature {
         public int col;                       // 0-based
         public long count;                    // 该列作为差异列出现的行数
-        public List<String[]> samples = new ArrayList<>();   // [A值, B值] 采样对
+        public List<String[]> samples = new ArrayList<>();   // [A值, B值, 记录主键] 采样对
         public String commonPrefix = "";
         public String commonSuffix = "";
         public long numericPairs;             // 两侧均可解析为数值的样本数
@@ -71,7 +71,7 @@ public final class DiffFeatureExtractor {
             String a = col < row.aCols.length ? row.aCols[col] : "";
             String b = col < row.bCols.length ? row.bCols[col] : "";
             if (f.samples.size() < SAMPLE_CAP) {
-                f.samples.add(new String[]{a, b});
+                f.samples.add(new String[]{a, b, row.key == null ? "" : row.key});
                 f.commonPrefix = commonPrefix(f.commonPrefix, a, b);
                 f.commonSuffix = commonSuffix(f.commonSuffix, a, b);
                 if (isNumeric(a) && isNumeric(b)) {
