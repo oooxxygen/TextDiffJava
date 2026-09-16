@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.textdiff.config.AppPathsTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-09-16T00:17:16" hostname="DESKTOP-0GHIHQ5" time="0.004">
+  <properties/>
+  <testcase name="baseDirHonorsSystemProperty(Path)" classname="com.textdiff.config.AppPathsTest" time="0.004"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

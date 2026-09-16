@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.textdiff.engine.ComparatorTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-09-16T00:17:18" hostname="DESKTOP-0GHIHQ5" time="0.036">
+  <properties/>
+  <testcase name="malformedRowsCounted(Path)" classname="com.textdiff.engine.ComparatorTest" time="0.006"/>
+  <testcase name="duplicateKeysDetectedOnBothSides(Path)" classname="com.textdiff.engine.ComparatorTest" time="0.007"/>
+  <testcase name="omittedColumnNotMarkedDiff(Path)" classname="com.textdiff.engine.ComparatorTest" time="0.006"/>
+  <testcase name="endToEndDataAndTrailer(Path)" classname="com.textdiff.engine.ComparatorTest" time="0.006"/>
+  <testcase name="detectedEncodingReported(Path)" classname="com.textdiff.engine.ComparatorTest" time="0.007"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

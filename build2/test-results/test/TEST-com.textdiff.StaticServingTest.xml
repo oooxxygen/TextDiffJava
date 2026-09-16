@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.textdiff.StaticServingTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-09-16T00:17:12" hostname="DESKTOP-0GHIHQ5" time="3.566">
+  <properties/>
+  <testcase name="apiNotShadowedByStatic()" classname="com.textdiff.StaticServingTest" time="3.517"/>
+  <testcase name="rootServesFrontend()" classname="com.textdiff.StaticServingTest" time="0.047"/>
+  <system-out><![CDATA[08:17:04.602 [Test worker] INFO org.springframework.test.context.support.AnnotationConfigContextLoaderUtils -- Could not detect default configuration classes for test class [com.textdiff.StaticServingTest]: StaticServingTest does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+08:17:04.745 [Test worker] INFO org.springframework.boot.test.context.SpringBootTestContextBootstrapper -- Found @SpringBootConfiguration com.textdiff.Application for test class com.textdiff.StaticServingTest
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v3.3.4)
+
+2026-09-16T08:17:05.343+08:00  INFO 17356 --- [textdiff] [    Test worker] com.textdiff.StaticServingTest           : Starting StaticServingTest using Java 21.0.11 with PID 17356 (started by OxygeN in O:\CodeRepos\TextDiffJava)
+2026-09-16T08:17:05.345+08:00  INFO 17356 --- [textdiff] [    Test worker] com.textdiff.StaticServingTest           : No active profile set, falling back to 1 default profile: "default"
+2026-09-16T08:17:06.672+08:00  INFO 17356 --- [textdiff] [    Test worker] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 0 (http)
+2026-09-16T08:17:06.695+08:00  INFO 17356 --- [textdiff] [    Test worker] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-09-16T08:17:06.696+08:00  INFO 17356 --- [textdiff] [    Test worker] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.30]
+2026-09-16T08:17:06.773+08:00  INFO 17356 --- [textdiff] [    Test worker] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-09-16T08:17:06.774+08:00  INFO 17356 --- [textdiff] [    Test worker] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1401 ms
+[config] 已生成默认配置文件: O:\CodeRepos\TextDiffJava\build2\test-run\config.ini（请按需修改后重启生效）
+2026-09-16T08:17:11.847+08:00  INFO 17356 --- [textdiff] [    Test worker] o.s.b.a.w.s.WelcomePageHandlerMapping    : Adding welcome page: class path resource [web/index.html]
+2026-09-16T08:17:12.259+08:00  INFO 17356 --- [textdiff] [    Test worker] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 3108 (http) with context path '/'
+2026-09-16T08:17:12.272+08:00  INFO 17356 --- [textdiff] [    Test worker] com.textdiff.StaticServingTest           : Started StaticServingTest in 7.29 seconds (process running for 9.011)
+2026-09-16T08:17:15.656+08:00  INFO 17356 --- [textdiff] [omcat-handler-0] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-09-16T08:17:15.657+08:00  INFO 17356 --- [textdiff] [omcat-handler-0] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-09-16T08:17:15.658+08:00  INFO 17356 --- [textdiff] [omcat-handler-0] o.s.web.servlet.DispatcherServlet        : Completed initialization in 1 ms
+]]></system-out>
+  <system-err><![CDATA[WARNING: A Java agent has been loaded dynamically (O:\gradle-home\caches\modules-2\files-2.1\net.bytebuddy\byte-buddy-agent\1.14.19\154da3a65b4f4a909d3e5bdec55d1b2b4cbb6ce1\byte-buddy-agent-1.14.19.jar)
+WARNING: If a serviceability tool is in use, please run with -XX:+EnableDynamicAgentLoading to hide this warning
+WARNING: If a serviceability tool is not in use, please run with -Djdk.instrument.traceUsage for more information
+WARNING: Dynamic loading of agents will be disallowed by default in a future release
+]]></system-err>
+</testsuite>

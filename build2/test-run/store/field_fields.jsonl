@@ -1,0 +1,3 @@
+{"report_id":"bocso_it","col_index":0,"field_name":"客户号","field_format":"CHAR","field_length":"12"}
+{"report_id":"bocso_it","col_index":1,"field_name":"账户余额","field_format":"DECIMAL","field_length":"16"}
+{"report_id":"bocso_it","col_index":2,"field_name":"币种","field_format":"CHAR","field_length":"3"}

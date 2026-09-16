@@ -290,7 +290,7 @@ public final class PromptRenderer {
      * 0-based 列号 → 字段名。优先源系统字段配置（bat_report_conf_field），次选规则解析到的表头，
      * 均无时回落"栏位N"。供主键/跳过栏位"列数+字段名"描述与差异栏位表使用。
      */
-    private static java.util.Map<Integer, String> colNames(JobRecord job, CompareConfig cfg,
+    public static java.util.Map<Integer, String> colNames(JobRecord job, CompareConfig cfg,
                                                            com.textdiff.store.FieldMapStore maps) {
         java.util.Map<Integer, String> out = new java.util.HashMap<>();
         for (int i = 0; i < cfg.columnNames.size(); i++) out.put(i, cfg.columnNames.get(i));
@@ -306,7 +306,7 @@ public final class PromptRenderer {
     }
 
     /** "共 N 列（第X列 字段A、第Y列 字段B…）"描述；空序列返回"无"。 */
-    private static String describeCols(java.util.List<Integer> cols, java.util.Map<Integer, String> names) {
+    public static String describeCols(java.util.List<Integer> cols, java.util.Map<Integer, String> names) {
         if (cols == null || cols.isEmpty()) return "无";
         StringBuilder sb = new StringBuilder("共 ").append(cols.size()).append(" 列（");
         for (int i = 0; i < cols.size(); i++) {

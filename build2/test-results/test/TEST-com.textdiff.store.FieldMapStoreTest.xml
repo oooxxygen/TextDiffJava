@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.textdiff.store.FieldMapStoreTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-09-16T00:17:57" hostname="DESKTOP-0GHIHQ5" time="0.144">
+  <properties/>
+  <testcase name="disabledH2IsFileOnly(Path)" classname="com.textdiff.store.FieldMapStoreTest" time="0.006"/>
+  <testcase name="reportIdForFileExactThenStem(Path)" classname="com.textdiff.store.FieldMapStoreTest" time="0.006"/>
+  <testcase name="importUpsertAndQuery(Path)" classname="com.textdiff.store.FieldMapStoreTest" time="0.021"/>
+  <testcase name="h2MirrorReceivesImportedRows(Path)" classname="com.textdiff.store.FieldMapStoreTest" time="0.044"/>
+  <testcase name="reimportReplacesFieldsPerReport(Path)" classname="com.textdiff.store.FieldMapStoreTest" time="0.025"/>
+  <testcase name="reloadFromJsonlWhenH2Deleted(Path)" classname="com.textdiff.store.FieldMapStoreTest" time="0.034"/>
+  <testcase name="reportIdForFileWildcardPattern(Path)" classname="com.textdiff.store.FieldMapStoreTest" time="0.006"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.textdiff.engine.offheap.OffHeapHashTableTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-16T00:17:19" hostname="DESKTOP-0GHIHQ5" time="0.018">
+  <properties/>
+  <testcase name="putGetWithGrowth()" classname="com.textdiff.engine.offheap.OffHeapHashTableTest" time="0.011"/>
+  <testcase name="markSeenAndScanUnseen()" classname="com.textdiff.engine.offheap.OffHeapHashTableTest" time="0.003"/>
+  <testcase name="duplicateOverwritesAndReturnsFalse()" classname="com.textdiff.engine.offheap.OffHeapHashTableTest" time="0.0"/>
+  <testcase name="slotCollisionsHandledByProbingAndVerification()" classname="com.textdiff.engine.offheap.OffHeapHashTableTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

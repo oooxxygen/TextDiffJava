@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.textdiff.engine.offheap.RowStoreTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-09-16T00:17:19" hostname="DESKTOP-0GHIHQ5" time="0.254">
+  <properties/>
+  <testcase name="closeDeletesTempFile(Path)" classname="com.textdiff.engine.offheap.RowStoreTest" time="0.005"/>
+  <testcase name="appendReadRoundTrip(Path)" classname="com.textdiff.engine.offheap.RowStoreTest" time="0.006"/>
+  <testcase name="readBackManyEntries(Path)" classname="com.textdiff.engine.offheap.RowStoreTest" time="0.242"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

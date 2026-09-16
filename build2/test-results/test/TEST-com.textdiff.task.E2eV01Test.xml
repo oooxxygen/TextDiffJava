@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.textdiff.task.E2eV01Test" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-09-16T00:17:58" hostname="DESKTOP-0GHIHQ5" time="5.798">
+  <properties/>
+  <testcase name="fullFlowOnRealData(Path)" classname="com.textdiff.task.E2eV01Test" time="5.798"/>
+  <system-out><![CDATA[[e2e] INCT0101 · 01A3020D.v01 编码=utf-8/utf-8 totalA=25286 totalB=25265 diff=25191 onlyA=79 onlyB=58 keyWarn=false
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

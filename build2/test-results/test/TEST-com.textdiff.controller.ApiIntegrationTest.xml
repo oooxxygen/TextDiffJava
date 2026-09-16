@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.textdiff.controller.ApiIntegrationTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-09-16T00:17:17" hostname="DESKTOP-0GHIHQ5" time="0.548">
+  <properties/>
+  <testcase name="encodingsAndAiStatus()" classname="com.textdiff.controller.ApiIntegrationTest" time="0.161"/>
+  <testcase name="fullCoreFlow()" classname="com.textdiff.controller.ApiIntegrationTest" time="0.379"/>
+  <testcase name="errorBodyUsesDetail()" classname="com.textdiff.controller.ApiIntegrationTest" time="0.006"/>
+  <system-out><![CDATA[2026-09-16T08:17:16.997+08:00  INFO 17356 --- [textdiff] [    Test worker] t.c.s.AnnotationConfigContextLoaderUtils : Could not detect default configuration classes for test class [com.textdiff.controller.ApiIntegrationTest]: ApiIntegrationTest does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+2026-09-16T08:17:17.038+08:00  INFO 17356 --- [textdiff] [    Test worker] .b.t.c.SpringBootTestContextBootstrapper : Found @SpringBootConfiguration com.textdiff.Application for test class com.textdiff.controller.ApiIntegrationTest
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v3.3.4)
+
+2026-09-16T08:17:17.105+08:00  INFO 17356 --- [textdiff] [    Test worker] c.t.controller.ApiIntegrationTest        : Starting ApiIntegrationTest using Java 21.0.11 with PID 17356 (started by OxygeN in O:\CodeRepos\TextDiffJava)
+2026-09-16T08:17:17.105+08:00  INFO 17356 --- [textdiff] [    Test worker] c.t.controller.ApiIntegrationTest        : No active profile set, falling back to 1 default profile: "default"
+2026-09-16T08:17:17.603+08:00  INFO 17356 --- [textdiff] [    Test worker] o.s.b.a.w.s.WelcomePageHandlerMapping    : Adding welcome page: class path resource [web/index.html]
+2026-09-16T08:17:17.752+08:00  INFO 17356 --- [textdiff] [    Test worker] o.s.b.t.m.w.SpringBootMockServletContext : Initializing Spring TestDispatcherServlet ''
+2026-09-16T08:17:17.752+08:00  INFO 17356 --- [textdiff] [    Test worker] o.s.t.web.servlet.TestDispatcherServlet  : Initializing Servlet ''
+2026-09-16T08:17:17.753+08:00  INFO 17356 --- [textdiff] [    Test worker] o.s.t.web.servlet.TestDispatcherServlet  : Completed initialization in 1 ms
+2026-09-16T08:17:17.769+08:00  INFO 17356 --- [textdiff] [    Test worker] c.t.controller.ApiIntegrationTest        : Started ApiIntegrationTest in 0.714 seconds (process running for 14.508)
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

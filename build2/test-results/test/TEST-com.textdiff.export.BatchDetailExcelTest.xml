@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.textdiff.export.BatchDetailExcelTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-09-16T00:17:19" hostname="DESKTOP-0GHIHQ5" time="1.2">
+  <properties/>
+  <testcase name="writesOverviewAndDiffColumns(Path)" classname="com.textdiff.export.BatchDetailExcelTest" time="1.2"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

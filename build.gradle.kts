@@ -21,6 +21,7 @@ repositories { mavenCentral() }
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("com.h2database:h2:2.3.232")
+    implementation("org.apache.poi:poi-ooxml:5.3.0")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

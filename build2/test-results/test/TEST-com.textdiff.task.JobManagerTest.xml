@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.textdiff.task.JobManagerTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-09-16T00:18:03" hostname="DESKTOP-0GHIHQ5" time="20.488">
+  <properties/>
+  <testcase name="cancelRunningJobMarksStopped(Path)" classname="com.textdiff.task.JobManagerTest" time="0.081"/>
+  <testcase name="fieldMapInjectsColumnNamesIntoConfigLine(Path)" classname="com.textdiff.task.JobManagerTest" time="0.069"/>
+  <testcase name="createBatchCommandViaMailbox(Path)" classname="com.textdiff.task.JobManagerTest" time="6.677"/>
+  <testcase name="restartRequeuesStuckJobs(Path)" classname="com.textdiff.task.JobManagerTest" time="0.062"/>
+  <testcase name="batchRunsToEndWithResultFiles(Path)" classname="com.textdiff.task.JobManagerTest" time="0.062"/>
+  <testcase name="keyWarningSetOnDuplicateKeys(Path)" classname="com.textdiff.task.JobManagerTest" time="0.063"/>
+  <testcase name="unknownCommandTypeReportsError(Path)" classname="com.textdiff.task.JobManagerTest" time="6.626"/>
+  <testcase name="retryCommandViaMailbox(Path)" classname="com.textdiff.task.JobManagerTest" time="6.726"/>
+  <testcase name="failedJobThenRetry(Path)" classname="com.textdiff.task.JobManagerTest" time="0.119"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
