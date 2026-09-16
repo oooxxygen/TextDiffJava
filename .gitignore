@@ -9,3 +9,4 @@ acceptance-run/
 .zcode/plans/
 
 server.log
+build2/
