@@ -72,7 +72,10 @@ INCT0101:01A***0*.v01:KEYSEQ=3/4/5:OMITSEQ=1/2/10:DELIM= | :ENCA=auto:SRCA=A:TRA
   - **AI 分析面板**：查看/重新生成分析、下载 prompt.md、导出；
   - 导出按钮（全量 CSV / 差异 CSV）。
 - **报表对比**（基于 header 模板的报表核对，独立页签）：
-  - 提交：模板路径（目录，含 `<文件名去扩展名>.header`；留空则在数据目录旁查找）+ 数据文本路径 A/B；两目录按文件名配对非 header 文件，昵称取列名映射（`#BANKNO` 类占位符按通配匹配）；
+  - 提交（双模式）：**设置比对路径**——模板路径 + 数据文本路径 A/B；**上传文件对比**——分别上传 A/B 两侧报表文件（可选附 .header 模板），落盘 `uploads/reportcmp/{id}/A|B|tpl` 后自动配对提交；
+  - 模板路径可以是**目录**（取 `<文件名去扩展名>.header`，模板目录优先、数据目录旁兜底）或**单个 .header 文件**（按文件名茎与报表匹配）；留空则在数据目录旁查找；两目录按文件名配对非 header 文件，昵称取列名映射（`#BANKNO` 类占位符按通配匹配）；
+  - 批次标签：提交时填写，显示在报表对比批次列表与**作业列表**的批次条目上，批次详情页可改；
+  - **作业列表可见**：报表对比批次带 🧾 徽标，点击直接进入报表批次视图（不与文件对比批次混淆）；
   - 结构解析：一份报表文件可含多个报表段（每段 = 固定表头 + 业务内容 + 表尾），模板骨架自动划区；表头、表尾作为独立差异分区展示；
   - 排序对比：业务内容无主键——双侧各按「全字段排序键」排序后归并，整行相等即匹配（免疫写入乱序）；归并剩余行按字段级相似度（≥0.6）配对为**部分匹配**（逐差异栏位展示），其余为**单侧不匹配**；
   - 结果页摘要：总条数（程序计数）、报表段数、表头/表尾差异行、完全匹配/部分匹配/仅A/仅B、条数核对（表尾声明条数 vs 实计，不符红色提示）；
@@ -146,7 +149,7 @@ JSONL 文件层始终是事实来源；H2 仅尽力镜像，损坏自动重建�
 | 方法 + 路径 | 说明 |
 |---|---|
 | POST `/api/compare` `/api/batch-compare` `/api/upload` | 单文件 / 目录批次 / 上传对比 |
-| POST `/api/report-compare` | 报表对比批次（模板路径 + 数据文本路径 A/B） |
+| POST `/api/report-compare` `/api/report-compare/upload` | 报表对比批次（路径模式 / 上传模式：files_a+files_b+files_tpl） |
 | GET `/api/report-jobs/{id}/summary` `/api/report-jobs/{id}/result` | 报表作业摘要 / 三分区结果分页（section=header\|footer\|data） |
 | GET `/api/report-jobs/{id}/export` `/api/report-batches/{id}/export-detail` | 报表差异 CSV / 报表批次明细 Excel |
 | GET `/api/joblist` `/api/batches/{id}` | 作业列表 / 批次子作业 |

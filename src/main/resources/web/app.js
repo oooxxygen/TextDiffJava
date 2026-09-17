@@ -1161,7 +1161,7 @@ const SubmitForm = {
 
 /* ---------- 作业列表（批次条目 + 独立作业，均可搜索过滤） ---------- */
 const JobList = {
-  emits: ["open", "open-batch", "open-split"],
+  emits: ["open", "open-batch", "open-split", "open-report-batch"],
   setup(props, { emit }) {
     const batches = ref([]); const standalone = ref([]); const splitJobs = ref([]);
     const q = ref("");
@@ -1189,7 +1189,11 @@ const JobList = {
 
     const ql = computed(() => q.value.trim().toLowerCase());
     const fBatches = computed(() => !ql.value ? batches.value : batches.value.filter(b =>
-      (b.batch.batch_id + " " + b.batch.dir_a + " " + b.batch.dir_b + " " + b.batch.config_source).toLowerCase().includes(ql.value)));
+      (b.batch.batch_id + " " + b.batch.dir_a + " " + b.batch.dir_b + " " + b.batch.config_source
+       + " " + (b.batch.label || "")).toLowerCase().includes(ql.value)));
+    // 报表对比批次：徽标区分 + 点击进报表批次视图
+    const isReport = (b) => (b.batch || {}).batch_type === "report";
+    const openBatchEntry = (b) => emit(isReport(b) ? "open-report-batch" : "open-batch", b.batch.batch_id);
     const fJobs = computed(() => !ql.value ? standalone.value : standalone.value.filter(j =>
       (j.job_id + " " + (j.file_a || "") + " " + (j.file_b || "")).toLowerCase().includes(ql.value)));
 
@@ -1258,6 +1262,7 @@ const JobList = {
     }
 
     return { batches, standalone, splitJobs, q, fBatches, fJobs, fSplit, fmtTime, srcA, srcB,
+             isReport, openBatchEntry,
              open: (id) => emit("open", id), openBatch: (id) => emit("open-batch", id),
              openSplit: (id) => emit("open-split", id),
              lockJob, unlockJob, delJob, lockBatch, unlockBatch, delBatch,
@@ -1283,8 +1288,9 @@ const JobList = {
         <label class="sel-all" @click.stop><input type="checkbox" :checked="allBatchesSel" @change="toggleAllBatches" /> 全选批次</label>
       </div>
       <div>
-        <div class="job-row batch-row" :class="{ selected: isBatchSel(b.batch.batch_id) }" v-for="b in fBatches" :key="b.batch.batch_id" @click="openBatch(b.batch.batch_id)">
+        <div class="job-row batch-row" :class="{ selected: isBatchSel(b.batch.batch_id) }" v-for="b in fBatches" :key="b.batch.batch_id" @click="openBatchEntry(b)">
           <input class="row-check" type="checkbox" :checked="isBatchSel(b.batch.batch_id)" @click.stop="toggleBatch(b.batch.batch_id)" />
+          <span class="nick-badge" v-if="isReport(b)" title="报表对比批次">🧾 报表</span>
           <span class="jid">{{ b.batch.batch_id }}</span>
           <span class="badge-status" :class="b.status">{{ b.status }}</span>
           <span class="files">{{ b.batch.dir_a }} ↔ {{ b.batch.dir_b }}</span>
@@ -2211,11 +2217,13 @@ const ReportZone = {
   </div>`,
 };
 
-/* 【报表对比】首页：提交（模板路径 + 数据文本路径 A/B）+ 报表批次列表。 */
+/* 【报表对比】首页：路径对比 / 上传文件对比（模板路径或 .header 文件）+ 报表批次列表。 */
 const ReportPage = {
   emits: ["open-batch"],
   setup(props, { emit }) {
-    const form = reactive({ template_dir: "", dir_a: "", dir_b: "", label: "" });
+    const mode = ref("path");
+    const form = reactive({ template_path: "", dir_a: "", dir_b: "", label: "" });
+    const up = reactive({ files_a: [], files_b: [], files_tpl: [] });
     const busy = ref(false); const err = ref("");
     const batches = ref([]); let timer = null;
     async function load() {
@@ -2226,42 +2234,65 @@ const ReportPage = {
       timer = setTimeout(load, 3000);
     }
     onMounted(load);
-    async function submit() {
+    function onFiles(ev, target) { up[target] = Array.from(ev.target.files); }
+    async function submitPath() {
       err.value = "";
-      if (!form.dir_a || !form.dir_b) { err.value = "请填写数据文本路径 A / B（模板路径留空时使用数据目录旁的 <文件名>.header）"; return; }
+      if (!form.dir_a || !form.dir_b) { err.value = "请填写数据文本路径 A / B"; return; }
       busy.value = true;
       try {
         const r = await jpost("/api/report-compare", {
-          template_dir: form.template_dir || null, dir_a: form.dir_a, dir_b: form.dir_b, label: form.label || null,
+          template_path: form.template_path || null, dir_a: form.dir_a, dir_b: form.dir_b, label: form.label || null,
         });
-        form.label = "";
         emit("open-batch", r.batch_id);
       } catch (e) { err.value = e.message; } finally { busy.value = false; }
     }
-    return { form, busy, err, batches, submit, fmtTime,
-             baseName: (p) => (p || "").split(/[\\/]/).pop() };
+    async function submitUpload() {
+      err.value = "";
+      if (!up.files_a.length || !up.files_b.length) { err.value = "请选择 A / B 两侧报表文件"; return; }
+      busy.value = true;
+      try {
+        const fd = new FormData();
+        up.files_a.forEach(f => fd.append("files_a", f));
+        up.files_b.forEach(f => fd.append("files_b", f));
+        up.files_tpl.forEach(f => fd.append("files_tpl", f));
+        const r = await api("/api/report-compare/upload", { method: "POST", body: fd });
+        const r2 = await jpost("/api/report-compare", {
+          template_path: r.template_dir || null, dir_a: r.dir_a, dir_b: r.dir_b, label: form.label || null,
+        });
+        emit("open-batch", r2.batch_id);
+      } catch (e) { err.value = e.message; } finally { busy.value = false; }
+    }
+    return { mode, form, up, busy, err, batches, submitPath, submitUpload, onFiles, REPORT_STATUS, fmtTime };
   },
   template: `
   <div>
     <div class="card">
       <div class="card-head">🧾 新建报表对比（基于 header 模板核对）</div>
       <div class="card-body">
+        <div class="star-filter" style="margin-bottom:12px;">
+          <button :class="{active: mode==='path'}" @click="mode='path'">📁 设置比对路径</button>
+          <button :class="{active: mode==='upload'}" @click="mode='upload'">⬆ 上传文件对比</button>
+        </div>
         <div class="form-grid" style="grid-template-columns: 1fr;">
-          <label>模板路径（目录，含 &lt;文件名去扩展名&gt;.header；留空则在数据目录旁查找模板）
-            <input v-model="form.template_dir" placeholder="如 O:\\Data\\templates" spellcheck="false" />
+          <label>模板路径（目录或单个 .header 模板文件；留空则在数据目录旁查找 &lt;文件名去扩展名&gt;.header）
+            <input v-if="mode==='path'" v-model="form.template_path" placeholder="如 O:\\Data\\templates 或 O:\\Data\\01.CORD900U.header" spellcheck="false" />
+            <input v-else type="file" multiple accept=".header" @change="onFiles($event,'files_tpl')" />
           </label>
           <label>数据文本路径 A（旧）
-            <input v-model="form.dir_a" placeholder="如 O:\\CodeRepos\\ExampleData" spellcheck="false" />
+            <input v-if="mode==='path'" v-model="form.dir_a" placeholder="如 O:\\CodeRepos\\ExampleData" spellcheck="false" />
+            <input v-else type="file" multiple @change="onFiles($event,'files_a')" />
           </label>
           <label>数据文本路径 B（新）
-            <input v-model="form.dir_b" placeholder="如 O:\\Data\\reports_new" spellcheck="false" />
+            <input v-if="mode==='path'" v-model="form.dir_b" placeholder="如 O:\\Data\\reports_new" spellcheck="false" />
+            <input v-else type="file" multiple @change="onFiles($event,'files_b')" />
           </label>
-          <label>批次标签（可选）
+          <label>批次标签（可选，显示在批次任务中）
             <input v-model="form.label" placeholder="如 2026-07-10 夜批量核对" />
           </label>
         </div>
         <div class="btn-row" style="margin-top:10px;">
-          <button class="btn primary" :disabled="busy" @click="submit">{{ busy ? '提交中…' : '开始报表核对' }}</button>
+          <button v-if="mode==='path'" class="btn primary" :disabled="busy" @click="submitPath">{{ busy ? '提交中…' : '开始报表核对' }}</button>
+          <button v-else class="btn primary" :disabled="busy" @click="submitUpload">{{ busy ? '上传并对比中…' : '上传并开始报表核对' }}</button>
           <span class="count" style="align-self:center;">两目录按文件名配对非 header 文件；昵称取列名映射（#占位符通配）</span>
         </div>
         <div class="error-box" v-if="err">{{ err }}</div>
@@ -2303,8 +2334,16 @@ const ReportBatchView = {
         ((c.label || "") + baseName2(c.file_a)).toLowerCase().includes(ql));
     });
     const exportHref = computed(() => "/api/report-batches/" + props.batchId + "/export-detail");
+    async function editLabel() {
+      const cur = (ov.value && ov.value.batch && ov.value.batch.label) || "";
+      const v = window.prompt("设置批次标签（留空清除）：", cur);
+      if (v === null) return;
+      try { await jpost("/api/batches/" + props.batchId + "/label", { label: v });
+            if (ov.value && ov.value.batch) ov.value.batch.label = v; }
+      catch (e) { alert(e.message); }
+    }
     function baseName2(p) { return (p || "").split(/[\\/]/).pop(); }
-    return { ov, q, children, exportHref, fmtTime, baseName: baseName2,
+    return { ov, q, children, exportHref, fmtTime, baseName: baseName2, editLabel, REPORT_STATUS,
              open: (id) => emit("open", id), goBack: () => emit("back") };
   },
   template: `
@@ -2315,6 +2354,7 @@ const ReportBatchView = {
     <div class="card">
       <div class="card-head">🧾 报表对比批次 · {{ ov.batch.batch_id }}
         <span class="group-badge" v-if="ov.batch.label" style="margin-left:6px;">🏷 {{ ov.batch.label }}</span>
+        <button class="mini-btn" style="margin-left:6px;" @click="editLabel">{{ ov.batch.label ? '改标签' : '加标签' }}</button>
         <span class="badge-status" :class="ov.status">{{ REPORT_STATUS[ov.status] || ov.status }}</span>
         <a class="mini-btn" style="margin-left:auto;" :href="exportHref"
            title="Sheet1 报表对比总览（昵称/文件名/总条数/差异统计/条数核对），Sheet2 差异明细">⬇ 导出明细 Excel</a>
@@ -2380,7 +2420,7 @@ const ReportResultView = {
         `${c.side}侧 段${c.section + 1}：声明 ${c.declared == null ? '—' : c.declared} / 实计 ${c.counted}` + (c.match ? ' ✓' : ' ✗ 不符'));
     });
     const exportHref = computed(() => `/api/report-jobs/${props.jobId}/export`);
-    return { sum, s, fileName, countCheckText, exportHref, goBack: () => emit("back") };
+    return { sum, s, fileName, countCheckText, exportHref, REPORT_STATUS, goBack: () => emit("back") };
   },
   template: `
   <div v-if="sum">
@@ -2505,7 +2545,8 @@ const App = {
                      @open="openReportJob" @back="tab='report'" />
     <ReportResultView v-else-if="tab==='reportresult' && reportJobId" :job-id="reportJobId" :key="reportJobId"
                       @back="tab='reportbatch'" />
-    <JobList v-else-if="tab==='jobs'" @open="openJob" @open-batch="openBatch" @open-split="openSplit" />
+    <JobList v-else-if="tab==='jobs'" @open="openJob" @open-batch="openBatch" @open-split="openSplit"
+             @open-report-batch="openReportBatch" />
     <TaskManagerPage v-else-if="tab==='tasks'" @open="openJobFromTasks" @open-batch="openBatchFromTasks" />
     <SplitPage v-else-if="tab==='split'" @open-split="openSplit" />
     <SplitResultView v-else-if="tab==='splitresult' && splitJobId" :job-id="splitJobId" :key="splitJobId" @back="backToJobs" />

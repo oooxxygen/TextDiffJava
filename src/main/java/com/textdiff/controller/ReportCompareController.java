@@ -13,13 +13,18 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Predicate;
 
 /**
@@ -39,17 +44,55 @@ public class ReportCompareController {
         this.paths = paths;
     }
 
-    /** 提交报表对比批次：模板路径 + 数据文本路径 A/B。 */
+    /** 提交报表对比批次：模板路径（目录或 .header 文件） + 数据文本路径 A/B。 */
     @PostMapping("/report-compare")
     public Map<String, Object> submit(@RequestBody Map<String, Object> body) throws Exception {
-        String templateDir = str(body.get("template_dir"));
+        String templatePath = str(body.get("template_path"));
+        if (templatePath == null || templatePath.isBlank()) templatePath = str(body.get("template_dir"));
         String dirA = str(body.get("dir_a"));
         String dirB = str(body.get("dir_b"));
         if (dirA == null || dirB == null) throw new IllegalArgumentException("缺少 dir_a / dir_b");
-        var batch = service.submit(templateDir == null || templateDir.isBlank() ? null : Path.of(templateDir),
+        var batch = service.submit(templatePath == null || templatePath.isBlank() ? null : Path.of(templatePath),
                 Path.of(dirA), Path.of(dirB), str(body.get("label")));
         List<String> ids = store.listJobs(batch.id).stream().map(j -> j.id).toList();
         return Map.of("batch_id", batch.id, "job_ids", ids);
+    }
+
+    /**
+     * 上传模式：A/B 两侧报表文件（可选附 .header 模板）落盘
+     * {@code uploads/reportcmp/{id}/A|B|tpl}（保留原文件名以便按名配对），返回目录路径供 /report-compare 引用。
+     */
+    @PostMapping("/report-compare/upload")
+    public Map<String, Object> upload(@RequestParam(value = "files_a", required = false) List<MultipartFile> filesA,
+                                      @RequestParam(value = "files_b", required = false) List<MultipartFile> filesB,
+                                      @RequestParam(value = "files_tpl", required = false) List<MultipartFile> filesTpl)
+            throws IOException {
+        if ((filesA == null || filesA.isEmpty()) && (filesB == null || filesB.isEmpty())) {
+            throw new IllegalArgumentException("请至少上传 A / B 两侧报表文件");
+        }
+        String id = UUID.randomUUID().toString().substring(0, 8);
+        Path root = paths.baseDir().resolve("uploads").resolve("reportcmp").resolve(id);
+        Path dirA = save(filesA, root.resolve("A"));
+        Path dirB = filesB == null || filesB.isEmpty() ? root.resolve("B") : save(filesB, root.resolve("B"));
+        Path dirTpl = filesTpl == null || filesTpl.isEmpty() ? null : save(filesTpl, root.resolve("tpl"));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("dir_a", dirA.toString());
+        out.put("dir_b", dirB.toString());
+        out.put("template_dir", dirTpl == null ? "" : dirTpl.toString());
+        return out;
+    }
+
+    private static Path save(List<MultipartFile> files, Path dir) throws IOException {
+        Files.createDirectories(dir);
+        for (MultipartFile f : files) {
+            String safe = Path.of(f.getOriginalFilename() == null ? "file" : f.getOriginalFilename())
+                    .getFileName().toString();
+            if (safe.isBlank()) safe = "file";
+            try (var in = f.getInputStream()) {
+                Files.copy(in, dir.resolve(safe), StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+        return dir;
     }
 
     /** 单报表作业摘要（含 ReportSummary：条数/分区差异/匹配统计/条数核对）。 */

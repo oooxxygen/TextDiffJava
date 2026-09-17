@@ -228,11 +228,18 @@ public final class ReportCompareService implements AutoCloseable {
         return out;
     }
 
-    /** 模板解析顺序：模板目录/<stem>.header → 数据目录 A/<stem>.header → 数据目录 B/<stem>.header。 */
-    static Path resolveTemplate(Path templateDir, Path dirA, String fileName) {
+    /**
+     * 模板解析：模板路径可以是<b>目录</b>（取 {@code <stem>.header}，模板目录优先、数据目录 A 旁兜底），
+     * 也可以是<b>单个 .header 文件</b>（按文件名茎与报表匹配才适用，避免错用模板）。
+     */
+    static Path resolveTemplate(Path templatePath, Path dirA, String fileName) {
         String stem = stem(fileName);
+        if (templatePath != null && Files.isRegularFile(templatePath)) {
+            String tplStem = stem(templatePath.getFileName().toString());
+            return tplStem.equalsIgnoreCase(stem) ? templatePath : null;
+        }
         List<Path> candidates = new ArrayList<>();
-        if (templateDir != null) candidates.add(Path.of(templateDir.toString(), stem + ".header"));
+        if (templatePath != null) candidates.add(Path.of(templatePath.toString(), stem + ".header"));
         candidates.add(Path.of(dirA.toString(), stem + ".header"));
         for (Path c : candidates) {
             if (Files.isRegularFile(c)) return c;
