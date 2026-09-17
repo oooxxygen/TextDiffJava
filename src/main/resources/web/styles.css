@@ -87,8 +87,10 @@ body {
 /* ---------- 表单 ---------- */
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
+label.field { font-size: 12px; color: var(--text-soft); font-weight: 600; }
 .field label { font-size: 12px; color: var(--text-soft); font-weight: 600; }
 .field input, .field select, .field textarea {
+  width: 100%;
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
   padding: 9px 11px; font-size: 13px; font-family: var(--sans);
   background: var(--surface); color: var(--text); transition: .15s;
@@ -133,8 +135,6 @@ body {
 .tips-row .tn { color: var(--text); font-family: var(--sans); }
 
 .seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; }
-.seg button { border: none; background: var(--surface); padding: 8px 16px; cursor: pointer; font-size: 13px; color: var(--text-soft); }
-.seg button.active { background: var(--accent); color: #fff; }
 
 .btn {
   border: none; border-radius: var(--radius-sm); padding: 10px 20px;
@@ -264,8 +264,6 @@ body {
 /* 全局搜索栏 */
 .global-search-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .global-search-bar .gs-label { font-weight: 600; white-space: nowrap; }
-.global-search { flex: 1; min-width: 240px; border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm); padding: 8px 12px; font-size: 13px; }
 .tag.equal { background: var(--eq-bar); color: #fff; }
 .tag.diff { background: var(--diff-bar); color: #fff; }
 .tag.unmatched_a, .tag.unmatched_b { background: #6e7781; color: #fff; }
@@ -350,14 +348,7 @@ body {
 .ai-content.md pre.md-code code { background: none; border: none; padding: 0; }
 .ai-content.md hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 .ai-content.md strong { font-weight: 700; } .ai-content.md a { color: #4338ca; }
-.ai-model-input { border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
-  padding: 6px 10px; font-size: 12px; font-family: var(--mono); width: 180px; }
 
-.toast {
-  position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
-  background: #1f2329; color: #fff; padding: 10px 18px; border-radius: 8px;
-  box-shadow: var(--shadow-lg); font-size: 13px; z-index: 99;
-}
 @media (max-width: 760px) {
   .recgrid.with-names { grid-template-columns: minmax(72px, max-content) minmax(0, 1fr) minmax(0, 1fr); }
   .recgrid .gcell, .recgrid .ghdr { padding-left: 8px; padding-right: 8px; }
@@ -369,12 +360,7 @@ body {
 .job-row .meta-time { font-size: 12px; color: var(--text-faint); font-family: var(--mono); }
 .job-row .count { font-family: var(--mono); font-size: 12px; color: var(--text-soft); }
 .job-row .lock-ico { font-size: 12px; }
-.group-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600;
-  background: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe; white-space: nowrap; }
 /* 批次文件行：配置昵称前缀徽标 */
-.nick-badge { font-family: var(--mono); font-size: 12px; font-weight: 600; padding: 2px 8px;
-  border-radius: 6px; background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0;
-  white-space: nowrap; flex: none; }
 .batch-row { font-weight: 600; }
 .row-actions { display: flex; gap: 6px; margin-left: 8px; }
 .mini-btn.danger { color: var(--diff-bar); border-color: #f1b6ba; }
@@ -406,11 +392,6 @@ body {
   color: var(--text-faint); padding: 0 2px; flex: none; transition: .12s; }
 .star-btn:hover { color: #e3a008; }
 .star-btn.on { color: #f0b429; }
-.star-filter { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; }
-.star-filter button { border: none; background: var(--surface); padding: 6px 14px; cursor: pointer;
-  font-size: 13px; color: var(--text-soft); border-right: 1px solid var(--border); }
-.star-filter button:last-child { border-right: none; }
-.star-filter button.active { background: var(--accent); color: #fff; }
 
 .cfg-results { margin-top: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); max-height: 220px; overflow: auto; }
 .cfg-item { display: flex; gap: 12px; align-items: baseline; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border); }
@@ -421,8 +402,6 @@ body {
 .cfg-item .src { margin-left: auto; color: var(--text-faint); font-size: 11.5px; }
 
 /* 分区内键值搜索 */
-.zone-search { border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
-  padding: 4px 9px; font-size: 12px; font-family: var(--mono); width: 150px; }
 .zone-head .mini-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
 /* 列名（列序号旁） */
@@ -443,10 +422,118 @@ body {
 .saved-content { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 12px; font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; word-break: break-all; max-height: 360px; overflow: auto; }
 
-/* 分区翻页 pager */
-.zone-pager { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted,#555); }
-.zone-pager .pager-input { width:44px; text-align:center; padding:2px 4px; border:1px solid var(--border,#ccd); border-radius:4px; font-size:12px; }
-.pager-size { font-size:12px; padding:2px 4px; border:1px solid var(--border,#ccd); border-radius:4px; }
 
 /* 主键唯一性告警（需求：重复键醒目提示，配置需重检） */
 .badge-keywarn { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 700; background: #fff0f0; color: #d81e06; border: 1px solid #f3b6b0; cursor: help; }
+
+/* ============================================================
+   UI 一致性规范（全站统一交互形式）
+   1) 键盘焦点可见：所有可交互元素统一 accent 焦点环
+   2) 次级输入框统一小号规格（高度/圆角/字号与 .field input 同源）
+   3) 分段切换控件（.seg = .star-filter）统一尺寸与态
+   4) 徽标统一形状（同字号/内边距/圆角，仅配色区分）
+   5) 模态/弹层统一：进入动效 + 关闭按钮可点区域 + 全局确认/输入对话框
+   ============================================================ */
+:root {
+  --ring: 0 0 0 3px var(--accent-soft);
+  --control-h: 34px;
+}
+button, input, select, textarea { font-family: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
+  outline: none; border-color: var(--accent); box-shadow: var(--ring);
+}
+.btn:focus-visible, .mini-btn:focus-visible, .nav-btn:focus-visible { box-shadow: var(--ring); }
+
+/* 次级输入框：全部对齐到同一小号规格（等价 .field input 的紧凑版） */
+.zone-search, .ai-model-input, .pager-size, .zone-pager .pager-input {
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); font-size: 12px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.zone-search { padding: 5px 10px; font-family: var(--mono); width: 150px; }
+.zone-search:hover, .ai-model-input:hover, .pager-size:hover { border-color: var(--accent); }
+.zone-search:focus, .ai-model-input:focus, .pager-size:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+.ai-model-input { padding: 5px 10px; width: 180px; }
+.zone-pager .pager-input { padding: 3px 6px; width: 44px; text-align: center; }
+.zone-pager { color: var(--text-soft); }
+.pager-size { padding: 3px 6px; }
+.global-search { flex: 1; min-width: 240px; border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); padding: 9px 12px; font-size: 13px; background: var(--surface); color: var(--text);
+  transition: border-color .15s, box-shadow .15s; }
+.global-search:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+
+/* 分段切换：.seg 与 .star-filter 为同一控件（历史两套类名），尺寸/态统一 */
+.seg, .star-filter { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; background: var(--surface); }
+.seg button, .star-filter button {
+  border: none; background: var(--surface); padding: 7px 15px; cursor: pointer;
+  font-size: 13px; color: var(--text-soft); transition: .15s;
+}
+.seg button + button, .star-filter button + button { border-left: 1px solid var(--border); }
+.seg button:hover, .star-filter button:hover { color: var(--text); background: var(--surface-2); }
+.seg button.active, .star-filter button.active { background: var(--accent); color: #fff; }
+
+/* 徽标统一形状：仅配色区分语义 */
+.badge-status, .group-badge, .nick-badge, .badge-keywarn {
+  font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; white-space: nowrap;
+}
+.nick-badge { font-family: var(--mono); background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; flex: none; }
+.group-badge { background: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe; }
+
+/* 导航分组：功能组居左、管理组居右，分隔线标记语义分组 */
+.nav-divider { width: 1px; height: 20px; background: var(--border-strong); margin: 0 4px; flex: none; }
+@media (max-width: 900px) {
+  .nav-divider { display: none; }
+  .app-header { flex-wrap: wrap; row-gap: 8px; }
+}
+
+/* 表单单列（设置路径/上传对比的整列表单） */
+.form-grid.single { grid-template-columns: 1fr; }
+
+/* 空状态与加载：给足呼吸空间 */
+.empty, .loading { padding: 32px 24px; text-align: center; color: var(--text-faint); font-size: 13px; }
+
+/* ---------- 模态统一 ---------- */
+.modal-mask { animation: maskIn .16s ease; }
+@keyframes maskIn { from { opacity: 0; } to { opacity: 1; } }
+.modal { animation: modalIn .18s cubic-bezier(.2, .8, .3, 1); }
+@keyframes modalIn { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+.modal-sm { width: min(440px, 92vw); }
+.modal-x {
+  margin-left: auto; cursor: pointer; color: var(--text-faint);
+  border: none; background: none; font-size: 14px; line-height: 1;
+  width: 26px; height: 26px; border-radius: var(--radius-sm); flex: none;
+  transition: .12s;
+}
+.modal-x:hover { color: var(--text); background: var(--surface-2); }
+/* 全局确认/输入对话框 */
+.dialog-msg { font-size: 13.5px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.dialog-input {
+  width: 100%; margin-top: 10px; border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); padding: 9px 11px; font-size: 13.5px;
+  background: var(--surface); color: var(--text); transition: border-color .15s, box-shadow .15s;
+}
+.dialog-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+.modal-foot { display: flex; justify-content: flex-end; gap: 10px; }
+.dialog-btn { min-width: 84px; padding: 8px 16px; font-size: 13.5px; }
+@media (prefers-reduced-motion: reduce) {
+  .modal-mask, .modal { animation: none; }
+  * { transition-duration: 0s !important; }
+}
+
+/* ---------- 全局 toast（顶部居中，成功/失败两态） ---------- */
+.toast-app {
+  position: fixed; top: 62px; left: 50%; transform: translateX(-50%);
+  padding: 10px 18px; border-radius: var(--radius-sm); font-size: 13px; z-index: 120;
+  box-shadow: var(--shadow-lg); max-width: min(560px, 90vw);
+}
+.toast-app.ok { background: #103d23; color: #d3f2df; }
+.toast-app.error { background: #5c1a1d; color: #ffd9d8; }
+.toast-enter-active, .toast-leave-active { transition: opacity .18s, transform .18s; }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+
+/* 旧 .toast 保留（组件内局部提示），与新 toast 同一视觉语言 */
+.toast {
+  position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+  background: #1f2329; color: #fff; padding: 10px 18px; border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg); font-size: 13px; z-index: 99;
+}

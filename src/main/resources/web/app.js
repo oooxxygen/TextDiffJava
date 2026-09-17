@@ -33,6 +33,99 @@ function fmtTime(ts) {
 function srcA(cfg) { return (cfg && cfg.source_a) ? cfg.source_a : "A"; }
 function srcB(cfg) { return (cfg && cfg.source_b) ? cfg.source_b : "B"; }
 
+/* ---------- 全局对话框与通知：应用内统一弹层，替代原生 prompt/confirm/alert ----------
+   askConfirm(message, {title, danger}) → Promise<boolean>
+   askInput({title, message, value, placeholder}) → Promise<string|null>（取消返回 null）
+   notify(message, type='ok') → 顶部 toast，3.5s 自动消失 */
+const dialogState = reactive({ open: false, mode: "confirm", title: "", message: "", value: "",
+                               placeholder: "", danger: false, okText: "确定", _resolve: null });
+const toastState = reactive({ open: false, message: "", type: "ok", _timer: null });
+
+function askConfirm(message, opts) {
+  opts = opts || {};
+  return new Promise(resolve => {
+    Object.assign(dialogState, { open: true, mode: "confirm", title: opts.title || "请确认",
+      message, value: "", placeholder: "", danger: !!opts.danger,
+      okText: opts.okText || (opts.danger ? "删除" : "确定"), _resolve: resolve });
+  });
+}
+function askInput(opts) {
+  return new Promise(resolve => {
+    Object.assign(dialogState, { open: true, mode: "input", title: opts.title || "输入",
+      message: opts.message || "", value: opts.value || "",
+      placeholder: opts.placeholder || "", danger: false, okText: opts.okText || "确定",
+      _resolve: resolve });
+  });
+}
+function settleDialog(result) {
+  if (!dialogState.open) return;
+  dialogState.open = false;
+  const r = dialogState._resolve;
+  dialogState._resolve = null;
+  if (r) r(result);
+}
+function notify(message, type) {
+  toastState.message = message || "";
+  toastState.type = type || "ok";
+  toastState.open = true;
+  if (toastState._timer) clearTimeout(toastState._timer);
+  toastState._timer = setTimeout(() => { toastState.open = false; }, 3500);
+}
+
+/* AppDialog：全局确认/输入模态（Esc 取消、Enter 确认，输入模式自动聚焦全选） */
+const AppDialog = {
+  setup() {
+    const inputEl = ref(null);
+    const d = dialogState;
+    function onKey(e) {
+      if (!d.open) return;
+      if (e.key === "Escape") { e.preventDefault(); settleDialog(d.mode === "input" ? null : false); }
+      else if (e.key === "Enter") {
+        e.preventDefault();
+        settleDialog(d.mode === "input" ? d.value : true);
+      }
+    }
+    watch(() => d.open, (open) => {
+      if (open) {
+        window.addEventListener("keydown", onKey, true);
+        if (d.mode === "input") nextTick(() => {
+          if (inputEl.value) { inputEl.value.focus(); inputEl.value.select(); }
+        });
+      } else {
+        window.removeEventListener("keydown", onKey, true);
+      }
+    });
+    return { d, inputEl, ok: () => settleDialog(d.mode === "input" ? d.value : true),
+             cancel: () => settleDialog(d.mode === "input" ? null : false) };
+  },
+  template: `
+  <div class="modal-mask" v-if="d.open" @click.self="cancel">
+    <div class="modal modal-sm" role="dialog" aria-modal="true">
+      <div class="modal-head">{{ d.title }}
+        <button class="modal-x" @click="cancel" title="关闭" aria-label="关闭">✕</button></div>
+      <div class="modal-body">
+        <div class="dialog-msg" v-if="d.message">{{ d.message }}</div>
+        <input v-if="d.mode === 'input'" ref="inputEl" v-model="d.value" class="dialog-input"
+               :placeholder="d.placeholder" spellcheck="false"
+               @keydown.enter.prevent="ok" />
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost dialog-btn" @click="cancel">取消</button>
+        <button class="btn dialog-btn" :class="{ danger: d.danger }" @click="ok">{{ d.okText }}</button>
+      </div>
+    </div>
+  </div>`,
+};
+
+/* AppToast：全局轻提示（成功/失败） */
+const AppToast = {
+  setup() { return { t: toastState }; },
+  template: `
+  <transition name="toast">
+    <div v-if="t.open" class="toast toast-app" :class="t.type">{{ t.message }}</div>
+  </transition>`,
+};
+
 /* ---------- 轻量 Markdown 渲染（无依赖、先转义后渲染，防 XSS） ---------- */
 function mdEscape(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -703,14 +796,14 @@ const ResultView = {
         // 全局搜索命中多条时，询问是否对全部筛选结果标记相同评议（仅在“新增/修改”而非删除时）
         const txt = (payload.note || "").trim();
         if (txt && globalApplied.value && globalQ.value.trim()) {
-          if (window.confirm(`当前已用全局搜索「${globalQ.value.trim()}」筛选，是否对全部命中的记录标记相同评议？`)) {
+          if (await askConfirm(`当前已用全局搜索「${globalQ.value.trim()}」筛选，是否对全部命中的记录标记相同评议？`, { okText: "批量标记" })) {
             const r = await jpost(`/api/jobs/${props.jobId}/notes/bulk`, { q: globalQ.value.trim(), note: txt });
-            alert(`已对 ${r.count} 条命中记录写入相同评议。`);
+            notify(`已对 ${r.count} 条命中记录写入相同评议。`);
           }
         }
         await loadNotes();
         notesNonce.value++;   // 通知按 note 过滤的分区重载
-      } catch (e) { alert("评议保存失败: " + e.message); }
+      } catch (e) { notify("评议保存失败: " + e.message, "error"); }
     }
 
     const trailerChips = computed(() => {
@@ -758,11 +851,11 @@ const ResultView = {
 
     async function editLabel() {
       const cur = (meta.value && meta.value.label) || "";
-      const v = window.prompt("设置标签（留空清除）：", cur);
+      const v = await askInput({ title: "设置标签", message: "留空即清除标签", value: cur, placeholder: "标签内容" });
       if (v === null) return;
       try { await jpost("/api/jobs/" + props.jobId + "/label", { label: v });
             if (meta.value) meta.value.label = v; }
-      catch (e) { alert(e.message); }
+      catch (e) { notify(e.message, "error"); }
     }
 
     return { meta, summary, zoneCounts, error, skipSet, columnNames, trailerChips,
@@ -1144,7 +1237,7 @@ const SubmitForm = {
     <div class="modal-mask" v-if="saved.open" @click.self="saved.open=false">
       <div class="modal">
         <div class="modal-head">✅ 配置「{{ saved.nickname }}」已保存
-          <span class="modal-x" @click="saved.open=false">✕</span></div>
+          <button class="modal-x" @click="saved.open=false" title="关闭" aria-label="关闭">✕</button></div>
         <div class="modal-body">
           <p>已写入以下文件（点击查看内容）：</p>
           <div class="saved-files">
@@ -1200,9 +1293,9 @@ const JobList = {
       (j.job_id + " " + (j.file_a || "") + " " + (j.file_b || "")).toLowerCase().includes(ql.value)));
 
     async function act(url, method, confirmMsg) {
-      if (confirmMsg && !window.confirm(confirmMsg)) return;
+      if (confirmMsg && !(await askConfirm(confirmMsg, { danger: true }))) return;
       try { await api(url, { method: method || "POST" }); await load(); }
-      catch (e) { alert(e.message); }
+      catch (e) { notify(e.message, "error"); }
     }
     const lockJob = (id) => act("/api/jobs/" + id + "/lock");
     const unlockJob = (id) => act("/api/jobs/" + id + "/unlock");
@@ -1213,10 +1306,10 @@ const JobList = {
 
     // 标签就地编辑：prompt 输入，留空即清除
     async function editLabel(url, current) {
-      const v = window.prompt("设置标签（留空清除）：", current || "");
+      const v = await askInput({ title: "设置标签", message: "留空即清除该作业/批次的标签", value: current || "", placeholder: "标签内容" });
       if (v === null) return;   // 取消
       try { await jpost(url, { label: v }); await load(); }
-      catch (e) { alert(e.message); }
+      catch (e) { notify(e.message, "error"); }
     }
     const editJobLabel = (j) => editLabel("/api/jobs/" + j.job_id + "/label", j.label);
     const editBatchLabel = (b) => editLabel("/api/batches/" + b.batch.batch_id + "/label", b.batch.label);
@@ -1252,15 +1345,15 @@ const JobList = {
     function clearSel() { selJobs.clear(); selBatches.clear(); bumpSel(); }
     async function bulkDelete() {
       if (!selCount.value) return;
-      if (!window.confirm("确认删除选中的 " + selBatches.size + " 个批次（含其所有子作业）与 " + selJobs.size + " 个单文件作业？锁定项将被跳过。")) return;
+      if (!(await askConfirm("确认删除选中的 " + selBatches.size + " 个批次（含其所有子作业）与 " + selJobs.size + " 个单文件作业？锁定项将被跳过。", { danger: true }))) return;
       try {
         const r = await jpost("/api/jobs/bulk-delete", { job_ids: [...selJobs], batch_ids: [...selBatches] });
         clearSel();
         await load();
         let msg = "已删除 " + r.deleted_batches + " 个批次、" + r.deleted_jobs + " 个作业";
         if (r.locked && r.locked.length) msg += "；跳过锁定项 " + r.locked.length + " 个（请先解锁）";
-        alert(msg);
-      } catch (e) { alert("批量删除失败: " + e.message); }
+        notify(msg);
+      } catch (e) { notify("批量删除失败: " + e.message, "error"); }
     }
 
     return { batches, standalone, splitJobs, q, fBatches, fJobs, fSplit, fmtTime, srcA, srcB,
@@ -1402,7 +1495,7 @@ const BatchView = {
       try {
         await api("/api/jobs/" + c.job_id + (c.starred ? "/unstar" : "/star"), { method: "POST" });
         c.starred = !c.starred;   // 本地即时反映，避免等待下次轮询
-      } catch (e) { alert("标记失败: " + e.message); }
+      } catch (e) { notify("标记失败: " + e.message, "error"); }
     }
     // 导出明细 Excel（Sheet1 对比总览：数量+配置；Sheet2 差异栏位）：随当前归属组筛选导出
     const exportHref = computed(() => "/api/batches/" + (ov.value ? ov.value.batch.batch_id : "")
@@ -1412,11 +1505,11 @@ const BatchView = {
       + (ov.value ? ov.value.batch.batch_id : "") + "/export-all");
     async function editLabel() {
       const cur = (ov.value && ov.value.batch && ov.value.batch.label) || "";
-      const v = window.prompt("设置批次标签（留空清除）：", cur);
+      const v = await askInput({ title: "设置批次标签", message: "留空即清除标签", value: cur, placeholder: "标签内容" });
       if (v === null) return;
       try { await jpost("/api/batches/" + props.batchId + "/label", { label: v });
             if (ov.value && ov.value.batch) ov.value.batch.label = v; }
-      catch (e) { alert(e.message); }
+      catch (e) { notify(e.message, "error"); }
     }
     return { ov, q, children, baseName, nickOf, groupOf, fmtTime, srcA, srcB, sourceA, sourceB,
              starFilter, starCounts, toggleStar, groupFilter, groupOptions, exportHref, exportAllHref,
@@ -1753,7 +1846,7 @@ const TaskManagerPage = {
     }
     async function regen(id) {
       try { await api("/api/tasks/" + id + "/regenerate", { method: "POST" }); await load(); }
-      catch (e) { alert("重新生成失败: " + e.message); }
+      catch (e) { notify("重新生成失败: " + e.message, "error"); }
     }
     function toggleTask(id) { selTasks.has(id) ? selTasks.delete(id) : selTasks.add(id); }
     // 作业级选择：勾选=选中该作业全部任务（差异CSV + AI分析），再点取消
@@ -1773,22 +1866,22 @@ const TaskManagerPage = {
       let run_at = 0;
       if (runAt.value) {
         const ms = new Date(runAt.value).getTime();
-        if (isNaN(ms)) { alert("执行时间格式错误"); return; }
+        if (isNaN(ms)) { notify("执行时间格式错误"); return; }
         run_at = Math.floor(ms / 1000);
       }
       const when = run_at ? "定时 " + new Date(run_at * 1000).toLocaleString() : "立即";
-      if (!window.confirm(`将重新生成选中的 ${ids.length} 个任务（差异CSV/AI分析），执行方式：${when}。确认？`)) return;
+      if (!(await askConfirm(`将重新生成选中的 ${ids.length} 个任务（差异CSV/AI分析），执行方式：${when}。确认？`, { okText: "重新生成" }))) return;
       try {
         const r = await jpost("/api/tasks/batch-regenerate", { task_ids: ids, run_at });
-        alert(`已提交 ${r.updated}/${r.requested} 个任务` + (run_at ? "（到点自动执行，可在任务行查看定时标记）" : ""));
+        notify(`已提交 ${r.updated}/${r.requested} 个任务` + (run_at ? "（到点自动执行，可在任务行查看定时标记）" : ""));
         selTasks.clear(); runAt.value = "";
         await load();
-      } catch (e) { alert("批量重新生成失败: " + e.message); }
+      } catch (e) { notify("批量重新生成失败: " + e.message, "error"); }
     }
     async function delTask(id) {
-      if (!window.confirm("确认删除该任务记录？（不删除已生成的产物文件）")) return;
+      if (!(await askConfirm("确认删除该任务记录？（不删除已生成的产物文件）", { danger: true }))) return;
       try { await api("/api/tasks/" + id, { method: "DELETE" }); await load(); }
-      catch (e) { alert(e.message); }
+      catch (e) { notify(e.message, "error"); }
     }
     return { batches, standalone, openBatches, openJobs, q, tasksOf, typeText, statusText, fileName,
              toggle, toggleBatch, batchChildren, regen, delTask, fmtTime,
@@ -2071,7 +2164,7 @@ const SplitResultView = {
         const r = await api("/api/split-jobs/" + props.jobId + "/rows?side=" + side
                             + "&group=" + encodeURIComponent(group) + "&offset=0&limit=200");
         opened[key] = { rows: r.rows, total: r.total };
-      } catch (e) { alert(e.message); }
+      } catch (e) { notify(e.message, "error"); }
     }
     const isOpen = (side, group) => !!opened[side + ":" + group];
     const exportUrl = (fmt) => "/api/split-jobs/" + props.jobId + "/export?fmt=" + fmt;
@@ -2199,6 +2292,7 @@ const ReportZone = {
     }
     function ensureOpen() { if (open.value && !rows.value.length && !loading.value) loadPage(1); }
     function toggle() { open.value = !open.value; if (open.value) ensureOpen(); }
+    onMounted(() => { if (open.value) ensureOpen(); }); // 默认展开的分区挂载即加载
     const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
     return { open, toggle, ensureOpen, rows, total, page, totalPages, loadPage, loading };
   },
@@ -2277,20 +2371,20 @@ const ReportPage = {
           <button :class="{active: mode==='path'}" @click="mode='path'">📁 设置比对路径</button>
           <button :class="{active: mode==='upload'}" @click="mode='upload'">⬆ 上传文件对比</button>
         </div>
-        <div class="form-grid" style="grid-template-columns: 1fr;">
-          <label>模板路径（目录或单个 .header 模板文件；留空则在数据目录旁查找 &lt;文件名去扩展名&gt;.header）
+        <div class="form-grid single">
+          <label class="field">模板路径（目录或单个 .header 模板文件；留空则在数据目录旁查找 &lt;文件名去扩展名&gt;.header）
             <input v-if="mode==='path'" v-model="form.template_path" placeholder="如 O:\\Data\\templates 或 O:\\Data\\01.CORD900U.header" spellcheck="false" />
             <input v-else type="file" multiple accept=".header" @change="onFiles($event,'files_tpl')" />
           </label>
-          <label>数据文本路径 A（旧）
+          <label class="field">数据文本路径 A（旧）
             <input v-if="mode==='path'" v-model="form.dir_a" placeholder="如 O:\\CodeRepos\\ExampleData" spellcheck="false" />
             <input v-else type="file" multiple @change="onFiles($event,'files_a')" />
           </label>
-          <label>数据文本路径 B（新）
+          <label class="field">数据文本路径 B（新）
             <input v-if="mode==='path'" v-model="form.dir_b" placeholder="如 O:\\Data\\reports_new" spellcheck="false" />
             <input v-else type="file" multiple @change="onFiles($event,'files_b')" />
           </label>
-          <label>批次标签（可选，显示在批次任务中）
+          <label class="field">批次标签（可选，显示在批次任务中）
             <input v-model="form.label" placeholder="如 2026-07-10 夜批量核对" />
           </label>
         </div>
@@ -2340,11 +2434,11 @@ const ReportBatchView = {
     const exportHref = computed(() => "/api/report-batches/" + props.batchId + "/export-detail");
     async function editLabel() {
       const cur = (ov.value && ov.value.batch && ov.value.batch.label) || "";
-      const v = window.prompt("设置批次标签（留空清除）：", cur);
+      const v = await askInput({ title: "设置批次标签", message: "留空即清除标签", value: cur, placeholder: "标签内容" });
       if (v === null) return;
       try { await jpost("/api/batches/" + props.batchId + "/label", { label: v });
             if (ov.value && ov.value.batch) ov.value.batch.label = v; }
-      catch (e) { alert(e.message); }
+      catch (e) { notify(e.message, "error"); }
     }
     function baseName2(p) { return (p || "").split(/[\\/]/).pop(); }
     return { ov, q, children, exportHref, fmtTime, baseName: baseName2, editLabel, REPORT_STATUS,
@@ -2418,10 +2512,17 @@ const ReportResultView = {
     onMounted(load);
     const s = computed(() => (sum.value && sum.value.summary) || null);
     const fileName = (p) => (p || "").split(/[\\/]/).pop();
+    /* 条数核对展示：相符项收敛为汇总一行，仅逐条列出不符项（避免多段报表平铺几十行）。 */
     const countCheckText = computed(() => {
       if (!s.value || !s.value.count_checks || !s.value.count_checks.length) return [];
-      return s.value.count_checks.map(c =>
-        `${c.side}侧 段${c.section + 1}：声明 ${c.declared == null ? '—' : c.declared} / 实计 ${c.counted}` + (c.match ? ' ✓' : ' ✗ 不符'));
+      const fmt = (c) =>
+        `${c.side}侧 段${c.section + 1}：声明 ${c.declared == null ? '—' : c.declared} / 实计 ${c.counted}`;
+      const bad = s.value.count_checks.filter(c => !c.match);
+      const okCount = s.value.count_checks.length - bad.length;
+      const lines = [];
+      if (okCount) lines.push(`✓ ${okCount} 段声明条数与实计相符`);
+      bad.forEach(c => lines.push(fmt(c) + ' ✗ 不符'));
+      return lines;
     });
     const exportHref = computed(() => `/api/report-jobs/${props.jobId}/export`);
     return { sum, s, fileName, countCheckText, exportHref, REPORT_STATUS, goBack: () => emit("back") };
@@ -2465,7 +2566,7 @@ const ReportResultView = {
                  :style="t.includes('✗') ? 'color:var(--diff-bar)' : 'color:var(--text-soft)'">{{ t }}</div>
           </div>
           <div v-if="s.warnings && s.warnings.length" class="no-rule" style="margin-top:10px;">
-            ⚠ 解析提示：{{ s.warnings.join('；') }}
+            ⚠ 解析提示：{{ [...new Set(s.warnings)].join('；') }}
           </div>
         </div>
       </div>
@@ -2549,28 +2650,28 @@ const CustomPage = {
           <button :class="{active: mode==='path'}" @click="mode='path'">📁 设置比对路径</button>
           <button :class="{active: mode==='upload'}" @click="mode='upload'">⬆ 上传文件对比</button>
         </div>
-        <div class="form-grid" style="grid-template-columns: 1fr;">
-          <label>段起始匹配式（正则，必填；命中行 = 一段的开始）
+        <div class="form-grid single">
+          <label class="field">段起始匹配式（正则，必填；命中行 = 一段的开始）
             <div style="display:flex;gap:8px;">
               <input v-model="form.start_pattern" placeholder="如 ^\\{1:（MT950 报文段起始）" spellcheck="false" style="flex:1;" />
               <button class="mini-btn" style="align-self:center;" @click="useMt950" title="填入 MT950 报文示例">MT950 示例</button>
             </div>
           </label>
-          <label>段结束匹配式（正则，可选；命中行 = 一段的结束。留空 = 段延伸到下一段起始行之前）
+          <label class="field">段结束匹配式（正则，可选；命中行 = 一段的结束。留空 = 段延伸到下一段起始行之前）
             <input v-model="form.end_pattern" placeholder="如 ^-\\}（MT950 报文段结束）" spellcheck="false" />
           </label>
-          <label>主键提取式（正则，可选；取段内首个命中行的捕获组 1 作主键配对，免疫段序差异。留空 = 按段全文精确匹配）
+          <label class="field">主键提取式（正则，可选；取段内首个命中行的捕获组 1 作主键配对，免疫段序差异。留空 = 按段全文精确匹配）
             <input v-model="form.key_pattern" placeholder="如 :20:(\\S+)（MT950 报文 :20: 域作主键）" spellcheck="false" />
           </label>
-          <label>文本路径 A（旧）
+          <label class="field">文本路径 A（旧）
             <input v-if="mode==='path'" v-model="form.dir_a" placeholder="如 O:\\CodeRepos\\NonStructuralData" spellcheck="false" />
             <input v-else type="file" multiple @change="onFiles($event,'files_a')" />
           </label>
-          <label>文本路径 B（新）
+          <label class="field">文本路径 B（新）
             <input v-if="mode==='path'" v-model="form.dir_b" placeholder="目录按文件名配对；也可直接填单文件路径" spellcheck="false" />
             <input v-else type="file" multiple @change="onFiles($event,'files_b')" />
           </label>
-          <label>批次标签（可选，显示在批次任务中）
+          <label class="field">批次标签（可选，显示在批次任务中）
             <input v-model="form.label" placeholder="如 MT950 对账核对" />
           </label>
         </div>
@@ -2619,11 +2720,11 @@ const CustomBatchView = {
     });
     async function editLabel() {
       const cur = (ov.value && ov.value.batch && ov.value.batch.label) || "";
-      const v = window.prompt("设置批次标签（留空清除）：", cur);
+      const v = await askInput({ title: "设置批次标签", message: "留空即清除标签", value: cur, placeholder: "标签内容" });
       if (v === null) return;
       try { await jpost("/api/batches/" + props.batchId + "/label", { label: v });
             if (ov.value && ov.value.batch) ov.value.batch.label = v; }
-      catch (e) { alert(e.message); }
+      catch (e) { notify(e.message, "error"); }
     }
     function baseName2(p) { return (p || "").split(/[\\/]/).pop(); }
     return { ov, q, children, fmtTime, baseName: baseName2, editLabel, REPORT_STATUS,
@@ -2731,7 +2832,7 @@ const CustomResultView = {
             </div>
           </div>
           <div v-if="s.warnings && s.warnings.length" class="no-rule" style="margin-top:10px;">
-            ⚠ 解析提示：{{ s.warnings.join('；') }}
+            ⚠ 解析提示：{{ [...new Set(s.warnings)].join('；') }}
           </div>
         </div>
       </div>
@@ -2750,7 +2851,7 @@ const CustomResultView = {
 const App = {
   components: { SubmitForm, JobList, BatchView, ResultView, SettingsPage, SplitPage, SplitResultView,
                 TaskManagerPage, ReportPage, ReportBatchView, ReportResultView,
-                CustomPage, CustomBatchView, CustomResultView },
+                CustomPage, CustomBatchView, CustomResultView, AppDialog, AppToast },
   setup() {
     const tab = ref("submit");
     const jobId = ref(null);
@@ -2802,13 +2903,14 @@ const App = {
   template: `
   <div class="app-header">
     <div class="logo"><span class="dot"></span> TextDiff</div>
-    <div class="spacer"></div>
     <button class="nav-btn" :class="tab==='submit'?'active':''" @click="tab='submit'">新建对比</button>
     <button class="nav-btn" :class="tab==='report'?'active':''" @click="tab='report'">报表对比</button>
     <button class="nav-btn" :class="tab==='custom'?'active':''" @click="tab='custom'">自定义格式对比</button>
     <button class="nav-btn" :class="tab==='split'?'active':''" @click="tab='split'">文本拆分</button>
+    <div class="spacer"></div>
     <button class="nav-btn" :class="(tab==='jobs'||tab==='batch')?'active':''" @click="tab='jobs'">作业列表</button>
     <button class="nav-btn" :class="tab==='tasks'?'active':''" @click="tab='tasks'">任务管理</button>
+    <span class="nav-divider"></span>
     <button class="nav-btn" :class="tab==='result'?'active':''" @click="tab='result'" :disabled="!jobId">结果</button>
     <button class="nav-btn" :class="tab==='settings'?'active':''" @click="tab='settings'">设置</button>
   </div>
@@ -2833,6 +2935,8 @@ const App = {
     <ResultView v-else-if="tab==='result' && jobId" :job-id="jobId" :key="jobId + '-' + resultNonce" :encodings="encodings"
                 :back-batch="backBatch" @rerun="onRerun" @back="onResultBack" />
     <SettingsPage v-else-if="tab==='settings'" />
+    <AppDialog />
+    <AppToast />
   </div>`,
 };
 
