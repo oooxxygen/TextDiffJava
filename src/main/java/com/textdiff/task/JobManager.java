@@ -52,6 +52,8 @@ public final class JobManager implements AutoCloseable {
     public volatile java.util.function.Consumer<JobRecord> doneHook;
     /** 报表对比作业执行器（ReportCompareService 挂载点；jobType=report 的作业路由到这里）。 */
     public volatile java.util.function.Consumer<String> reportRunner;
+    /** 自定义格式对比作业执行器（CustomCompareService 挂载点；jobType=custom 的作业路由到这里）。 */
+    public volatile java.util.function.Consumer<String> customRunner;
 
     public JobManager(JobStore store, Path resultsRoot, EngineConfig engine) {
         this(store, resultsRoot, engine, null);
@@ -131,6 +133,11 @@ public final class JobManager implements AutoCloseable {
         if (job != null && com.textdiff.report.ReportCompareService.JOB_TYPE.equals(job.jobType)) {
             java.util.function.Consumer<String> rr = reportRunner;
             if (rr != null) rr.accept(job.id); // 报表作业由专用执行器消费
+            return;
+        }
+        if (job != null && com.textdiff.custom.CustomCompareService.JOB_TYPE.equals(job.jobType)) {
+            java.util.function.Consumer<String> cr = customRunner;
+            if (cr != null) cr.accept(job.id); // 自定义格式对比作业由专用执行器消费
             return;
         }
         if (tasks.containsKey(job.id)) return;

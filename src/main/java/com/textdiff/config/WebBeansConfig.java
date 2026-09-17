@@ -79,6 +79,16 @@ public class WebBeansConfig {
         return svc;
     }
 
+    /** 自定义格式对比服务（【自定义格式对比】：段起止/主键正则的报文类文本对比）；作业经 JobManager.submit 路由执行。 */
+    @Bean(destroyMethod = "close")
+    public com.textdiff.custom.CustomCompareService customCompareService(
+            DualJobStore store, AppPaths paths, AppConfig cfg, JobManager jobManager) {
+        com.textdiff.custom.CustomCompareService svc = new com.textdiff.custom.CustomCompareService(
+                store, paths.resultsDir(), Math.max(1, cfg.engine().maxThreads()));
+        jobManager.customRunner = svc::run;
+        return svc;
+    }
+
     /** REST 响应统一 snake_case，对齐前端契约。 */
     @Bean
     public Jackson2ObjectMapperBuilderCustomizer snakeCaseCustomizer() {

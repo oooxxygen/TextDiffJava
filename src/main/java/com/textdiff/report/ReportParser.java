@@ -2,30 +2,50 @@ package com.textdiff.report;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
- * 报表结构解析：基于 header 模板把一份报表文本切成 表头块 / 业务行 / 表尾块 三个分区。
+ * 报表结构解析：把一份报表文本切成 表头块 / 业务行 / 表尾块 三个分区。支持两类版式：
  *
- * 模板（header 文件）= 报表骨架（值留空），一份报表文件可含多个报表段，每段 = 表头块（模板表头逐行对应、
- * 值已填充）+ 业务行（替换模板中表头后的空白占位行）+ 表尾块（模板尾部骨架，值可能已填充）。
- *
- * 分区算法（由 CORD9000/CRDD0020/DEPD8920/PYDD1040 四类样本归纳）：
+ * 1）模板版式（header 文件）：模板 = 报表骨架（值留空），一份报表文件可含多个报表段，每段 = 表头块
+ * （模板表头逐行对应、值已填充）+ 业务行（替换模板中表头后的空白占位行）+ 表尾块（模板尾部骨架，
+ * 值可能已填充）。分区算法（由 CORD9000/CRDD0020/DEPD8920/PYDD1040 四类样本归纳）：
  *  1. 表头长度 H = 模板与报表按行对齐时「逐行完全相等且非空白、且模板下一行为空白占位或模板结束」的
  *     最大行号（列头/划线行必逐字一致，可作锚点）；
  *  2. 表尾骨架 = 表头之后跳过一个空白占位行后的全部模板尾行（占位行被业务行替换，其余骨架行保留并填充值）；
  *  3. 报表段以表头锚点行（模板第 H 行原文）在报表中的出现位置分段，段内锚点之后到下一段表头之前为
  *     内容区：剥掉尾部空白（段间分隔空行）后，若内容区尾部与表尾骨架逐行对应（完全相等 / 空白对空白 /
      * 值填充形态匹配）则划为表尾块，其余非空白行为业务行。
+ *
+ * 2）控制行版式（自分区，无需模板）：以控制行 {@code 1@OD@|@T@|BANK-CODE:..|RPT-ID:..|..} 分段
+ * （由 DEPD6020/PYID0200/PYID0210/CRDD0190 样本归纳），支持：
+ *  - 折行报表：列头因栏位过多折成多行（F 行），每条业务记录同样折 F 行（如 DEPD602U 表头 2 行、
+ *    记录 = 主行 + TX Time 续行；PYID021U 表头/记录均 3 行）。解析与展示保持折行原貌（{@link Row#display}），
+ *    字段按物理行 ≥2 空格切分后拼接参与排序/匹配/差异定位；
+ *  - 分页：同一报表段跨页时逐页重复 页标/标题/下划线/BRCH/A/C Type/列头，按列头原文重复定位页边界，
+ *    页首重复块跳过（样本：DEPD602U 段 18/26/37、PYID020U 全段 5 页）；
+ *  - 段签名：控制行原文作段标识，供双侧按签名配对表头/表尾块（免疫段序差异）。
  */
 public final class ReportParser {
     private ReportParser() {}
 
-    /** 业务行：所在段号（0-based）、行号（1-based）、原始行、切分字段、排序键。 */
-    public record Row(int section, int lineNo, String raw, String[] fields, String sortKey) {}
+    /** 业务行：所在段号（0-based）、行号（1-based、首物理行）、原始行、切分字段、排序键、折行原貌（可空）。 */
+    public record Row(int section, int lineNo, String raw, String[] fields, String sortKey, String[] display) {
+        public Row(int section, int lineNo, String raw, String[] fields, String sortKey) {
+            this(section, lineNo, raw, fields, sortKey, null);
+        }
+    }
 
-    /** 解析结果：表头/表尾各段块（原始行数组）+ 全部业务行 + 解析告警。 */
+    /** 解析结果：表头/表尾各段块（原始行数组）+ 全部业务行 + 解析告警 + 控制行版式附加信息。 */
     public record ParsedReport(int headerLen, List<String[]> headerBlocks, List<String[]> footerBlocks,
-                               List<Row> rows, List<String> warnings) {}
+                               List<Row> rows, List<String> warnings,
+                               boolean controlFormat, List<String> sectionKeys, List<String> columnNames) {
+        /** 模板版式兼容构造器。 */
+        public ParsedReport(int headerLen, List<String[]> headerBlocks, List<String[]> footerBlocks,
+                            List<Row> rows, List<String> warnings) {
+            this(headerLen, headerBlocks, footerBlocks, rows, warnings, false, List.of(), List.of());
+        }
+    }
 
     /** 业务行字段切分：含竖线按竖线切（行尾竖线的尾空块丢弃）并去两端空白；否则按 ≥2 连续空格切。 */
     public static String[] splitFields(String raw) {
@@ -167,6 +187,263 @@ public final class ReportParser {
             }
         }
         return new ParsedReport(headerLen, headerBlocks, footerBlocks, rows, warnings);
+    }
+
+    // ---- 控制行版式（1@OD@|...）：自分区、折行、分页 ----
+
+    /** 控制行：{@code 1@OD@|@T@|BANK-CODE:102|ORG-ID:..|RPT-ID:..|DAT:..|..}。 */
+    private static final Pattern CONTROL_LINE = Pattern.compile("^\\s*\\d+@OD@\\|");
+    /** 页首机构行：BRCH / BRANCH / Branch : ...。 */
+    private static final Pattern BR_ANCHOR = Pattern.compile("^\\s{0,4}(?:BRCH|BRANCH|Branch)\\s*:");
+    /** 页首标签行（列头之前的 「A/C Type: 50150206」 形态，冒号后带值）。 */
+    private static final Pattern LABEL_LIKE = Pattern.compile("^\\s*[A-Za-z][^|:]{0,30}:\\s");
+    /** 页码行：行首 1~3 位数字（可带括号页标识），如 {@code 1   ( 51365-DEPD6020 )}。 */
+    private static final Pattern PAGE_MARK = Pattern.compile("^\\s*\\d{1,3}\\s*(\\(.*?\\))?\\s*$");
+
+    public static boolean hasControlLines(List<String> report) {
+        for (String line : report) {
+            if (line != null && CONTROL_LINE.matcher(line).find()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 控制行版式解析（无需模板）：控制行分段 → 段内 BRCH 锚点定位列头块（折 F 行，可含划线行）
+     * → 分页（列头原文重复为页界，页首重复块跳过）→ 主行含数字推进 F 行一组读业务记录
+     * → 其余为表尾。段签名 = 控制行原文。
+     */
+    public static ParsedReport parseControlFormat(List<String> report) {
+        List<String> warnings = new ArrayList<>();
+        List<String[]> headerBlocks = new ArrayList<>();
+        List<String[]> footerBlocks = new ArrayList<>();
+        List<String> sectionKeys = new ArrayList<>();
+        List<String> columnNames = new ArrayList<>();
+        List<Row> rows = new ArrayList<>();
+
+        int n = report.size();
+        List<Integer> starts = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            if (CONTROL_LINE.matcher(report.get(i)).find()) starts.add(i);
+        }
+        for (int s = 0; s < starts.size(); s++) {
+            int from = starts.get(s);
+            int to = (s + 1 < starts.size()) ? starts.get(s + 1) : n;
+            parseControlSection(report, from, to, s, headerBlocks, footerBlocks, sectionKeys,
+                    rows, warnings, columnNames);
+        }
+        return new ParsedReport(0, headerBlocks, footerBlocks, rows, warnings,
+                true, sectionKeys, columnNames);
+    }
+
+    private static void parseControlSection(List<String> rep, int from, int to, int sIdx,
+                                            List<String[]> headerBlocks, List<String[]> footerBlocks,
+                                            List<String> sectionKeys, List<Row> rows,
+                                            List<String> warnings, List<String> columnNames) {
+        int len = to - from;
+        String sig = rep.get(from);
+        String sigShort = sigShort(sig);
+
+        // 列头块定位：BRCH 锚点 → 跳过空白/标签行 → 连续列名行（折行）
+        int anchor = -1;
+        for (int i = 0; i < Math.min(len, 15); i++) {
+            if (BR_ANCHOR.matcher(rep.get(from + i)).find()) { anchor = i; break; }
+        }
+        int colFirst = -1;
+        if (anchor >= 0) {
+            int i = anchor + 1, skipped = 0;
+            while (i < len && skipped < 5
+                    && (rep.get(from + i).isBlank() || LABEL_LIKE.matcher(rep.get(from + i)).find())) {
+                i++;
+                skipped++;
+            }
+            if (i < len && isColumnNameLine(rep.get(from + i))) colFirst = i;
+        }
+        if (colFirst < 0) {
+            warnings.add("段 " + (sIdx + 1) + "（" + sigShort + "）未定位到列头（缺 BRCH 锚点或列名行），整段按业务内容处理");
+            headerBlocks.add(new String[]{sig});
+            footerBlocks.add(new String[0]);
+            sectionKeys.add(sig);
+            for (int i = 1; i < len; i++) {
+                String raw = rep.get(from + i);
+                if (raw.isBlank()) continue;
+                String[] f = splitFields(raw);
+                rows.add(new Row(sIdx, from + i + 1, raw, f, sortKey(f)));
+            }
+            return;
+        }
+        int colLast = colFirst;
+        while (colLast + 1 < len && colLast - colFirst < 7 && isColumnNameLine(rep.get(from + colLast + 1))) {
+            colLast++;
+        }
+        int fold = colLast - colFirst + 1;
+        // 列头下可带一条划线行（------）作装饰
+        boolean dashes = colLast + 1 < len && isRuleLine(rep.get(from + colLast + 1));
+        int colEnd = dashes ? colLast + 1 : colLast;
+
+        headerBlocks.add(slice(rep, from, from + colEnd + 1));
+        sectionKeys.add(sig);
+        if (columnNames.isEmpty()) collectColumnNames(rep, from, colFirst, colLast, dashes, columnNames);
+
+        // 分页：列头首行原文的重复出现 = 页界
+        String colhdr1 = rep.get(from + colFirst);
+        List<Integer> pages = new ArrayList<>();
+        pages.add(colFirst);
+        for (int i = colEnd + 1; i < len; i++) {
+            if (colhdr1.equals(rep.get(from + i))) pages.add(i);
+        }
+        if (pages.size() > 1) {
+            warnings.add("段 " + (sIdx + 1) + "（" + sigShort + "）跨 " + pages.size() + " 页，页首重复表头已跳过");
+        }
+
+        // 页首行形态（首页表头区去掉控制行后的行集合 + 页码行 + BRCH 行），用于页界前回溯
+        List<String> page1Preamble = rep.subList(from + 1, from + colFirst);
+        // 内容区边界：剥掉段尾空白（EOF/段间分隔空行），防止空行被吞成折行续行
+        int contentEnd = len;
+        while (contentEnd > colEnd + 1 && rep.get(from + contentEnd - 1).isBlank()) contentEnd--;
+
+        List<String> footer = new ArrayList<>();
+        for (int pi = 0; pi < pages.size(); pi++) {
+            int c = pages.get(pi);
+            int blockEnd = c + fold;
+            if (blockEnd < len && isRuleLine(rep.get(from + blockEnd))) blockEnd++;
+            // 下一页页首起点：自下一列头行向上回溯连续的页首形态行
+            int nextPre = contentEnd;
+            if (pi + 1 < pages.size()) {
+                int b = pages.get(pi + 1) - 1, steps = 0;
+                while (b > blockEnd && steps < 10 && isPageHeaderIsh(rep.get(from + b), page1Preamble)) {
+                    b--;
+                    steps++;
+                }
+                nextPre = b + 1;
+            }
+            int p = blockEnd;
+            while (p < nextPre) {
+                if (!isMainLine(rep.get(from + p))) break;
+                if (p + fold > nextPre) {
+                    warnings.add("段 " + (sIdx + 1) + "（" + sigShort + "）第 " + (from + p + 1)
+                            + " 行起折行记录不完整（不足 " + fold + " 行），余行按单行业务内容处理");
+                    break;
+                }
+                String[] lines = slice(rep, from + p, from + p + fold);
+                List<String> fs = new ArrayList<>(lines.length * 4);
+                for (String ln : lines) {
+                    for (String v : splitFields(ln)) if (!v.isEmpty()) fs.add(v);
+                }
+                String[] fields = fs.toArray(new String[0]);
+                rows.add(new Row(sIdx, from + p + 1, String.join("\n", lines),
+                        fields, sortKey(fields), lines));
+                p += fold;
+            }
+            if (pi + 1 < pages.size()) {
+                for (int i = p; i < nextPre; i++) {
+                    String l = rep.get(from + i);
+                    if (!l.isBlank()) footer.add(l); // 页间残行（罕见）：并入表尾区
+                }
+            } else {
+                for (int i = p; i < contentEnd; i++) footer.add(rep.get(from + i));
+            }
+        }
+        footerBlocks.add(footer.toArray(new String[0]));
+    }
+
+    /** 列名行：首 token 为字母开头、不含数字/掩码/竖线（数据行首 token 均含数字或以 * 开头）。 */
+    static boolean isColumnNameLine(String line) {
+        String t = line.strip();
+        if (t.isEmpty() || t.indexOf('|') >= 0) return false;
+        String first = t.split("\\s+", 2)[0];
+        if (first.indexOf('*') == 0 || first.indexOf('#') == 0) return false;
+        for (int i = 0; i < first.length(); i++) {
+            char ch = first.charAt(i);
+            if (ch >= '0' && ch <= '9') return false;
+        }
+        return !first.isEmpty() && isLetter(first.charAt(0));
+    }
+
+    private static boolean isLetter(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    }
+
+    /** 划线行：------ / ===== 等装饰分隔线。 */
+    static boolean isRuleLine(String line) {
+        String t = line.strip();
+        if (t.length() < 6) return false;
+        for (int i = 0; i < t.length(); i++) {
+            char c = t.charAt(i);
+            if (c != '-' && c != '=' && c != '+' && c != '_' && c != ' ') return false;
+        }
+        return true;
+    }
+
+    /**
+     * 业务主行：首 token 含数字（账号/单号类）；或整行掩码（{@code ****}）且无 ≥3 字母的英文单词
+     * （排除 {@code * * * END OF LIST * * *} 类表尾装饰行）。
+     */
+    static boolean isMainLine(String line) {
+        String t = line.strip();
+        if (t.isEmpty()) return false;
+        String first = t.split("\\s+", 2)[0];
+        boolean allStar = true;
+        for (int i = 0; i < first.length(); i++) {
+            if (first.charAt(i) != '*') { allStar = false; break; }
+        }
+        if (allStar) {
+            for (int i = 0; i + 3 <= t.length(); i++) { // 任意连续 3 字母 = 非纯掩码行
+                if (isLetter(t.charAt(i)) && isLetter(t.charAt(i + 1)) && isLetter(t.charAt(i + 2))) return false;
+            }
+            return true;
+        }
+        for (int i = 0; i < first.length(); i++) {
+            char c = first.charAt(i);
+            if (c >= '0' && c <= '9') return true;
+        }
+        return false;
+    }
+
+    /** 页首形态行：空白 / 页码行 / BRCH 行 / 与首页表头区某行完全一致（标题、下划线、A/C Type 等）。 */
+    private static boolean isPageHeaderIsh(String line, List<String> page1Preamble) {
+        if (line.isBlank()) return true;
+        if (PAGE_MARK.matcher(line.strip()).matches() || BR_ANCHOR.matcher(line).find()) return true;
+        for (String t : page1Preamble) {
+            if (line.equals(t)) return true;
+        }
+        return false;
+    }
+
+    /** 列名清单（首页列头块）：折行 ≥2 行的列名带 「行k·」 前缀，划线行跳过。 */
+    private static void collectColumnNames(List<String> rep, int from, int colFirst, int colLast,
+                                           boolean dashes, List<String> out) {
+        for (int i = colFirst; i <= colLast; i++) {
+            String line = rep.get(from + i);
+            if (dashes && i == colLast && isRuleLine(line)) continue;
+            int lineNo = i - colFirst + 1;
+            for (String t : line.strip().split("\\s{2,}")) {
+                if (t.isBlank()) continue;
+                out.add(lineNo >= 2 ? "行" + lineNo + "·" + t : t);
+            }
+        }
+    }
+
+    /** 段签名缩写（差异行标识用）：优先 PRODUCT / ORG-ID 值，否则控制行前 24 字符。 */
+    static String sigShort(String controlLine) {
+        String v = tagValue(controlLine, "PRODUCT");
+        if (v == null) v = tagValue(controlLine, "ORG-ID");
+        if (v == null) v = tagValue(controlLine, "RPT-ID");
+        return v != null ? v : controlLine.strip().substring(0, Math.min(24, controlLine.strip().length()));
+    }
+
+    private static String tagValue(String controlLine, String tag) {
+        int i = controlLine.indexOf("|" + tag + ":");
+        if (i < 0) return null;
+        int s = i + tag.length() + 2;
+        int e = controlLine.indexOf('|', s);
+        String v = e < 0 ? controlLine.substring(s) : controlLine.substring(s, e);
+        return v.isBlank() ? null : v;
+    }
+
+    private static String[] slice(List<String> rep, int from, int toExclusive) {
+        String[] out = new String[toExclusive - from];
+        for (int i = 0; i < out.length; i++) out[i] = rep.get(from + i);
+        return out;
     }
 
     /** 表头长度：逐行完全相等、非空白、且模板下一行为空白或结束的最大对齐行号。 */

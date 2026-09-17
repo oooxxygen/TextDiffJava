@@ -126,22 +126,33 @@ public final class ReportCompareService implements AutoCloseable {
         store.saveJob(job);
         String encA = "auto", encB = "auto";
         try {
-            Path tplFile = Path.of(job.templateFile == null ? "" : job.templateFile);
-            if (job.templateFile == null || job.templateFile.isBlank() || !Files.isRegularFile(tplFile)) {
-                throw new IllegalArgumentException("模板不存在：请在模板路径或数据目录下提供 "
-                        + stem(fileName(job.fileA)) + ".header");
-            }
             Path fa = Path.of(job.fileA);
             Path fb = Path.of(job.fileB);
             encA = Encoding.resolveEncoding(fa, "auto", "|");
             encB = Encoding.resolveEncoding(fb, "auto", "|");
-            List<String> tpl = readLines(tplFile, Encoding.resolveEncoding(tplFile, "auto", "|"));
             List<String> la = readLines(fa, encA);
             List<String> lb = readLines(fb, encB);
 
-            ReportParser.ParsedReport pa = ReportParser.parse(tpl, la);
-            ReportParser.ParsedReport pb = ReportParser.parse(tpl, lb);
-            ReportComparator.Result result = ReportComparator.compare(pa, pb, fieldNamesFor(job));
+            ReportParser.ParsedReport pa;
+            ReportParser.ParsedReport pb;
+            List<String> fieldNames;
+            if (ReportParser.hasControlLines(la) || ReportParser.hasControlLines(lb)) {
+                // 控制行版式（1@OD@|...，含折行/分页报表）：自分区，模板不参与
+                pa = ReportParser.parseControlFormat(la);
+                pb = ReportParser.parseControlFormat(lb);
+                fieldNames = !pa.columnNames().isEmpty() ? pa.columnNames() : pb.columnNames();
+            } else {
+                Path tplFile = Path.of(job.templateFile == null ? "" : job.templateFile);
+                if (job.templateFile == null || job.templateFile.isBlank() || !Files.isRegularFile(tplFile)) {
+                    throw new IllegalArgumentException("模板不存在：请在模板路径或数据目录下提供 "
+                            + stem(fileName(job.fileA)) + ".header");
+                }
+                List<String> tpl = readLines(tplFile, Encoding.resolveEncoding(tplFile, "auto", "|"));
+                pa = ReportParser.parse(tpl, la);
+                pb = ReportParser.parse(tpl, lb);
+                fieldNames = fieldNamesFor(job);
+            }
+            ReportComparator.Result result = ReportComparator.compare(pa, pb, fieldNames);
 
             Path dir = Path.of(job.resultDir);
             ResultFiles.JsonlSink sink = ResultFiles.JsonlSink.create(dir.resolve(ResultFiles.RESULT_JSONL));

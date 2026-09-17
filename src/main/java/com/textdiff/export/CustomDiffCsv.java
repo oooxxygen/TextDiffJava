@@ -1,5 +1,6 @@
 package com.textdiff.export;
 
+import com.textdiff.custom.CustomCompareEngine;
 import com.textdiff.engine.RowDiff;
 import com.textdiff.engine.Status;
 
@@ -12,33 +13,29 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * 单报表差异 CSV（【报表对比】结果页导出）：
- * 仅导出「单侧不匹配」与「行部分匹配」两类记录；部分匹配一条差异栏位一行，单侧不匹配整行一条。
- * 折行记录（控制行版式）的差异定位为物理行号，栏位名输出「第N行」。
+ * 自定义格式对比差异 CSV（【自定义格式对比】结果页导出）：
+ * 仅导出「单侧不匹配段」与「有差异段」；差异段一条差异行一行，单侧段整段一条（段内换行保留）。
  * UTF-8 带 BOM。
  */
-public final class ReportDiffCsv {
-    private ReportDiffCsv() {}
+public final class CustomDiffCsv {
+    private CustomDiffCsv() {}
 
-    public static void write(Path file, List<RowDiff> rows, List<String> colNames) {
-        write(file, rows, colNames, false);
-    }
-
-    public static void write(Path file, List<RowDiff> rows, List<String> colNames, boolean folded) {
+    public static void write(Path file, List<RowDiff> rows) {
         try (BufferedWriter w = newBomWriter(file)) {
-            w.write("状态,行标识,栏位号,栏位名,A值,B值\r\n");
+            w.write("状态,主键,段内行号,A内容,B内容\r\n");
             for (RowDiff r : rows) {
+                if (!CustomCompareEngine.SECTION.equals(r.section)) continue;
                 if (Status.UNMATCHED_A.equals(r.status)) {
                     w.write("unmatched_a,");
                     w.write(escape(r.key));
-                    w.write(",,,");
-                    w.write(escape(joinCols(r.aCols)));
+                    w.write(",,");
+                    w.write(escape(join(r.aCols)));
                     w.write(",\r\n");
                 } else if (Status.UNMATCHED_B.equals(r.status)) {
                     w.write("unmatched_b,");
                     w.write(escape(r.key));
-                    w.write(",,,," );
-                    w.write(escape(joinCols(r.bCols)));
+                    w.write(",,,");
+                    w.write(escape(join(r.bCols)));
                     w.write("\r\n");
                 } else if (Status.DIFF.equals(r.status)) {
                     for (int col : r.diffCols) {
@@ -46,8 +43,6 @@ public final class ReportDiffCsv {
                         w.write(escape(r.key));
                         w.write(',');
                         w.write(String.valueOf(col + 1));
-                        w.write(',');
-                        w.write(escape(folded ? "第" + (col + 1) + "行" : colName(col, colNames)));
                         w.write(',');
                         w.write(escape(colAt(r.aCols, col)));
                         w.write(',');
@@ -57,7 +52,7 @@ public final class ReportDiffCsv {
                 }
             }
         } catch (IOException e) {
-            throw new UncheckedIOException("报表差异 CSV 导出失败: " + file, e);
+            throw new UncheckedIOException("自定义格式差异 CSV 导出失败: " + file, e);
         }
     }
 
@@ -65,13 +60,8 @@ public final class ReportDiffCsv {
         return cols != null && col < cols.length ? cols[col] : "";
     }
 
-    private static String joinCols(String[] cols) {
-        return cols == null ? "" : String.join("  ", cols);
-    }
-
-    static String colName(int col, List<String> names) {
-        return names != null && col < names.size() && !names.get(col).isBlank()
-                ? names.get(col) : "栏位" + (col + 1);
+    private static String join(String[] cols) {
+        return cols == null ? "" : String.join("\n", cols);
     }
 
     private static String escape(String v) {

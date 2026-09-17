@@ -147,6 +147,7 @@ public final class TaskManager implements AutoCloseable {
     public void registerDefaults(JobRecord job) {
         if (!JobRecord.DONE.equals(job.status)) return;
         if (com.textdiff.report.ReportCompareService.JOB_TYPE.equals(job.jobType)) return; // 报表对比不衍生 AI/CSV 任务
+        if (com.textdiff.custom.CustomCompareService.JOB_TYPE.equals(job.jobType)) return; // 自定义格式对比同上
         if (!tasks.listForJob(job.id).isEmpty()) return; // 重新触发时避免重复登记
         for (TaskRecord t : createDefaults(job)) enqueue(t);
     }

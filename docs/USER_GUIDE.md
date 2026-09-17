@@ -81,6 +81,14 @@ INCT0101:01A***0*.v01:KEYSEQ=3/4/5:OMITSEQ=1/2/10:DELIM= | :ENCA=auto:SRCA=A:TRA
   - 结果页摘要：总条数（程序计数）、报表段数、表头/表尾差异行、完全匹配/部分匹配/仅A/仅B、条数核对（表尾声明条数 vs 实计，不符红色提示）；
   - 导出：批次明细 Excel（`GET /api/report-batches/{id}/export-detail`，Sheet1 对比总览=昵称/文件名/总条数/差异统计/条数核对，Sheet2 差异明细）；单报表差异 CSV（`GET /api/report-jobs/{id}/export`，仅单侧不匹配 + 行部分匹配）；
   - 报表对比不产生 AI 分析与差异导出任务（无需 AI 分析差异栏位）。
+  - **控制行版式兼容（带折行报表）**：报表文件以控制行（`1@OD@|@T@|BANK-CODE:..|RPT-ID:..|..`）分段的（如 DEPD602U/PYID020U/PYID021U/CRDD019U），**无需模板自动分区**；列头因栏位过多折成多行时（表头 F 行），每条业务记录同样折 F 行，解析与对比均**保持折行原貌**（结果页按物理行逐行对照、差异定位到具体物理行、差异 CSV 栏位名输出「第N行」）；段跨页时页首重复表头自动跳过；表头/表尾块双侧按**段签名**（控制行原文）配对，免疫段序差异；表尾数量核对支持 `CUR PG QTY` / `Total Quantity` 等行内数量标签。
+- **自定义格式对比**（非传统结构化文本，独立页签）：
+  - 适用：由一段段报文/记录组成的文本（如 MT950 报文 `{1:..}{4:..-}`）；由用户指定段格式完成解析与匹配；
+  - 段格式三个**正则**：段起始匹配式（必填，如 `^\{1:`）、段结束匹配式（可选，如 `^-\}`，留空=段延伸到下一段起始行之前）、主键提取式（可选，如 `:20:(\S+)`，取段内首个命中行的捕获组 1 作主键）；提供「MT950 示例」一键填入；
+  - 提交（双模式）：**设置比对路径**——文本路径 A/B（目录按文件名配对，也可直接填单文件路径）；**上传文件对比**；
+  - 段匹配：有主键段按主键配对（**免疫段序差异**，同主键多段按出现顺序逐一配对）；主键未命中的段按段全文精确多重集匹配；首段之前/末段之后的残行按文件头/文件尾逐行对照；
+  - 结果页：段数 A/B、完全一致/有差异/仅A/仅B、主键未命中段数、配置回显；差异段保持段内原始行展示并逐行标注差异行号；差异 CSV（`GET /api/custom-jobs/{id}/export`，仅差异段一条差异行一行 + 单侧段整段一条）；
+  - 自定义格式对比批次带 📐 徽标显示在作业列表，点击进入批次视图；不产生 AI 分析任务。
 - **文本拆分**：Python 版遗留能力，当前未实现（端点 501）。
 
 ## 五、列名映射导入（源系统字段配置）
@@ -152,6 +160,8 @@ JSONL 文件层始终是事实来源；H2 仅尽力镜像，损坏自动重建�
 | POST `/api/report-compare` `/api/report-compare/upload` | 报表对比批次（路径模式 / 上传模式：files_a+files_b+files_tpl） |
 | GET `/api/report-jobs/{id}/summary` `/api/report-jobs/{id}/result` | 报表作业摘要 / 三分区结果分页（section=header\|footer\|data） |
 | GET `/api/report-jobs/{id}/export` `/api/report-batches/{id}/export-detail` | 报表差异 CSV / 报表批次明细 Excel |
+| POST `/api/custom-compare` `/api/custom-compare/upload` | 自定义格式对比批次（start/end/key 正则 + 文本路径 A/B；上传模式 files_a+files_b） |
+| GET `/api/custom-jobs/{id}/summary` `/api/custom-jobs/{id}/result` `/api/custom-jobs/{id}/export` | 段对比摘要 / 段结果分页（section=segment） / 段差异 CSV |
 | GET `/api/joblist` `/api/batches/{id}` | 作业列表 / 批次子作业 |
 | GET `/api/jobs/{id}/meta` `/api/jobs/{id}/result` | 结果元信息 / 分区分页读取（q + note 过滤） |
 | POST `/api/jobs/{id}/rerun` `/cancel` `/retry` `/label` `/lock` `/star` `/notes` | 作业操作 |

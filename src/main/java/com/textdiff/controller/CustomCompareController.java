@@ -1,11 +1,10 @@
 package com.textdiff.controller;
 
 import com.textdiff.config.AppPaths;
+import com.textdiff.custom.CustomCompareService;
+import com.textdiff.custom.CustomFormat;
 import com.textdiff.engine.RowDiff;
-import com.textdiff.export.ReportDetailExcel;
-import com.textdiff.export.ReportDiffCsv;
-import com.textdiff.report.ReportCompareService;
-import com.textdiff.report.ReportSummary;
+import com.textdiff.export.CustomDiffCsv;
 import com.textdiff.store.JobRecord;
 import com.textdiff.store.JobStore;
 import com.textdiff.store.ResultFiles;
@@ -28,57 +27,56 @@ import java.util.UUID;
 import java.util.function.Predicate;
 
 /**
- * 【报表对比】端点：header 模板 + 数据文本目录 A/B 的报表核对批次。
- * 提交 / 单作业摘要 / 三分区结果分页（section=header|footer|data）/ 差异CSV / 批次详情 Excel。
+ * 【自定义格式对比】端点：非传统结构化文本（一段段报文，如 MT950）按用户指定的
+ * 段起止匹配式 + 主键提取式做段解析与匹配的对比批次。
+ * 提交 / 单作业摘要 / 段结果分页（section=segment，zone=all|equal|diff|unmatched_a|unmatched_b）/ 差异CSV。
  */
 @RestController
 @RequestMapping("/api")
-public class ReportCompareController {
+public class CustomCompareController {
     private final JobStore store;
-    private final ReportCompareService service;
+    private final CustomCompareService service;
     private final AppPaths paths;
 
-    public ReportCompareController(JobStore store, ReportCompareService service, AppPaths paths) {
+    public CustomCompareController(JobStore store, CustomCompareService service, AppPaths paths) {
         this.store = store;
         this.service = service;
         this.paths = paths;
     }
 
-    /** 提交报表对比批次：模板路径（目录或 .header 文件） + 数据文本路径 A/B。 */
-    @PostMapping("/report-compare")
+    /**
+     * 提交自定义格式对比批次：文本路径 A/B（目录按文件名配对，或单文件）
+     * + 段起始/结束匹配式 + 主键提取式（均为正则；结束式与主键式可空）。
+     */
+    @PostMapping("/custom-compare")
     public Map<String, Object> submit(@RequestBody Map<String, Object> body) throws Exception {
-        String templatePath = str(body.get("template_path"));
-        if (templatePath == null || templatePath.isBlank()) templatePath = str(body.get("template_dir"));
-        String dirA = str(body.get("dir_a"));
-        String dirB = str(body.get("dir_b"));
-        if (dirA == null || dirB == null) throw new IllegalArgumentException("缺少 dir_a / dir_b");
-        var batch = service.submit(templatePath == null || templatePath.isBlank() ? null : Path.of(templatePath),
-                Path.of(dirA), Path.of(dirB), str(body.get("label")));
+        String pa = str(body.get("dir_a"));
+        String pb = str(body.get("dir_b"));
+        if (pa == null || pa.isBlank() || pb == null || pb.isBlank()) {
+            throw new IllegalArgumentException("缺少 dir_a / dir_b");
+        }
+        CustomFormat cfg = CustomFormat.of(str(body.get("start_pattern")),
+                str(body.get("end_pattern")), str(body.get("key_pattern")));
+        var batch = service.submit(Path.of(pa), Path.of(pb), str(body.get("label")), cfg);
         List<String> ids = store.listJobs(batch.id).stream().map(j -> j.id).toList();
         return Map.of("batch_id", batch.id, "job_ids", ids);
     }
 
-    /**
-     * 上传模式：A/B 两侧报表文件（可选附 .header 模板）落盘
-     * {@code uploads/reportcmp/{id}/A|B|tpl}（保留原文件名以便按名配对），返回目录路径供 /report-compare 引用。
-     */
-    @PostMapping("/report-compare/upload")
+    /** 上传模式：A/B 两侧文本文件落盘 {@code uploads/customcmp/{id}/A|B}（保留原文件名配对）。 */
+    @PostMapping("/custom-compare/upload")
     public Map<String, Object> upload(@RequestParam(value = "files_a", required = false) List<MultipartFile> filesA,
-                                      @RequestParam(value = "files_b", required = false) List<MultipartFile> filesB,
-                                      @RequestParam(value = "files_tpl", required = false) List<MultipartFile> filesTpl)
+                                      @RequestParam(value = "files_b", required = false) List<MultipartFile> filesB)
             throws IOException {
-        if ((filesA == null || filesA.isEmpty()) && (filesB == null || filesB.isEmpty())) {
-            throw new IllegalArgumentException("请至少上传 A / B 两侧报表文件");
+        if (filesA == null || filesA.isEmpty() || filesB == null || filesB.isEmpty()) {
+            throw new IllegalArgumentException("请上传 A / B 两侧文本文件");
         }
         String id = UUID.randomUUID().toString().substring(0, 8);
-        Path root = paths.baseDir().resolve("uploads").resolve("reportcmp").resolve(id);
+        Path root = paths.baseDir().resolve("uploads").resolve("customcmp").resolve(id);
         Path dirA = save(filesA, root.resolve("A"));
-        Path dirB = filesB == null || filesB.isEmpty() ? root.resolve("B") : save(filesB, root.resolve("B"));
-        Path dirTpl = filesTpl == null || filesTpl.isEmpty() ? null : save(filesTpl, root.resolve("tpl"));
+        Path dirB = save(filesB, root.resolve("B"));
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("dir_a", dirA.toString());
         out.put("dir_b", dirB.toString());
-        out.put("template_dir", dirTpl == null ? "" : dirTpl.toString());
         return out;
     }
 
@@ -95,19 +93,16 @@ public class ReportCompareController {
         return dir;
     }
 
-    /** 单报表作业摘要（含 ReportSummary：条数/分区差异/匹配统计/条数核对）。 */
-    @GetMapping("/report-jobs/{id}/summary")
+    /** 单作业摘要（含 CustomSummary：段数/匹配统计/主键未命中/残行/配置回显）。 */
+    @GetMapping("/custom-jobs/{id}/summary")
     public Map<String, Object> summary(@PathVariable String id) {
         Map<String, Object> out = service.summaryView(require(id).id);
         if (out == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "作业不存在: " + id);
         return out;
     }
 
-    /**
-     * 结果分页：section=header|footer|data（缺省全部）；zone=all|equal|diff|unmatched；
-     * q 按行标识模糊过滤。
-     */
-    @GetMapping("/report-jobs/{id}/result")
+    /** 段结果分页：zone=all|equal|diff|unmatched_a|unmatched_b；q 按主键模糊过滤。 */
+    @GetMapping("/custom-jobs/{id}/result")
     public Map<String, Object> result(@PathVariable String id,
                                       @RequestParam(required = false) String section,
                                       @RequestParam(required = false) String zone,
@@ -126,34 +121,18 @@ public class ReportCompareController {
         return Map.of("rows", ApiViews.rowViews(page.rows()), "total", page.total());
     }
 
-    /** 单报表差异 CSV：仅单侧不匹配 + 行部分匹配（部分匹配一条差异栏位一行）。 */
-    @GetMapping("/report-jobs/{id}/export")
+    /** 差异 CSV：仅有差异段（一条差异行一行）与单侧段（整段一条）。 */
+    @GetMapping("/custom-jobs/{id}/export")
     public ResponseEntity<byte[]> exportJob(@PathVariable String id) {
         JobRecord job = require(id);
-        Path dir = tmpDir().resolve("reportjob_" + id + "_" + System.nanoTime());
-        Path out = dir.resolve(exportBase(job) + "_报表差异.csv");
+        Path dir = tmpDir().resolve("customjob_" + id + "_" + System.nanoTime());
+        Path out = dir.resolve(exportBase(job) + "_段差异.csv");
         List<RowDiff> rows = new ArrayList<>();
         try (var stream = ResultFiles.stream(Path.of(job.resultDir).resolve(ResultFiles.RESULT_JSONL))) {
             stream.forEach(rows::add);
         }
-        ReportSummary s = service.readSummary(Path.of(job.resultDir));
-        List<String> names = s == null || s.fieldNames == null ? List.of() : s.fieldNames;
-        boolean folded = s != null && s.controlFormat;
-        ReportDiffCsv.write(out, rows, names, folded);
+        CustomDiffCsv.write(out, rows);
         return download(out, "text/csv;charset=UTF-8");
-    }
-
-    /** 批次详情 Excel：Sheet1 报表对比总览（昵称/文件名/总条数/差异统计），Sheet2 差异明细。 */
-    @GetMapping("/report-batches/{id}/export-detail")
-    public ResponseEntity<byte[]> exportBatchDetail(@PathVariable String id) {
-        var batch = store.getBatch(id);
-        if (batch == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "批次不存在: " + id);
-        List<JobRecord> jobs = store.listJobs(id);
-        if (jobs.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "无可导出的子作业");
-        Path dir = tmpDir().resolve("reportdetail_" + id + "_" + System.nanoTime());
-        Path out = dir.resolve("报表批次明细_" + id + ".xlsx");
-        ReportDetailExcel.write(out, jobs);
-        return download(out, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     }
 
     // ---- helpers ----
@@ -204,8 +183,8 @@ public class ReportCompareController {
     private JobRecord require(String id) {
         JobRecord job = store.getJob(id);
         if (job == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "作业不存在: " + id);
-        if (!ReportCompareService.JOB_TYPE.equals(job.jobType)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "非报表对比作业: " + id);
+        if (!CustomCompareService.JOB_TYPE.equals(job.jobType)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "非自定义格式对比作业: " + id);
         }
         return job;
     }

@@ -12,6 +12,9 @@ public final class ReportSummary {
     public long headerLineDiff, footerLineDiff;
     /** 业务行匹配统计：完全相等 / 部分匹配（排序后相似配对、有字段差异）/ 单侧不匹配。 */
     public long equal, partial, onlyA, onlyB;
+    /** 控制行版式（1@OD@| 自分区）标识；foldLines = 折行记录的物理行数（非折行 = 1）。 */
+    public boolean controlFormat;
+    public long foldLines;
     /** 条数核对：表尾声明条数 vs 程序计数（按侧按段）。 */
     public List<CountCheck> countChecks = new ArrayList<>();
     /** 业务行栏位名（铺底映射优先，供差异展示）。 */
