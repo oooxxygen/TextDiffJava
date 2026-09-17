@@ -41,6 +41,7 @@ final class ApiViews {
         m.put("locked", job.locked);
         m.put("starred", job.starred);
         m.put("key_warning", job.keyWarning);
+        m.put("job_type", job.jobType == null || job.jobType.isEmpty() ? "file" : job.jobType);
 
         CompareConfig cfg = Rules.parseLegacy(job.configLine,
                 ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
@@ -86,6 +87,8 @@ final class ApiViews {
         b.put("created_at", batch.createdAt);
         b.put("label", batch.label);
         b.put("locked", batch.locked);
+        b.put("batch_type", batch.batchType == null || batch.batchType.isEmpty() ? "file" : batch.batchType);
+        b.put("template_dir", batch.templateDir);
         b.put("no_rule_files", batch.noRuleFiles == null ? List.of() : batch.noRuleFiles);
         m.put("batch", b);
         m.put("status", status);

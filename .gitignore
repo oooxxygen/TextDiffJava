@@ -10,3 +10,5 @@ acceptance-run/
 
 server.log
 build2/
+acceptance-run-rc/
+debug.log

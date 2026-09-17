@@ -146,6 +146,7 @@ public final class TaskManager implements AutoCloseable {
     /** JobManager 完成回调：登记两条默认任务（差异 CSV 导出 + AI 分析）并执行。 */
     public void registerDefaults(JobRecord job) {
         if (!JobRecord.DONE.equals(job.status)) return;
+        if (com.textdiff.report.ReportCompareService.JOB_TYPE.equals(job.jobType)) return; // 报表对比不衍生 AI/CSV 任务
         if (!tasks.listForJob(job.id).isEmpty()) return; // 重新触发时避免重复登记
         for (TaskRecord t : createDefaults(job)) enqueue(t);
     }

@@ -71,6 +71,13 @@ INCT0101:01A***0*.v01:KEYSEQ=3/4/5:OMITSEQ=1/2/10:DELIM= | :ENCA=auto:SRCA=A:TRA
   - 评议 note（对主键标注说明）、全局搜索、锁定、标签、重跑；
   - **AI 分析面板**：查看/重新生成分析、下载 prompt.md、导出；
   - 导出按钮（全量 CSV / 差异 CSV）。
+- **报表对比**（基于 header 模板的报表核对，独立页签）：
+  - 提交：模板路径（目录，含 `<文件名去扩展名>.header`；留空则在数据目录旁查找）+ 数据文本路径 A/B；两目录按文件名配对非 header 文件，昵称取列名映射（`#BANKNO` 类占位符按通配匹配）；
+  - 结构解析：一份报表文件可含多个报表段（每段 = 固定表头 + 业务内容 + 表尾），模板骨架自动划区；表头、表尾作为独立差异分区展示；
+  - 排序对比：业务内容无主键——双侧各按「全字段排序键」排序后归并，整行相等即匹配（免疫写入乱序）；归并剩余行按字段级相似度（≥0.6）配对为**部分匹配**（逐差异栏位展示），其余为**单侧不匹配**；
+  - 结果页摘要：总条数（程序计数）、报表段数、表头/表尾差异行、完全匹配/部分匹配/仅A/仅B、条数核对（表尾声明条数 vs 实计，不符红色提示）；
+  - 导出：批次明细 Excel（`GET /api/report-batches/{id}/export-detail`，Sheet1 对比总览=昵称/文件名/总条数/差异统计/条数核对，Sheet2 差异明细）；单报表差异 CSV（`GET /api/report-jobs/{id}/export`，仅单侧不匹配 + 行部分匹配）；
+  - 报表对比不产生 AI 分析与差异导出任务（无需 AI 分析差异栏位）。
 - **文本拆分**：Python 版遗留能力，当前未实现（端点 501）。
 
 ## 五、列名映射导入（源系统字段配置）
@@ -139,6 +146,9 @@ JSONL 文件层始终是事实来源；H2 仅尽力镜像，损坏自动重建�
 | 方法 + 路径 | 说明 |
 |---|---|
 | POST `/api/compare` `/api/batch-compare` `/api/upload` | 单文件 / 目录批次 / 上传对比 |
+| POST `/api/report-compare` | 报表对比批次（模板路径 + 数据文本路径 A/B） |
+| GET `/api/report-jobs/{id}/summary` `/api/report-jobs/{id}/result` | 报表作业摘要 / 三分区结果分页（section=header\|footer\|data） |
+| GET `/api/report-jobs/{id}/export` `/api/report-batches/{id}/export-detail` | 报表差异 CSV / 报表批次明细 Excel |
 | GET `/api/joblist` `/api/batches/{id}` | 作业列表 / 批次子作业 |
 | GET `/api/jobs/{id}/meta` `/api/jobs/{id}/result` | 结果元信息 / 分区分页读取（q + note 过滤） |
 | POST `/api/jobs/{id}/rerun` `/cancel` `/retry` `/label` `/lock` `/star` `/notes` | 作业操作 |

@@ -9,6 +9,9 @@ public final class Status {
 
     public static final String SECTION_DATA = "data";
     public static final String SECTION_TRAILER = "trailer";
+    /** 报表对比扩展分区（文件对比不产生）。 */
+    public static final String SECTION_HEADER = "header";
+    public static final String SECTION_FOOTER = "footer";
 
     private Status() {}
 }

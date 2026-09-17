@@ -35,6 +35,10 @@ public final class JobRecord {
     public boolean locked;
     /** 收藏星标。 */
     public boolean starred;
+    /** 作业类型：null/"file" = 文件对比；"report" = 报表对比（模板核对）。 */
+    public String jobType;
+    /** 报表对比：header 模板文件路径（文件对比为 null）。 */
+    public String templateFile;
 
     public JobRecord() {}
 

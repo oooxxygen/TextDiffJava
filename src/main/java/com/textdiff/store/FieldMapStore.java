@@ -166,7 +166,7 @@ public final class FieldMapStore implements AutoCloseable {
     }
 
     /** 通配匹配：* / *** 任意串，? 单字符；其余字符按字面（大小写不敏感）。 */
-    static boolean globMatches(String pattern, String name) {
+    public static boolean globMatches(String pattern, String name) {
         if (pattern == null || pattern.isBlank()) return false;
         StringBuilder re = new StringBuilder();
         for (char c : pattern.toLowerCase().toCharArray()) {

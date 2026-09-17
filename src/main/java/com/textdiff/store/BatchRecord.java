@@ -15,6 +15,10 @@ public final class BatchRecord {
     public boolean locked;
     /** dirA 中未被任何配置 glob 命中的文件名（提交时算好存档）。 */
     public java.util.List<String> noRuleFiles;
+    /** 批次类型：null/"file" = 文件对比；"report" = 报表对比。 */
+    public String batchType;
+    /** 报表对比：模板目录（文件对比为 null）。 */
+    public String templateDir;
 
     public BatchRecord() {}
 

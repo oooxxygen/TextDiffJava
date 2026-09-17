@@ -2119,9 +2119,330 @@ const SplitResultView = {
   <div v-else class="empty">加载中…</div>`,
 };
 
+/* ---------- 报表对比（header 模板核对） ---------- */
+const REPORT_STATUS = { pending: "待开始", running: "进行中", done: "已完成", error: "失败", stopped: "已终止" };
+
+/* 报表行渲染：业务行按栏位双栏对照（差异栏位字符级高亮），表头/表尾整行对照。 */
+const ReportRowRec = {
+  props: ["row", "sourceA", "sourceB"],
+  setup(props) {
+    const isOpen = ref(false);
+    const toggle = () => { isOpen.value = !isOpen.value; };
+    const maxLen = computed(() => Math.max((props.row.a_cols || []).length, (props.row.b_cols || []).length, 1));
+    const isLine = computed(() => maxLen.value === 1); // 表头/表尾整行对照
+    const diffSet = computed(() => new Set(props.row.diff_cols || []));
+    function segs(side, i, val) {
+      if (!diffSet.value.has(i)) return [{ text: val || "", cls: "" }];
+      const a = (props.row.a_cols || [])[i] || "";
+      const b = (props.row.b_cols || [])[i] || "";
+      return segments(side === "a" ? a : b, computeOpcodes(a, b), side);
+    }
+    function statusLabel(s) {
+      const a = props.sourceA || "A", b = props.sourceB || "B";
+      return { equal: "完全匹配", diff: "部分匹配", unmatched_a: "仅" + a + "有", unmatched_b: "仅" + b + "有" }[s] || s;
+    }
+    return { isOpen, toggle, maxLen, isLine, diffSet, segs, statusLabel };
+  },
+  template: `
+  <div class="rec" :class="['s-' + row.status, isOpen ? 'open' : '']">
+    <div class="rec-head" @click="toggle">
+      <span class="caret">▶</span>
+      <span class="key">{{ row.key }}</span>
+      <span class="tag" :class="row.status">{{ statusLabel(row.status) }}</span>
+      <span class="meta" v-if="row.status==='diff' && row.diff_cols && row.diff_cols.length">差异栏位: {{ row.diff_cols.map(c=>c+1).join(', ') }}</span>
+    </div>
+    <div class="rec-body" v-if="isOpen">
+      <div class="recgrid">
+        <div class="ghdr">{{ sourceA || 'A' }}<span class="absent-note" v-if="!row.a_cols"> · 无此行</span></div>
+        <div class="ghdr">{{ sourceB || 'B' }}<span class="absent-note" v-if="!row.b_cols"> · 无此行</span></div>
+        <template v-for="i in maxLen" :key="i">
+          <div class="gcell" :class="{ diff: diffSet.has(i-1) }">
+            <span class="ci" v-if="!isLine">{{ i }}</span>
+            <span class="cv"><span v-for="(s,si) in segs('a', i-1, (row.a_cols||[])[i-1]||'')" :key="si" :class="s.cls">{{ s.text }}</span></span>
+          </div>
+          <div class="gcell" :class="{ diff: diffSet.has(i-1) }">
+            <span class="ci" v-if="!isLine">{{ i }}</span>
+            <span class="cv"><span v-for="(s,si) in segs('b', i-1, (row.b_cols||[])[i-1]||'')" :key="si" :class="s.cls">{{ s.text }}</span></span>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>`,
+};
+
+/* 报表分区面板：懒加载分页读取某一 section/zone。 */
+const ReportZone = {
+  components: { ReportRowRec },
+  props: ["jobId", "section", "zone", "title", "tone", "defaultOpen", "sourceA", "sourceB"],
+  setup(props) {
+    const open = ref(!!props.defaultOpen);
+    const rows = ref([]); const total = ref(0);
+    const page = ref(1); const pageSize = ref(20);
+    const loading = ref(false);
+    async function loadPage(p) {
+      loading.value = true;
+      try {
+        const off = (p - 1) * pageSize.value;
+        const r = await api(`/api/report-jobs/${props.jobId}/result?section=${props.section}&zone=${props.zone}&offset=${off}&limit=${pageSize.value}`);
+        rows.value = r.rows || []; total.value = r.total || 0; page.value = p;
+      } catch (e) {} finally { loading.value = false; }
+    }
+    function ensureOpen() { if (open.value && !rows.value.length && !loading.value) loadPage(1); }
+    function toggle() { open.value = !open.value; if (open.value) ensureOpen(); }
+    const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
+    return { open, toggle, ensureOpen, rows, total, page, totalPages, loadPage, loading };
+  },
+  template: `
+  <div class="zone" :class="tone">
+    <div class="zone-head" @click="toggle">
+      <span class="bar"></span><span class="title">{{ title }}</span>
+      <span class="count">{{ total }}</span>
+      <span class="caret2">{{ open ? '▾' : '▸' }}</span>
+    </div>
+    <div class="zone-body" v-if="open">
+      <div class="empty" v-if="!loading && !rows.length">（无记录）</div>
+      <ReportRowRec v-for="r in rows" :key="r.key + r.status" :row="r" :sourceA="sourceA" :sourceB="sourceB" />
+      <div class="zone-pager" v-if="total > pageSize" @click.stop>
+        <button class="mini-btn" :disabled="page<=1" @click="loadPage(page-1)">上一页</button>
+        <span>{{ page }} / {{ totalPages }}</span>
+        <button class="mini-btn" :disabled="page>=totalPages" @click="loadPage(page+1)">下一页</button>
+      </div>
+    </div>
+  </div>`,
+};
+
+/* 【报表对比】首页：提交（模板路径 + 数据文本路径 A/B）+ 报表批次列表。 */
+const ReportPage = {
+  emits: ["open-batch"],
+  setup(props, { emit }) {
+    const form = reactive({ template_dir: "", dir_a: "", dir_b: "", label: "" });
+    const busy = ref(false); const err = ref("");
+    const batches = ref([]); let timer = null;
+    async function load() {
+      try {
+        const r = await api("/api/joblist");
+        batches.value = (r.batches || []).filter(b => (b.batch || {}).batch_type === "report");
+      } catch (e) {}
+      timer = setTimeout(load, 3000);
+    }
+    onMounted(load);
+    async function submit() {
+      err.value = "";
+      if (!form.dir_a || !form.dir_b) { err.value = "请填写数据文本路径 A / B（模板路径留空时使用数据目录旁的 <文件名>.header）"; return; }
+      busy.value = true;
+      try {
+        const r = await jpost("/api/report-compare", {
+          template_dir: form.template_dir || null, dir_a: form.dir_a, dir_b: form.dir_b, label: form.label || null,
+        });
+        form.label = "";
+        emit("open-batch", r.batch_id);
+      } catch (e) { err.value = e.message; } finally { busy.value = false; }
+    }
+    return { form, busy, err, batches, submit, fmtTime,
+             baseName: (p) => (p || "").split(/[\\/]/).pop() };
+  },
+  template: `
+  <div>
+    <div class="card">
+      <div class="card-head">🧾 新建报表对比（基于 header 模板核对）</div>
+      <div class="card-body">
+        <div class="form-grid" style="grid-template-columns: 1fr;">
+          <label>模板路径（目录，含 &lt;文件名去扩展名&gt;.header；留空则在数据目录旁查找模板）
+            <input v-model="form.template_dir" placeholder="如 O:\\Data\\templates" spellcheck="false" />
+          </label>
+          <label>数据文本路径 A（旧）
+            <input v-model="form.dir_a" placeholder="如 O:\\CodeRepos\\ExampleData" spellcheck="false" />
+          </label>
+          <label>数据文本路径 B（新）
+            <input v-model="form.dir_b" placeholder="如 O:\\Data\\reports_new" spellcheck="false" />
+          </label>
+          <label>批次标签（可选）
+            <input v-model="form.label" placeholder="如 2026-07-10 夜批量核对" />
+          </label>
+        </div>
+        <div class="btn-row" style="margin-top:10px;">
+          <button class="btn primary" :disabled="busy" @click="submit">{{ busy ? '提交中…' : '开始报表核对' }}</button>
+          <span class="count" style="align-self:center;">两目录按文件名配对非 header 文件；昵称取列名映射（#占位符通配）</span>
+        </div>
+        <div class="error-box" v-if="err">{{ err }}</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">📋 报表对比批次</div>
+      <div class="empty" v-if="!batches.length">暂无报表对比批次</div>
+      <div class="job-row" v-for="b in batches" :key="b.batch.batch_id" @click="$emit('open-batch', b.batch.batch_id)">
+        <span class="nick-badge">报表对比</span>
+        <span class="jid">{{ b.batch.batch_id }}</span>
+        <span v-if="b.batch.label" class="group-badge">🏷 {{ b.batch.label }}</span>
+        <span class="badge-status" :class="b.status">{{ REPORT_STATUS[b.status] || b.status }}</span>
+        <span class="count">文件 {{ b.total_files }} · 有差异 {{ b.diff_files }} · 完成 {{ b.done }} · {{ fmtTime(b.batch.created_at) }}</span>
+      </div>
+    </div>
+  </div>`,
+};
+
+/* 报表批次详情：总览 + 子作业（昵称/文件名/条数/差异统计）+ 导出明细 Excel。 */
+const ReportBatchView = {
+  emits: ["open", "back"],
+  props: ["batchId"],
+  setup(props, { emit }) {
+    const ov = ref(null); const q = ref(""); let timer = null; let stopped = false;
+    async function load() {
+      if (stopped) return;
+      try {
+        ov.value = await api("/api/batches/" + props.batchId);
+        const running = (ov.value.children || []).some(c => c.status === "pending" || c.status === "running");
+        if (running) timer = setTimeout(load, 2000);
+      } catch (e) {}
+    }
+    onMounted(load);
+    const children = computed(() => {
+      const ql = q.value.trim().toLowerCase();
+      let list = (ov.value && ov.value.children) || [];
+      return !ql ? list : list.filter(c =>
+        ((c.label || "") + baseName2(c.file_a)).toLowerCase().includes(ql));
+    });
+    const exportHref = computed(() => "/api/report-batches/" + props.batchId + "/export-detail");
+    function baseName2(p) { return (p || "").split(/[\\/]/).pop(); }
+    return { ov, q, children, exportHref, fmtTime, baseName: baseName2,
+             open: (id) => emit("open", id), goBack: () => emit("back") };
+  },
+  template: `
+  <div v-if="ov">
+    <div style="margin-bottom:12px;">
+      <button class="btn ghost" @click="goBack">← 返回</button>
+    </div>
+    <div class="card">
+      <div class="card-head">🧾 报表对比批次 · {{ ov.batch.batch_id }}
+        <span class="group-badge" v-if="ov.batch.label" style="margin-left:6px;">🏷 {{ ov.batch.label }}</span>
+        <span class="badge-status" :class="ov.status">{{ REPORT_STATUS[ov.status] || ov.status }}</span>
+        <a class="mini-btn" style="margin-left:auto;" :href="exportHref"
+           title="Sheet1 报表对比总览（昵称/文件名/总条数/差异统计/条数核对），Sheet2 差异明细">⬇ 导出明细 Excel</a>
+      </div>
+      <div class="card-body">
+        <div class="summary-metrics">
+          <div class="metric total"><div class="num">{{ ov.total_files }}</div><div class="lbl">报表数</div></div>
+          <div class="metric diff"><div class="num">{{ ov.diff_files }}</div><div class="lbl">存在差异</div></div>
+          <div class="metric"><div class="num">{{ ov.done }}</div><div class="lbl">已完成</div></div>
+        </div>
+        <div style="margin-top:12px;font-size:12px;color:var(--text-soft);">
+          A：{{ ov.batch.dir_a }}<br/>B：{{ ov.batch.dir_b }}<br/>{{ ov.batch.config_source }}
+        </div>
+        <div v-if="ov.batch.no_rule_files && ov.batch.no_rule_files.length" class="no-rule" style="margin-top:10px;">
+          ⚠ 未配对（B 侧无同名文件）：{{ ov.batch.no_rule_files.join('、') }}
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">📄 报表核对结果（点击查看单报表详情）</div>
+      <div class="card-body" style="padding:12px 18px;">
+        <div class="field"><input v-model="q" placeholder="🔎 按昵称 / 文件名模糊搜索" /></div>
+      </div>
+      <div>
+        <div class="empty" v-if="!children.length">无匹配报表</div>
+        <div class="job-row" v-for="c in children" :key="c.job_id" @click="open(c.job_id)">
+          <span class="nick-badge">{{ (c.config||{}).nickname || c.label }}</span>
+          <span class="jid">{{ baseName(c.file_a) }}</span>
+          <span class="badge-status" :class="c.status">{{ REPORT_STATUS[c.status] || c.status }}</span>
+          <span v-if="c.error" class="count" style="color:var(--diff-bar);" :title="c.error">✗ {{ c.error }}</span>
+          <span class="count" v-else-if="c.summary">
+            条数 {{ c.summary.equal + c.summary.diff + c.summary.only_a }}↔{{ c.summary.equal + c.summary.diff + c.summary.only_b }} ·
+            匹配 {{ c.summary.equal }} · 部分匹配 <b style="color:var(--diff-bar)">{{ c.summary.diff }}</b> ·
+            仅A {{ c.summary.only_a }} / 仅B {{ c.summary.only_b }}
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div v-else class="loading">加载中…</div>`,
+};
+
+/* 报表结果页：摘要卡（条数/表头表尾/匹配统计/条数核对）+ 三分区（表头 / 业务内容 / 表尾）。 */
+const ReportResultView = {
+  components: { ReportZone },
+  emits: ["back"],
+  props: ["jobId"],
+  setup(props, { emit }) {
+    const sum = ref(null); let timer = null;
+    async function load() {
+      try {
+        sum.value = await api(`/api/report-jobs/${props.jobId}/summary`);
+        const st = sum.value.status;
+        if (st === "pending" || st === "running") timer = setTimeout(load, 2000);
+      } catch (e) {}
+    }
+    onMounted(load);
+    const s = computed(() => (sum.value && sum.value.summary) || null);
+    const fileName = (p) => (p || "").split(/[\\/]/).pop();
+    const countCheckText = computed(() => {
+      if (!s.value || !s.value.count_checks || !s.value.count_checks.length) return [];
+      return s.value.count_checks.map(c =>
+        `${c.side}侧 段${c.section + 1}：声明 ${c.declared == null ? '—' : c.declared} / 实计 ${c.counted}` + (c.match ? ' ✓' : ' ✗ 不符'));
+    });
+    const exportHref = computed(() => `/api/report-jobs/${props.jobId}/export`);
+    return { sum, s, fileName, countCheckText, exportHref, goBack: () => emit("back") };
+  },
+  template: `
+  <div v-if="sum">
+    <div style="margin-bottom:12px;">
+      <button class="btn ghost" @click="goBack">← 返回批次</button>
+      <a class="mini-btn" style="margin-left:8px;" :href="exportHref"
+         title="仅导出单侧不匹配 + 行部分匹配（部分匹配一条差异栏位一行）">⬇ 导出差异 CSV</a>
+    </div>
+    <div class="card" v-if="sum.status === 'error'">
+      <div class="card-head">❌ 对比失败</div>
+      <div class="card-body"><div class="error-box">{{ sum.error }}</div></div>
+    </div>
+    <template v-else>
+      <div class="card">
+        <div class="card-head">🧾 {{ sum.label }}
+          <span class="jid" style="margin-left:6px;">{{ fileName(sum.file_a) }} ↔ {{ fileName(sum.file_b) }}</span>
+          <span class="badge-status" :class="sum.status">{{ REPORT_STATUS[sum.status] || sum.status }}</span>
+        </div>
+        <div class="card-body" v-if="s">
+          <div class="summary-metrics">
+            <div class="metric total"><div class="num">{{ s.row_count_a }}</div><div class="lbl">总条数 A（程序计数）</div></div>
+            <div class="metric total"><div class="num">{{ s.row_count_b }}</div><div class="lbl">总条数 B（程序计数）</div></div>
+            <div class="metric diff"><div class="num">{{ s.header_line_diff }}</div><div class="lbl">表头差异行</div></div>
+            <div class="metric diff"><div class="num">{{ s.footer_line_diff }}</div><div class="lbl">表尾差异行</div></div>
+            <div class="metric"><div class="num">{{ s.equal }}</div><div class="lbl">完全匹配</div></div>
+            <div class="metric diff"><div class="num">{{ s.partial }}</div><div class="lbl">部分匹配</div></div>
+            <div class="metric only"><div class="num">{{ s.only_a }}</div><div class="lbl">仅A有</div></div>
+            <div class="metric only"><div class="num">{{ s.only_b }}</div><div class="lbl">仅B有</div></div>
+          </div>
+          <div style="margin-top:10px;font-size:12px;color:var(--text-soft);">
+            报表段数 A/B：{{ s.section_count_a }} / {{ s.section_count_b }}
+            <span v-if="s.field_names && s.field_names.length" style="margin-left:12px;">加工字段（铺底）：{{ s.field_names.join('、') }}</span>
+          </div>
+          <div v-if="countCheckText.length" style="margin-top:10px;font-size:12px;">
+            <div style="font-weight:600;margin-bottom:4px;">条数核对（表尾声明 vs 程序计数）</div>
+            <div v-for="(t,i) in countCheckText" :key="i"
+                 :style="t.includes('✗') ? 'color:var(--diff-bar)' : 'color:var(--text-soft)'">{{ t }}</div>
+          </div>
+          <div v-if="s.warnings && s.warnings.length" class="no-rule" style="margin-top:10px;">
+            ⚠ 解析提示：{{ s.warnings.join('；') }}
+          </div>
+        </div>
+      </div>
+
+      <ReportZone :job-id="jobId" section="header" zone="diff" title="表头差异（含仅单侧存在的段）" tone="diff"
+                  :default-open="true" sourceA="A" sourceB="B" :key="'h' + jobId" />
+      <ReportZone :job-id="jobId" section="footer" zone="diff" title="表尾差异" tone="diff"
+                  :default-open="true" sourceA="A" sourceB="B" :key="'f' + jobId" />
+      <ReportZone :job-id="jobId" section="data" zone="diff" title="业务内容 · 部分匹配" tone="diff"
+                  :default-open="true" sourceA="A" sourceB="B" :key="'d1' + jobId" />
+      <ReportZone :job-id="jobId" section="data" zone="unmatched" title="业务内容 · 单侧不匹配" tone="unmatched"
+                  :default-open="true" sourceA="A" sourceB="B" :key="'d2' + jobId" />
+      <ReportZone :job-id="jobId" section="data" zone="equal" title="业务内容 · 完全匹配（已按字段排序对齐）" tone="equal"
+                  :default-open="false" sourceA="A" sourceB="B" :key="'d3' + jobId" />
+    </template>
+  </div>
+  <div v-else class="loading">加载中…</div>`,
+};
+
 const App = {
   components: { SubmitForm, JobList, BatchView, ResultView, SettingsPage, SplitPage, SplitResultView,
-                TaskManagerPage },
+                TaskManagerPage, ReportPage, ReportBatchView, ReportResultView },
   setup() {
     const tab = ref("submit");
     const jobId = ref(null);
@@ -2130,6 +2451,8 @@ const App = {
     const backTab = ref(null);     // 从任务管理进入结果/批次时记录，返回按钮回到任务管理
     const resultNonce = ref(0);    // 自增令牌：即使 job_id 不变（就地重跑）也强制结果页重挂载刷新
     const splitJobId = ref(null);  // 当前查看的拆分作业
+    const reportBatchId = ref(null); // 当前查看的报表对比批次
+    const reportJobId = ref(null);   // 当前查看的报表对比作业
     const encodings = ref(["auto", "utf-8"]);
     onMounted(async () => {
       try { const r = await api("/api/encodings"); encodings.value = r.encodings; } catch (e) {}
@@ -2154,15 +2477,21 @@ const App = {
     }
     function backToJobs() { tab.value = backTab.value === "tasks" ? "tasks" : "jobs"; }
     function openSplit(id) { splitJobId.value = id; tab.value = "splitresult"; }
+    // 报表对比导航
+    function openReportBatch(id) { reportBatchId.value = id; tab.value = "reportbatch"; }
+    function openReportJob(id) { reportJobId.value = id; tab.value = "reportresult"; }
     return { tab, jobId, batchId, backBatch, backTab, resultNonce, splitJobId, encodings,
+             reportBatchId, reportJobId,
              onSubmitted, onBatched, openJob, openBatch, openChild, openJobFromTasks,
-             openBatchFromTasks, onRerun, onResultBack, backToJobs, openSplit };
+             openBatchFromTasks, onRerun, onResultBack, backToJobs, openSplit,
+             openReportBatch, openReportJob };
   },
   template: `
   <div class="app-header">
     <div class="logo"><span class="dot"></span> TextDiff</div>
     <div class="spacer"></div>
     <button class="nav-btn" :class="tab==='submit'?'active':''" @click="tab='submit'">新建对比</button>
+    <button class="nav-btn" :class="tab==='report'?'active':''" @click="tab='report'">报表对比</button>
     <button class="nav-btn" :class="tab==='split'?'active':''" @click="tab='split'">文本拆分</button>
     <button class="nav-btn" :class="(tab==='jobs'||tab==='batch')?'active':''" @click="tab='jobs'">作业列表</button>
     <button class="nav-btn" :class="tab==='tasks'?'active':''" @click="tab='tasks'">任务管理</button>
@@ -2171,6 +2500,11 @@ const App = {
   </div>
   <div class="container">
     <SubmitForm v-if="tab==='submit'" :encodings="encodings" @submitted="onSubmitted" @batched="onBatched" />
+    <ReportPage v-else-if="tab==='report'" @open-batch="openReportBatch" />
+    <ReportBatchView v-else-if="tab==='reportbatch' && reportBatchId" :batch-id="reportBatchId" :key="reportBatchId"
+                     @open="openReportJob" @back="tab='report'" />
+    <ReportResultView v-else-if="tab==='reportresult' && reportJobId" :job-id="reportJobId" :key="reportJobId"
+                      @back="tab='reportbatch'" />
     <JobList v-else-if="tab==='jobs'" @open="openJob" @open-batch="openBatch" @open-split="openSplit" />
     <TaskManagerPage v-else-if="tab==='tasks'" @open="openJobFromTasks" @open-batch="openBatchFromTasks" />
     <SplitPage v-else-if="tab==='split'" @open-split="openSplit" />

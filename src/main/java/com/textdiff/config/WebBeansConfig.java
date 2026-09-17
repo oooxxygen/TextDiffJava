@@ -68,6 +68,17 @@ public class WebBeansConfig {
         return tm;
     }
 
+    /** 报表对比服务（【报表对比】：header 模板核对批次）；作业经 JobManager.submit 路由执行。 */
+    @Bean(destroyMethod = "close")
+    public com.textdiff.report.ReportCompareService reportCompareService(
+            DualJobStore store, AppPaths paths, AppConfig cfg,
+            com.textdiff.store.FieldMapStore fieldMaps, JobManager jobManager) {
+        com.textdiff.report.ReportCompareService svc = new com.textdiff.report.ReportCompareService(
+                store, paths.resultsDir(), fieldMaps, Math.max(1, cfg.engine().maxThreads()));
+        jobManager.reportRunner = svc::run;
+        return svc;
+    }
+
     /** REST 响应统一 snake_case，对齐前端契约。 */
     @Bean
     public Jackson2ObjectMapperBuilderCustomizer snakeCaseCustomizer() {

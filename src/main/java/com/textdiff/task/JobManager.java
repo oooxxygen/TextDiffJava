@@ -50,6 +50,8 @@ public final class JobManager implements AutoCloseable {
     private final com.textdiff.store.FieldMapStore fieldMaps;
     /** 作业完成回调（任务管理器挂载点：登记差异 CSV 导出 + AI 分析两条默认生成任务）。 */
     public volatile java.util.function.Consumer<JobRecord> doneHook;
+    /** 报表对比作业执行器（ReportCompareService 挂载点；jobType=report 的作业路由到这里）。 */
+    public volatile java.util.function.Consumer<String> reportRunner;
 
     public JobManager(JobStore store, Path resultsRoot, EngineConfig engine) {
         this(store, resultsRoot, engine, null);
@@ -126,6 +128,11 @@ public final class JobManager implements AutoCloseable {
     }
 
     public synchronized void submit(JobRecord job) {
+        if (job != null && com.textdiff.report.ReportCompareService.JOB_TYPE.equals(job.jobType)) {
+            java.util.function.Consumer<String> rr = reportRunner;
+            if (rr != null) rr.accept(job.id); // 报表作业由专用执行器消费
+            return;
+        }
         if (tasks.containsKey(job.id)) return;
         tasks.put(job.id, pool.submit(() -> runJob(job.id)));
     }
@@ -241,7 +248,7 @@ public final class JobManager implements AutoCloseable {
             if (JobRecord.RUNNING.equals(job.status) || JobRecord.PENDING.equals(job.status)) {
                 job.status = JobRecord.PENDING;
                 store.saveJob(job);
-                submit(job);
+                submit(job); // 报表作业经 submit 路由到 reportRunner
             }
         }
     }
