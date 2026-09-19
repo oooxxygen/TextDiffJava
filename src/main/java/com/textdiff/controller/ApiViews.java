@@ -59,6 +59,8 @@ final class ApiViews {
             s.put("diff", meta.diff);
             s.put("only_a", meta.onlyA);
             s.put("only_b", meta.onlyB);
+            s.put("total_a", meta.totalA);
+            s.put("total_b", meta.totalB);
             m.put("summary", s);
         }
         return m;

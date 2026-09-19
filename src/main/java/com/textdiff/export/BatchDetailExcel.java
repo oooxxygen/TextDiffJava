@@ -53,17 +53,19 @@ public final class BatchDetailExcel {
         }
     }
 
-    /** Sheet1 对比总览：每表数量对比 + 对比配置。 */
+    /** Sheet1 对比总览：每表数量对比 + 状态情况/总体评判 + 对比配置。 */
     private static void sheetOverview(Workbook wb, CellStyle head, CellStyle wrap,
                                       List<JobRecord> jobs, com.textdiff.store.FieldMapStore maps) {
         Sheet sheet = wb.createSheet("对比总览");
         String[] headers = {"表名昵称", "A（旧）总数", "B（新）总数", "完全匹配",
-                "键值匹配有差异", "未匹配（仅A）", "未匹配（仅B）", "对比配置（列号+名称）"};
+                "键值匹配有差异", "未匹配（仅A）", "未匹配（仅B）", "状态情况", "总体评判", "对比配置（列号+名称）"};
         Row hr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) cell(hr, i, headers[i]).setCellStyle(head);
         sheet.setColumnWidth(0, 28 * 256);
         for (int i = 1; i <= 6; i++) sheet.setColumnWidth(i, 13 * 256);
-        sheet.setColumnWidth(7, 100 * 256);
+        sheet.setColumnWidth(7, 26 * 256);
+        sheet.setColumnWidth(8, 12 * 256);
+        sheet.setColumnWidth(9, 100 * 256);
 
         int r = 1;
         for (JobRecord job : jobs) {
@@ -77,10 +79,15 @@ public final class BatchDetailExcel {
                 cell(row, 4, s.diff);
                 cell(row, 5, s.onlyA);
                 cell(row, 6, s.onlyB);
+                DiffGrade.Grade g = DiffGrade.of(s.totalA, s.totalB);
+                cell(row, 7, g.desc());
+                cell(row, 8, g.label());
             } else {
                 for (int i = 1; i <= 6; i++) cell(row, i, "（无结果数据）");
+                cell(row, 7, "—");
+                cell(row, 8, "—");
             }
-            Cell cfg = cell(row, 7, configDesc(job, maps));
+            Cell cfg = cell(row, 9, configDesc(job, maps));
             cfg.setCellStyle(wrap);
         }
     }

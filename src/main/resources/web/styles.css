@@ -426,6 +426,13 @@ label.field { font-size: 12px; color: var(--text-soft); font-weight: 600; }
 /* 主键唯一性告警（需求：重复键醒目提示，配置需重检） */
 .badge-keywarn { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 700; background: #fff0f0; color: #d81e06; border: 1px solid #f3b6b0; cursor: help; }
 
+/* 数量偏离总体评判徽标（与导出 Excel 的状态情况/总体评判同规则） */
+.badge-grade { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 700; cursor: help; }
+.badge-grade.ok { background: var(--eq-bg); color: var(--eq-bar); }
+.badge-grade.watch { background: #fff4e0; color: #b76e00; }
+.badge-grade.mark { background: #ffe9d6; color: #c25705; }
+.badge-grade.severe { background: #fff0f0; color: #d81e06; border: 1px solid #f3b6b0; }
+
 /* ============================================================
    UI 一致性规范（全站统一交互形式）
    1) 键盘焦点可见：所有可交互元素统一 accent 焦点环
@@ -473,7 +480,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .seg button.active, .star-filter button.active { background: var(--accent); color: #fff; }
 
 /* 徽标统一形状：仅配色区分语义 */
-.badge-status, .group-badge, .nick-badge, .badge-keywarn {
+.badge-status, .group-badge, .nick-badge, .badge-keywarn, .badge-grade {
   font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; white-space: nowrap;
 }
 .nick-badge { font-family: var(--mono); background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; flex: none; }

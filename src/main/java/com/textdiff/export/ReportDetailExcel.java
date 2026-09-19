@@ -57,13 +57,16 @@ public final class ReportDetailExcel {
     private static void sheetOverview(Workbook wb, CellStyle head, List<JobRecord> jobs) {
         Sheet sheet = wb.createSheet("报表对比总览");
         String[] headers = {"报表昵称", "文件名", "总条数(A)", "总条数(B)", "报表段数(A/B)",
-                "表头差异", "表尾差异", "完全匹配", "部分匹配", "仅A有", "仅B有", "条数核对", "状态"};
+                "表头差异", "表尾差异", "完全匹配", "部分匹配", "仅A有", "仅B有", "状态情况", "总体评判", "条数核对", "状态"};
         Row hr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) cell(hr, i, headers[i]).setCellStyle(head);
         sheet.setColumnWidth(0, 24 * 256);
         sheet.setColumnWidth(1, 26 * 256);
-        for (int i = 2; i <= 11; i++) sheet.setColumnWidth(i, 12 * 256);
-        sheet.setColumnWidth(12, 10 * 256);
+        for (int i = 2; i <= 10; i++) sheet.setColumnWidth(i, 12 * 256);
+        sheet.setColumnWidth(11, 26 * 256);
+        sheet.setColumnWidth(12, 12 * 256);
+        sheet.setColumnWidth(13, 22 * 256);
+        sheet.setColumnWidth(14, 10 * 256);
 
         int r = 1;
         for (JobRecord job : jobs) {
@@ -81,12 +84,15 @@ public final class ReportDetailExcel {
                 cell(row, 8, s.partial);
                 cell(row, 9, s.onlyA);
                 cell(row, 10, s.onlyB);
-                cell(row, 11, countCheckDesc(s));
+                DiffGrade.Grade g = DiffGrade.of(s.rowCountA, s.rowCountB);
+                cell(row, 11, g.desc());
+                cell(row, 12, g.label());
+                cell(row, 13, countCheckDesc(s));
             } else {
-                for (int i = 2; i <= 11; i++) cell(row, i, JobRecord.FAILED.equals(job.status)
+                for (int i = 2; i <= 13; i++) cell(row, i, JobRecord.FAILED.equals(job.status)
                         ? "（对比失败: " + job.error + "）" : "（无结果数据）");
             }
-            cell(row, 12, job.status);
+            cell(row, 14, job.status);
         }
     }
 

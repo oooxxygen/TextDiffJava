@@ -33,6 +33,19 @@ function fmtTime(ts) {
 function srcA(cfg) { return (cfg && cfg.source_a) ? cfg.source_a : "A"; }
 function srcB(cfg) { return (cfg && cfg.source_b) ? cfg.source_b : "B"; }
 
+/* ---------- 工具：数量偏离总体评判（与导出 Excel 的 DiffGrade 同规则）----------
+   偏离率 = |totalA-totalB| / ((totalA+totalB)/2)；≥50% 严重问题、≥20% 差异明显、≥10% 保持关注 */
+function gradeOf(ta, tb) {
+  ta = ta || 0; tb = tb || 0;
+  const d = Math.abs(ta - tb), sum = ta + tb;
+  if (!sum) return { label: "正常", cls: "ok", pct: 0, diff: 0 };
+  const pct = Math.round(d * 2000 / sum) / 10; // 相对总和一半的百分比
+  if (pct >= 50) return { label: "严重问题", cls: "severe", pct, diff: d };
+  if (pct >= 20) return { label: "差异明显", cls: "mark", pct, diff: d };
+  if (pct >= 10) return { label: "保持关注", cls: "watch", pct, diff: d };
+  return { label: "正常", cls: "ok", pct, diff: d };
+}
+
 /* ---------- 全局对话框与通知：应用内统一弹层，替代原生 prompt/confirm/alert ----------
    askConfirm(message, {title, danger}) → Promise<boolean>
    askInput({title, message, value, placeholder}) → Promise<string|null>（取消返回 null）
@@ -1356,7 +1369,7 @@ const JobList = {
       } catch (e) { notify("批量删除失败: " + e.message, "error"); }
     }
 
-    return { batches, standalone, splitJobs, q, fBatches, fJobs, fSplit, fmtTime, srcA, srcB,
+    return { batches, standalone, splitJobs, q, fBatches, fJobs, fSplit, fmtTime, srcA, srcB, gradeOf,
              isReport, isCustom, openBatchEntry,
              open: (id) => emit("open", id), openBatch: (id) => emit("open-batch", id),
              openSplit: (id) => emit("open-split", id),
@@ -1418,6 +1431,7 @@ const JobList = {
           <span class="files">{{ j.file_a }} ↔ {{ j.file_b }}</span>
           <span class="group-badge" v-if="j.label" :title="j.label">🏷 {{ j.label }}</span>
           <span class="meta-time">{{ fmtTime(j.created_at) }}</span>
+          <span v-if="j.summary" class="badge-grade" :class="gradeOf(j.summary.total_a, j.summary.total_b).cls" :title="'状态情况：数量差 ' + gradeOf(j.summary.total_a, j.summary.total_b).diff + '（偏离 ' + gradeOf(j.summary.total_a, j.summary.total_b).pct + '%）'">{{ gradeOf(j.summary.total_a, j.summary.total_b).label }}</span>
           <span v-if="j.summary" class="count">匹配 {{ j.summary.equal }} · 差异 <b style="color:var(--diff-bar)">{{ j.summary.diff }}</b> · 缺失 {{ j.summary.only_a + j.summary.only_b }}（{{ srcA(j.config) }}有{{ srcB(j.config) }}无 {{ j.summary.only_a }} / {{ srcB(j.config) }}有{{ srcA(j.config) }}无 {{ j.summary.only_b }}）</span>
           <span class="lock-ico" v-if="j.locked" title="已锁定">🔒</span>
           <span class="row-actions" @click.stop>
@@ -1511,7 +1525,7 @@ const BatchView = {
             if (ov.value && ov.value.batch) ov.value.batch.label = v; }
       catch (e) { notify(e.message, "error"); }
     }
-    return { ov, q, children, baseName, nickOf, groupOf, fmtTime, srcA, srcB, sourceA, sourceB,
+    return { ov, q, children, baseName, nickOf, groupOf, fmtTime, srcA, srcB, sourceA, sourceB, gradeOf,
              starFilter, starCounts, toggleStar, groupFilter, groupOptions, exportHref, exportAllHref,
              editLabel,
              open: (id) => emit("open", id), goBack: () => emit("back") };
@@ -1576,6 +1590,7 @@ const BatchView = {
           <span class="jid">{{ baseName(c.file_a) }}</span>
           <span class="group-badge" v-if="(c.config||{}).group">{{ c.config.group }}</span>
           <span class="badge-status" :class="c.status">{{ c.status }}</span><span v-if="c.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
+          <span v-if="c.summary" class="badge-grade" :class="gradeOf(c.summary.total_a, c.summary.total_b).cls" :title="'状态情况：数量差 ' + gradeOf(c.summary.total_a, c.summary.total_b).diff + '（偏离 ' + gradeOf(c.summary.total_a, c.summary.total_b).pct + '%）'">{{ gradeOf(c.summary.total_a, c.summary.total_b).label }}</span>
           <span class="count" v-if="c.summary">匹配 {{ c.summary.equal }} · 差异 <b style="color:var(--diff-bar)">{{ c.summary.diff }}</b> · 缺失 {{ c.summary.only_a + c.summary.only_b }}（{{ srcA(c.config) }}有{{ srcB(c.config) }}无 {{ c.summary.only_a }} / {{ srcB(c.config) }}有{{ srcA(c.config) }}无 {{ c.summary.only_b }}）</span>
           <span class="lock-ico" v-if="c.locked" title="已锁定">🔒</span>
         </div>
