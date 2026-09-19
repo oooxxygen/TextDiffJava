@@ -173,4 +173,54 @@ class ReportComparatorTest {
         assertEquals(1, checks.get(0).counted);
         assertFalse(checks.get(0).match);
     }
+
+    @Test
+    void 主键模式_乱序与差异栏位() {
+        List<String> a = report("105", rows(new String[]{"A1", "B1", "C1"},
+                new String[]{"A2", "B2", "C2"}, new String[]{"A3", "B3", "C3"}), "3");
+        List<String> b = report("105", rows(new String[]{"A3", "B3", "X3"},
+                new String[]{"A1", "B1", "C1"}, new String[]{"A2", "B2", "C2"}), "3");
+        // 主键 = 第 1 列；A2/B2 恒等，A3 第 3 列差异
+        var r = ReportComparator.compare(parse(a), parse(b), List.of(),
+                java.util.List.of(0), java.util.Set.of());
+        assertEquals(2, r.summary().equal);
+        assertEquals(1, r.summary().partial);
+        assertEquals(0, r.summary().onlyA + r.summary().onlyB);
+        var diffRow = r.dataRows().stream()
+                .filter(x -> com.textdiff.engine.Status.DIFF.equals(x.status)).findFirst().orElseThrow();
+        assertEquals("A3", diffRow.key, "主键模式行标识 = 主键值");
+        assertArrayEquals(new int[]{2}, diffRow.diffCols);
+        assertEquals(java.util.List.of(0), r.summary().keyColumns);
+    }
+
+    @Test
+    void 跳过栏位_仅跳过列有差异时判等() {
+        List<String> a = report("105", rows(new String[]{"A1", "B1", "C1"},
+                new String[]{"A2", "B2", "C2"}), "2");
+        List<String> b = report("105", rows(new String[]{"A1", "B1", "ZZ"},
+                new String[]{"A2", "B2", "C2"}), "2");
+        // 整行基准（无主键），但第 3 列跳过 → 全部判等
+        var r = ReportComparator.compare(parse(a), parse(b), List.of(),
+                java.util.List.of(), java.util.Set.of(2));
+        assertEquals(2, r.summary().equal);
+        assertEquals(0, r.summary().partial);
+        assertTrue(r.summary().omitColumns.contains(2));
+        // 不跳过时同一数据应出现差异
+        var r2 = ReportComparator.compare(parse(a), parse(b), List.of());
+        assertEquals(1, r2.summary().partial);
+    }
+
+    @Test
+    void 主键缺失行_回落部分匹配() {
+        List<String> a = report("105", rows(new String[]{"A1", "B1", "C1"},
+                new String[]{"A2", "B2", "C2"}), "2");
+        List<String> b = report("105", rows(new String[]{"A1", "B1", "C1"},
+                new String[]{"A9", "B2", "C2"}), "2");
+        // 主键第 1 列：A2 与 A9 键不同 → 落入部分匹配池，按键不配对但按相似度配对成功
+        var r = ReportComparator.compare(parse(a), parse(b), List.of(),
+                java.util.List.of(0), java.util.Set.of());
+        assertEquals(1, r.summary().equal);
+        assertEquals(1, r.summary().partial);
+        assertEquals(0, r.summary().onlyA + r.summary().onlyB);
+    }
 }

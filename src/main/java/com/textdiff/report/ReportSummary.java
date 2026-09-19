@@ -19,6 +19,9 @@ public final class ReportSummary {
     public List<CountCheck> countChecks = new ArrayList<>();
     /** 业务行栏位名（铺底映射优先，供差异展示）。 */
     public List<String> fieldNames = new ArrayList<>();
+    /** 对比配置（0-based 列号）：主键列（空 = 整行对比）与跳过栏位。 */
+    public List<Integer> keyColumns = new ArrayList<>();
+    public List<Integer> omitColumns = new ArrayList<>();
     public List<String> warnings = new ArrayList<>();
 
     public static final class CountCheck {

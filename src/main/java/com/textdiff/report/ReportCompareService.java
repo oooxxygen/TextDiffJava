@@ -2,6 +2,7 @@ package com.textdiff.report;
 
 import com.textdiff.engine.Encoding;
 import com.textdiff.engine.RowDiff;
+import com.textdiff.engine.Rules;
 import com.textdiff.store.BatchRecord;
 import com.textdiff.store.FieldMapStore;
 import com.textdiff.store.FieldMaps;
@@ -59,11 +60,18 @@ public final class ReportCompareService implements AutoCloseable {
         requeueStuckJobs();
     }
 
-    /** 提交批次：按文件名配对 dirA/dirB 的非 .header 文件。 */
-    public BatchRecord submit(Path templateDir, Path dirA, Path dirB, String label) throws IOException {
+    /**
+     * 提交批次：按文件名配对 dirA/dirB 的非 .header 文件。
+     * keySeq/omitSeq = 1-based 列序串（如 "3/4/5"，空串 = 不配置）；主键空 = 整行对比。
+     */
+    public BatchRecord submit(Path templateDir, Path dirA, Path dirB, String label,
+                              String keySeq, String omitSeq) throws IOException {
         if (dirA == null || dirB == null || !Files.isDirectory(dirA) || !Files.isDirectory(dirB)) {
             throw new IllegalArgumentException("数据文本路径 A/B 必须是已存在的目录");
         }
+        // 序号在提交时解析校验（非法列序直接拒绝），持久化为 KEYSEQ/OMITSEQ 配置令牌
+        String keyToken = parseSeqToken(keySeq, "主键栏位");
+        String omitToken = parseSeqToken(omitSeq, "跳过栏位");
         List<String> namesA = listDataFiles(dirA);
         Map<String, Path> bFiles = dataFiles(dirB);
         String absA = dirA.toAbsolutePath().normalize().toString();
@@ -88,8 +96,11 @@ public final class ReportCompareService implements AutoCloseable {
             }
             Path tpl = resolveTemplate(templateDir, dirA, name);
             String nick = resolveNickname(name);
+            String configLine = nick + ":" + name
+                    + (keyToken.isEmpty() ? "" : ":KEYSEQ=" + keyToken)
+                    + (omitToken.isEmpty() ? "" : ":OMITSEQ=" + omitToken);
             JobRecord job = new JobRecord(newId(), batch.id, nick + " · " + name,
-                    nick + ":" + name,
+                    configLine,
                     Path.of(dirA.toString(), name).toAbsolutePath().normalize().toString(),
                     fb.toAbsolutePath().normalize().toString(),
                     resultsRoot.resolve(newId()).toAbsolutePath().toString());
@@ -109,6 +120,13 @@ public final class ReportCompareService implements AutoCloseable {
             submit(job);
         }
         return batch;
+    }
+
+    /** "3/4/5" 序列校验并原样返回（1-based，供 configLine KEYSEQ/OMITSEQ 令牌）；空输入返回空串。 */
+    private static String parseSeqToken(String seq, String what) {
+        if (seq == null || seq.isBlank()) return "";
+        Rules.parseSeq(seq); // 校验（非法抛 IllegalArgumentException）
+        return seq.strip();
     }
 
     public synchronized void submit(JobRecord job) {
@@ -136,6 +154,17 @@ public final class ReportCompareService implements AutoCloseable {
             ReportParser.ParsedReport pa;
             ReportParser.ParsedReport pb;
             List<String> fieldNames;
+            List<Integer> keyColumns = List.of();
+            java.util.Set<Integer> omitColumns = java.util.Set.of();
+            try {
+                // 报表配置令牌（KEYSEQ/OMITSEQ）从 configLine 解析；主键未配置 = 整行对比
+                com.textdiff.engine.CompareConfig cfg =
+                        com.textdiff.engine.Rules.parseLegacy(job.configLine, "|", "|||||");
+                keyColumns = cfg.keyColumns;
+                omitColumns = cfg.skipSet();
+            } catch (RuntimeException ignored) {
+                // 旧作业 configLine 为 昵称:文件名，解析失败按缺省整行对比
+            }
             if (ReportParser.hasControlLines(la) || ReportParser.hasControlLines(lb)) {
                 // 控制行版式（1@OD@|...，含折行/分页报表）：自分区，模板不参与
                 pa = ReportParser.parseControlFormat(la);
@@ -152,7 +181,8 @@ public final class ReportCompareService implements AutoCloseable {
                 pb = ReportParser.parse(tpl, lb);
                 fieldNames = fieldNamesFor(job);
             }
-            ReportComparator.Result result = ReportComparator.compare(pa, pb, fieldNames);
+            ReportComparator.Result result =
+                    ReportComparator.compare(pa, pb, fieldNames, keyColumns, omitColumns);
 
             Path dir = Path.of(job.resultDir);
             ResultFiles.JsonlSink sink = ResultFiles.JsonlSink.create(dir.resolve(ResultFiles.RESULT_JSONL));

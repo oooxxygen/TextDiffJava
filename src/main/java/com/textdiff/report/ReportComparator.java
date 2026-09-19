@@ -10,6 +10,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -33,6 +34,17 @@ public final class ReportComparator {
 
     /** @param fieldNames 业务行栏位名（铺底映射，可为空表；仅用于条数核对/展示语义，不参与算法） */
     public static Result compare(ParsedReport a, ParsedReport b, List<String> fieldNames) {
+        return compare(a, b, fieldNames, List.of(), Set.of());
+    }
+
+    /**
+     * 带配置的报表对比（与普通文本对比语义对齐）：
+     *  - keyColumns 非空：按主键列配对（键相同即同一记录；键列取自切分字段）；未配置 = 整行内容为基准；
+     *  - skipColumns：跳过栏位不参与相等判定/差异栏位计算（主键配置/整行基准均剔除）；
+     *  - 剩余单侧行仍做相似度部分匹配；未配对为单侧不匹配。
+     */
+    public static Result compare(ParsedReport a, ParsedReport b, List<String> fieldNames,
+                                 List<Integer> keyColumns, Set<Integer> skipColumns) {
         boolean control = a.controlFormat() || b.controlFormat();
         List<RowDiff> headerRows;
         List<RowDiff> footerRows;
@@ -47,7 +59,7 @@ public final class ReportComparator {
             footerRows = compareBlocks(a.footerBlocks(), b.footerBlocks(),
                     Status.SECTION_FOOTER, "T");
         }
-        CompareData data = compareData(a.rows(), b.rows());
+        CompareData data = compareData(a.rows(), b.rows(), keyColumns, skipColumns);
 
         ReportSummary s = new ReportSummary();
         s.sectionCountA = a.headerBlocks().size();
@@ -64,6 +76,8 @@ public final class ReportComparator {
         s.partial = data.partial;
         s.onlyA = data.onlyA;
         s.onlyB = data.onlyB;
+        s.keyColumns.addAll(keyColumns == null ? List.of() : keyColumns);
+        s.omitColumns.addAll(skipColumns == null ? List.of() : skipColumns);
         if (fieldNames != null) s.fieldNames.addAll(fieldNames);
         s.warnings.addAll(a.warnings());
         s.warnings.addAll(b.warnings());
@@ -167,11 +181,70 @@ public final class ReportComparator {
                 .map(r -> r.key.split("#", 2)[0]).distinct().count();
     }
 
-    // ---- 业务行：排序归并 + 部分匹配 ----
+    // ---- 业务行：主键/整行配对 + 部分匹配 ----
 
     private record CompareData(List<RowDiff> rows, long equal, long partial, long onlyA, long onlyB) {}
 
-    private static CompareData compareData(List<Row> ra, List<Row> rb) {
+    /**
+     * 业务行对比：
+     *  - keyColumns 非空 = 主键模式（键 = 主键列拼接）；否则整行模式（基准 = 非 skip 字段拼接，缺省即整行）；
+     *  - 基准一致的行对再比非 skip 字段：全等 equal、有差 partial（差异栏位给出）；
+     *  - 配对剩余的单侧行做相似度部分匹配，其余单侧不匹配。
+     */
+    private static CompareData compareData(List<Row> ra, List<Row> rb,
+                                           List<Integer> keyColumns, Set<Integer> skip) {
+        boolean useKey = keyColumns != null && !keyColumns.isEmpty();
+        if (!useKey && (skip == null || skip.isEmpty())) {
+            return mergeCompareData(ra, rb); // 缺省：整行排序归并（原有行为）
+        }
+        java.util.function.Function<Row, String> baseKey = useKey
+                ? (Row r) -> keyOf(r, keyColumns)
+                : (Row r) -> effKeyOf(r, skip);
+
+        List<RowDiff> out = new ArrayList<>();
+        long equal = 0;
+        long partial = 0;
+        Map<String, java.util.Deque<Row>> ga = new java.util.LinkedHashMap<>();
+        Map<String, java.util.Deque<Row>> gb = new java.util.LinkedHashMap<>();
+        List<Row> leftA = new ArrayList<>();
+        List<Row> leftB = new ArrayList<>();
+        for (Row x : ra) {
+            String k = baseKey.apply(x);
+            if (k == null) { leftA.add(x); continue; }
+            ga.computeIfAbsent(k, n -> new java.util.ArrayDeque<>()).add(x);
+        }
+        for (Row y : rb) {
+            String k = baseKey.apply(y);
+            if (k == null) { leftB.add(y); continue; }
+            gb.computeIfAbsent(k, n -> new java.util.ArrayDeque<>()).add(y);
+        }
+        for (Map.Entry<String, java.util.Deque<Row>> e : ga.entrySet()) {
+            java.util.Deque<Row> da = e.getValue();
+            java.util.Deque<Row> db = gb.get(e.getKey());
+            int n = db == null ? 0 : Math.min(da.size(), db.size());
+            for (int i = 0; i < n; i++) {
+                Row x = da.poll();
+                Row y = db.poll();
+                if (effEqual(x.fields(), y.fields(), skip)) {
+                    out.add(RowDiff.equal(keyLabel(e.getKey(), x), Status.SECTION_DATA, displayOf(x)));
+                    equal++;
+                } else {
+                    out.add(RowDiff.diff(keyLabel(e.getKey(), x), Status.SECTION_DATA,
+                            displayOf(x), displayOf(y), diffDisplay(x, y, skip)));
+                    partial++;
+                }
+            }
+            leftA.addAll(da); // 超出 B 侧条数的剩余行
+        }
+        for (java.util.Deque<Row> d : gb.values()) leftB.addAll(d);
+
+        CompareData matched = partialMatch(leftA, leftB, skip, out);
+        return new CompareData(out, equal, partial + matched.partial,
+                leftA.size() - matched.partial, leftB.size() - matched.partial);
+    }
+
+    /** 缺省整行对比：双侧各按全字段排序键归并（免疫写入乱序）+ 相似度部分匹配。 */
+    private static CompareData mergeCompareData(List<Row> ra, List<Row> rb) {
         List<Row> sa = new ArrayList<>(ra);
         List<Row> sb = new ArrayList<>(rb);
         sa.sort(Comparator.comparing(Row::sortKey));
@@ -201,11 +274,19 @@ public final class ReportComparator {
         while (i < sa.size()) leftA.add(sa.get(i++));
         while (j < sb.size()) leftB.add(sb.get(j++));
 
-        // 部分匹配：单侧剩余行之间按相似度配对（贪婪，按 A 侧排序顺序）。
-        // 倒排索引剪枝：仅对与 A 行共享同一非空字段值的 B 行打分，避免全交叉积。
+        long partial = partialMatch(leftA, leftB, Set.of(), out).partial;
+        return new CompareData(out, equal, partial, leftA.size() - partial, leftB.size() - partial);
+    }
+
+    /** 部分匹配（贪婪 + 倒排索引剪枝）：配对成功的行以 diff 追加到 out，返回配对数。 */
+    private static CompareData partialMatch(List<Row> leftA, List<Row> leftB, Set<Integer> skip,
+                                            List<RowDiff> out) {
         Map<String, List<Integer>> index = new HashMap<>();
+        List<String[]> projB = new ArrayList<>();
         for (int bj = 0; bj < leftB.size(); bj++) {
-            for (String v : leftB.get(bj).fields()) {
+            String[] pf = projected(leftB.get(bj).fields(), skip);
+            projB.add(pf);
+            for (String v : pf) {
                 if (!v.isEmpty() && v.length() <= 64) {
                     index.computeIfAbsent(v, k -> new ArrayList<>()).add(bj);
                 }
@@ -216,16 +297,17 @@ public final class ReportComparator {
         boolean[] usedB = new boolean[leftB.size()];
         List<Row> unmatchedA = new ArrayList<>();
         for (Row x : leftA) {
+            String[] pfx = projected(x.fields(), skip);
             int best = -1;
             double bestScore = 0;
             java.util.HashSet<Integer> seen = new java.util.HashSet<>();
-            for (String v : x.fields()) {
+            for (String v : pfx) {
                 List<Integer> cand = v.isEmpty() ? null : index.get(v);
                 if (cand == null) continue;
                 for (int bj : cand) {
                     if (usedB[bj] || !seen.add(bj)) continue;
                     if (++scored > SCORE_PAIR_CAP) break;
-                    double sc = similarity(x.fields(), leftB.get(bj).fields());
+                    double sc = similarity(pfx, projB.get(bj));
                     if (sc >= PARTIAL_THRESHOLD && sc > bestScore) {
                         bestScore = sc;
                         best = bj;
@@ -236,7 +318,7 @@ public final class ReportComparator {
                 usedB[best] = true;
                 Row y = leftB.get(best);
                 out.add(RowDiff.diff(rowKey(x), Status.SECTION_DATA,
-                        displayOf(x), displayOf(y), diffDisplay(x, y)));
+                        displayOf(x), displayOf(y), diffDisplay(x, y, skip)));
                 partial++;
             } else {
                 unmatchedA.add(x);
@@ -253,9 +335,55 @@ public final class ReportComparator {
                         null, displayOf(y), new int[0]));
             }
         }
-        long onlyA = leftA.size() - partial;
-        long onlyB = leftB.size() - partial;
-        return new CompareData(out, equal, partial, onlyA, onlyB);
+        return new CompareData(out, 0, partial, 0, 0);
+    }
+
+    /** 主键：主键列字段拼接（内部 0x1F）；键列越界视为无键（进入部分匹配池）。 */
+    private static String keyOf(Row r, List<Integer> keyColumns) {
+        String[] f = r.fields();
+        StringBuilder sb = new StringBuilder();
+        for (int j = 0; j < keyColumns.size(); j++) {
+            int i = keyColumns.get(j);
+            if (i < 0 || i >= f.length) return null;
+            if (j > 0) sb.append('\u001F');
+            sb.append(f[i]);
+        }
+        return sb.toString();
+    }
+
+    /** 整行模式基准：非 skip 字段拼接；无字段可用时回落原 sortKey（整行原文）。 */
+    private static String effKeyOf(Row r, Set<Integer> skip) {
+        String[] f = r.fields();
+        StringBuilder sb = new StringBuilder();
+        boolean any = false;
+        for (int i = 0; i < f.length; i++) {
+            if (skip.contains(i)) continue;
+            if (any) sb.append('\u001F');
+            sb.append(f[i]);
+            any = true;
+        }
+        return any ? sb.toString() : r.sortKey();
+    }
+
+    /** 非 skip 字段全等判定（长度不齐按空串补）。 */
+    private static boolean effEqual(String[] fa, String[] fb, Set<Integer> skip) {
+        return diffCols(fa, fb, skip).length == 0;
+    }
+
+    /** 剔除 skip 列的字段视图（部分匹配打分用）。 */
+    private static String[] projected(String[] f, Set<Integer> skip) {
+        if (skip == null || skip.isEmpty() || f == null || f.length == 0) return f;
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < f.length; i++) {
+            if (!skip.contains(i)) out.add(f[i]);
+        }
+        return out.toArray(new String[0]);
+    }
+
+    /** 行标识（主键模式）：键字段以':'连接展示；键为空回落行标识。 */
+    private static String keyLabel(String key, Row r) {
+        if (key == null || key.isEmpty()) return rowKey(r);
+        return key.replace("\u001F", ":");
     }
 
     /** 行标识：折行记录取首物理行（截 80 字符），普通行取整行去空白。 */
@@ -272,20 +400,21 @@ public final class ReportComparator {
         return r.display() != null ? r.display() : r.fields();
     }
 
-    /** 差异位置：折行记录按物理行号，普通行按栏位号。 */
-    private static int[] diffDisplay(Row x, Row y) {
+    /** 差异位置：折行记录按物理行号（skip 不适用物理行），普通行按栏位号（剔除 skip）。 */
+    private static int[] diffDisplay(Row x, Row y, Set<Integer> skip) {
         if (x.display() != null || y.display() != null) {
             return diffCols(x.display() != null ? x.display() : new String[]{x.raw()},
                     y.display() != null ? y.display() : new String[]{y.raw()});
         }
-        return diffCols(x.fields(), y.fields());
+        return diffCols(x.fields(), y.fields(), skip);
     }
 
-    /** 差异栏位号（0-based；一侧缺失的栏位也计差异）。 */
-    static int[] diffCols(String[] fa, String[] fb) {
+    /** 差异栏位号（0-based；一侧缺失的栏位也计差异；skip 栏位不比）。 */
+    static int[] diffCols(String[] fa, String[] fb, Set<Integer> skip) {
         List<Integer> cols = new ArrayList<>();
         int width = Math.max(fa.length, fb.length);
         for (int c = 0; c < width; c++) {
+            if (skip != null && skip.contains(c)) continue;
             String va = c < fa.length ? fa[c] : null;
             String vb = c < fb.length ? fb[c] : null;
             if (va == null || vb == null || !va.equals(vb)) cols.add(c);
@@ -293,6 +422,11 @@ public final class ReportComparator {
         int[] out = new int[cols.size()];
         for (int k = 0; k < out.length; k++) out[k] = cols.get(k);
         return out;
+    }
+
+    /** 差异栏位号（不跳过任何栏位）。 */
+    static int[] diffCols(String[] fa, String[] fb) {
+        return diffCols(fa, fb, Set.of());
     }
 
     /** 字段级加权平均相似度（两侧均空 = 一致；单侧空 = 0；否则 1 - 编辑距离/较长长度）。 */
