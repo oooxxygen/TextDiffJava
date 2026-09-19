@@ -54,17 +54,26 @@ public final class JobManager implements AutoCloseable {
     public volatile java.util.function.Consumer<String> reportRunner;
     /** 自定义格式对比作业执行器（CustomCompareService 挂载点；jobType=custom 的作业路由到这里）。 */
     public volatile java.util.function.Consumer<String> customRunner;
+    /** 特殊编码字段映射（可空：测试/未导入场景）。作业运行时按文件名解析混合编码栏位转码。 */
+    private final com.textdiff.store.CharsetMapStore charsetMaps;
 
     public JobManager(JobStore store, Path resultsRoot, EngineConfig engine) {
-        this(store, resultsRoot, engine, null);
+        this(store, resultsRoot, engine, null, null);
     }
 
     public JobManager(JobStore store, Path resultsRoot, EngineConfig engine,
                       com.textdiff.store.FieldMapStore fieldMaps) {
+        this(store, resultsRoot, engine, fieldMaps, null);
+    }
+
+    public JobManager(JobStore store, Path resultsRoot, EngineConfig engine,
+                      com.textdiff.store.FieldMapStore fieldMaps,
+                      com.textdiff.store.CharsetMapStore charsetMaps) {
         this.store = store;
         this.resultsRoot = resultsRoot;
         this.maxInMemoryBytes = engine.maxInMemoryBytes();
         this.fieldMaps = fieldMaps;
+        this.charsetMaps = charsetMaps;
         this.pool = Executors.newFixedThreadPool(engine.maxThreads());
         this.commandPoller = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "command-poller");
@@ -169,8 +178,10 @@ public final class JobManager implements AutoCloseable {
             }
             ResultFiles.JsonlSink sink = ResultFiles.JsonlSink.create(dir.resolve(ResultFiles.RESULT_JSONL));
             try (sink) {
+                com.textdiff.engine.FieldTranscoder transA = resolveTranscoder(job.fileA, cfg.encodingA, cfg.delimiter);
+                com.textdiff.engine.FieldTranscoder transB = resolveTranscoder(job.fileB, cfg.encodingB, cfg.delimiter);
                 CompareOutcome outcome = Comparator.compareFiles(Path.of(job.fileA), Path.of(job.fileB),
-                        cfg, sink, maxInMemoryBytes, dir.resolve("tmp"));
+                        cfg, sink, maxInMemoryBytes, dir.resolve("tmp"), transA, transB);
                 Summary s = outcome.summary();
                 job.keyWarning = s.keyDupA > 0 || s.keyDupB > 0; // 需求：主键配置错误醒目提示
                 ResultFiles.writeSummary(dir, s);
@@ -316,6 +327,27 @@ public final class JobManager implements AutoCloseable {
     private void requireJob(String jobId) {
         if (jobId == null || store.getJob(jobId) == null) {
             throw new IllegalArgumentException("作业不存在: " + jobId);
+        }
+    }
+
+    /**
+     * 特殊编码字段转码器解析：文件名 → 数据表英文名 → 列字符集映射，与文件实际解析编码绑定。
+     * 未导入映射 / 文件无对应表 / 文件编码非主机单字节字符集时返回 null（零开销路径）。
+     */
+    private com.textdiff.engine.FieldTranscoder resolveTranscoder(String filePath, String encoding,
+                                                                  String delimiter) {
+        if (charsetMaps == null || filePath == null || filePath.isBlank()) return null;
+        try {
+            String resolved = encoding == null || encoding.isBlank() || "auto".equals(encoding)
+                    ? com.textdiff.engine.Encoding.detectFile(Path.of(filePath), delimiter)
+                    : encoding;
+            String table = charsetMaps.tableForFile(filePath, fieldMaps);
+            if (table == null) return null;
+            com.textdiff.engine.FieldTranscoder t =
+                    new com.textdiff.engine.FieldTranscoder(resolved, charsetMaps.colCharsetsForTable(table));
+            return t.enabled() ? t : null;
+        } catch (Exception e) {
+            return null; // 转码解析失败不阻断对比
         }
     }
 

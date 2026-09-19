@@ -99,6 +99,17 @@ public final class Comparator {
     public static CompareOutcome compareFiles(Path pathA, Path pathB, CompareConfig config,
                                               ResultSink sink, long maxInMemoryBytes, Path tmpDir)
             throws IOException {
+        return compareFiles(pathA, pathB, config, sink, maxInMemoryBytes, tmpDir, null, null);
+    }
+
+    /**
+     * 混合编码转码版：tA/tB 非空时对应侧先做特殊编码字段转码（如 EBCDIC 内嵌 UTF-16 栏位），
+     * 再切主键、比对——主键与差异判定均基于转码后的可读文本。
+     */
+    public static CompareOutcome compareFiles(Path pathA, Path pathB, CompareConfig config,
+                                              ResultSink sink, long maxInMemoryBytes, Path tmpDir,
+                                              FieldTranscoder transA, FieldTranscoder transB)
+            throws IOException {
         Rules.RuleEngine engine = new Rules.RuleEngine(config);
         String delim = config.delimiter;
         String tp = config.trailerPrefix;
@@ -115,6 +126,7 @@ public final class Comparator {
             // 阶段 1：建 A 索引；put 前探查以捕获重复键（主键唯一性检测，需求：键应唯一定位一条记录）
             try (Stream<String> la = Encoding.iterLines(pathA, encA, delim)) {
                 for (String[] cols : Parser.parseData(la, delim, tp, trailerA)) {
+                    if (transA != null) cols = transA.apply(cols);
                     String key = engine.keyOf(cols);
                     if (key == null) { summary.malformedA++; continue; }
                     if (index.get(key) != null) {
@@ -128,6 +140,7 @@ public final class Comparator {
             // 阶段 2：流式比对 B；bKeys 仅存键集，检测 B 侧重复键
             try (Stream<String> lb = Encoding.iterLines(pathB, encB, delim)) {
                 for (String[] cols : Parser.parseData(lb, delim, tp, trailerB)) {
+                    if (transB != null) cols = transB.apply(cols);
                     String key = engine.keyOf(cols);
                     if (key == null) { summary.malformedB++; continue; }
                     if (bKeys.get(key) != null) {

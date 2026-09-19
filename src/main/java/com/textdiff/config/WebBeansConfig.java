@@ -35,10 +35,17 @@ public class WebBeansConfig {
         return new com.textdiff.store.FieldMapStore(paths.baseDir().resolve("store"), cfg.store().enabled());
     }
 
+    /** 特殊编码字段映射（混合编码栏位转码）：JSONL 事实来源 + H2 镜像。 */
+    @Bean(destroyMethod = "close")
+    public com.textdiff.store.CharsetMapStore charsetMapStore(AppPaths paths, AppConfig cfg) {
+        return new com.textdiff.store.CharsetMapStore(paths.baseDir().resolve("store"), cfg.store().enabled());
+    }
+
     @Bean(destroyMethod = "close")
     public JobManager jobManager(DualJobStore store, AppPaths paths, AppConfig cfg,
-                                 com.textdiff.store.FieldMapStore fieldMaps) {
-        return new JobManager(store, paths.resultsDir(), cfg.engine(), fieldMaps);
+                                 com.textdiff.store.FieldMapStore fieldMaps,
+                                 com.textdiff.store.CharsetMapStore charsetMaps) {
+        return new JobManager(store, paths.resultsDir(), cfg.engine(), fieldMaps, charsetMaps);
     }
 
     /** 任务管理：登记/执行作业完成后的默认生成任务（差异 CSV 导出 + AI 分析）。 */

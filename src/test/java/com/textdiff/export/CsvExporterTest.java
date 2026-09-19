@@ -75,4 +75,40 @@ class CsvExporterTest {
         assertEquals((byte) 0xBB, head[1]);
         assertEquals((byte) 0xBF, head[2]);
     }
+
+    // ---- 展示友好化（键分隔 / 长数字保真）----
+
+    @Test
+    void 组合主键显示为冒号分隔() {
+        String key = "K1" + com.textdiff.engine.Rules.KEY_SEP + "K2" + com.textdiff.engine.Rules.KEY_SEP + "K3";
+        assertEquals("K1:K2:K3", CsvExporter.displayKey(key));
+        assertEquals("普通键", CsvExporter.displayKey("普通键"));
+        assertEquals("", CsvExporter.displayKey(null));
+    }
+
+    @Test
+    void 长数字按文本公式存储() {
+        String digits30 = "123456789012345678901234567890"; // 30 位（28 位整数场景）
+        assertEquals("=\"" + digits30 + "\"", CsvExporter.excelSafe(digits30)); // 单元格文本 ="30位数字"
+        assertEquals("12345", CsvExporter.excelSafe("12345"));                              // 短数字原样
+        assertEquals("A123456789012345678", CsvExporter.excelSafe("A123456789012345678"));  // 非纯数字原样
+        assertEquals("", CsvExporter.excelSafe(""));
+        assertNull(CsvExporter.excelSafe(null));
+    }
+
+    @Test
+    void 导出中长数字与键分隔生效(@TempDir Path dir) throws Exception {
+        Path f = dir.resolve("diff.csv");
+        String key = "A1" + com.textdiff.engine.Rules.KEY_SEP + "B2";
+        List<RowDiff> rows = List.of(RowDiff.diff(key, Status.SECTION_DATA,
+                new String[]{"A1", "123456789012345678901234567890"},
+                new String[]{"A1", "999"}, new int[]{1}));
+        CsvExporter.writeDiffFields(f, rows, List.of());
+        String content = Files.readString(f, StandardCharsets.UTF_8).replace("\ufeff", "");
+        String[] lines = content.split("\r\n");
+        assertEquals(2, lines.length);
+        assertTrue(lines[1].startsWith("A1:B2,"), () -> content);
+        // 单元格文本 ="30位数字" 经 RFC4180 转义 → "=""123..."""
+        assertTrue(content.contains("\"=\"\"123456789012345678901234567890\"\"\""));
+    }
 }
