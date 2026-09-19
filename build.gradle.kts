@@ -22,6 +22,9 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("com.h2database:h2:2.3.232")
     implementation("org.apache.poi:poi-ooxml:5.3.0")
+    // AI 分析报告 Markdown → HTML（GFM 表格扩展：报告尾部事实表）
+    implementation("org.commonmark:commonmark:0.22.0")
+    implementation("org.commonmark:commonmark-ext-gfm-tables:0.22.0")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

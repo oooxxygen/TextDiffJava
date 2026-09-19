@@ -3,8 +3,10 @@ package com.textdiff.task;
 import com.textdiff.config.AppPaths;
 import com.textdiff.export.ExportAssembler;
 import com.textdiff.store.Json;
+import com.textdiff.store.JobMeta;
 import com.textdiff.store.JobRecord;
 import com.textdiff.store.JobStore;
+import com.textdiff.store.ResultFiles;
 import com.textdiff.store.TaskRecord;
 import com.textdiff.store.TaskStore;
 
@@ -274,7 +276,8 @@ public final class TaskManager implements AutoCloseable {
 
     /**
      * AI 分析（文本模板）：委托 AiAnalyzer 阻塞执行（prompt.md 恒产出；ai_analysis.md 为原件），
-     * 成功后将 Markdown 复制到差异 CSV 同目录，命名 [归属组]文件昵称_实际文件名.md。
+     * 成功后将 Markdown 复制到差异 CSV 同目录，命名 [归属组]文件昵称_实际文件名.md；
+     * 并默认渲染一份自包含 HTML 报告（同目录同名 .html，报头含数据事实条与总体评判）。
      * 并发受 aiPermits 信号量限制（config.ini [ai] max-concurrency），防止批量任务冲击服务方。
      */
     private String runAi(JobRecord job) throws Exception {
@@ -296,10 +299,28 @@ public final class TaskManager implements AutoCloseable {
         if (!ok) return canonical.resolve("prompt.md").toAbsolutePath().toString();
         Path dir = exportDir(job);
         Files.createDirectories(dir);
-        Path dst = dir.resolve(com.textdiff.ai.AiReportNamer.fileName(job, aiFieldMaps) + ".md");
-        Files.copy(canonical.resolve("ai_analysis.md"), dst,
+        String base = com.textdiff.ai.AiReportNamer.fileName(job, aiFieldMaps);
+        Files.copy(canonical.resolve("ai_analysis.md"), dir.resolve(base + ".md"),
                 java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        return dst.toAbsolutePath().toString();
+        Path html = writeHtmlReport(job, dir.resolve(base + ".html"));
+        return html != null ? html.toAbsolutePath().toString()
+                : dir.resolve(base + ".md").toAbsolutePath().toString();
+    }
+
+    /** AI 分析 HTML 报告渲染（ai_analysis.md + meta → 自包含 .html）；无 meta 时跳过返回 null。 */
+    private Path writeHtmlReport(JobRecord job, Path dst) {
+        try {
+            JobMeta meta = ResultFiles.readMeta(Path.of(job.resultDir));
+            String md = Files.readString(Path.of(job.resultDir).resolve("ai_analysis.md"),
+                    StandardCharsets.UTF_8);
+            String title = job.label != null && !job.label.isEmpty() ? job.label : job.nickname;
+            Files.writeString(dst, com.textdiff.export.HtmlReportWriter.render(title, meta, md),
+                    StandardCharsets.UTF_8);
+            return dst;
+        } catch (Exception e) {
+            System.err.println("[task] AI 分析 HTML 报告渲染失败（不影响 Markdown 产物）: " + e.getMessage());
+            return null;
+        }
     }
 
     public boolean awaitIdle(long timeout, TimeUnit unit) throws InterruptedException {

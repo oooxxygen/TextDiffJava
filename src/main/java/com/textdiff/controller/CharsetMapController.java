@@ -76,17 +76,18 @@ public class CharsetMapController {
     /** 解析工作簿全部 sheet：按表头列名定位（容忍列序变化），仅保留非 E 码字段。 */
     public static List<CharsetMaps.FieldCharset> parse(Workbook wb, String sourceFile) {
         DataFormatter fmt = new DataFormatter();
+        org.apache.poi.ss.usermodel.FormulaEvaluator eval = wb.getCreationHelper().createFormulaEvaluator();
         List<CharsetMaps.FieldCharset> out = new ArrayList<>();
         long now = System.currentTimeMillis() / 1000;
         for (Sheet sheet : wb) {
-            int[] idx = findHeader(sheet, fmt);
+            int[] idx = findHeader(sheet, fmt, eval);
             if (idx == null) continue; // 封面/目录/修改历史等无数据表结构表头的 sheet
             for (int r = idx[5] + 1; r <= sheet.getLastRowNum(); r++) {
                 Row row = sheet.getRow(r);
                 if (row == null) continue;
-                String table = text(row, idx[0], fmt);
-                String charset = text(row, idx[2], fmt);
-                String ordinal = text(row, idx[1], fmt);
+                String table = text(row, idx[0], fmt, eval);
+                String charset = text(row, idx[2], fmt, eval);
+                String ordinal = text(row, idx[1], fmt, eval);
                 if (table.isBlank() || charset.isBlank() || ordinal.isBlank()) continue;
                 if ("E".equalsIgnoreCase(charset)) continue; // E 码为主字符集，无需转码
                 int col;
@@ -97,20 +98,20 @@ public class CharsetMapController {
                 }
                 if (col < 0) continue;
                 out.add(new CharsetMaps.FieldCharset(table.strip(), col, charset.strip(),
-                        text(row, idx[3], fmt), text(row, idx[4], fmt), sourceFile, now));
+                        text(row, idx[3], fmt, eval), text(row, idx[4], fmt, eval), sourceFile, now));
             }
         }
         return out;
     }
 
     /** 表头行定位：返回 [表名, 序号, 字符集, 字段名, 长度, 行号]，找不到返回 null。 */
-    private static int[] findHeader(Sheet sheet, DataFormatter fmt) {
+    private static int[] findHeader(Sheet sheet, DataFormatter fmt, org.apache.poi.ss.usermodel.FormulaEvaluator eval) {
         for (int r = 0; r <= Math.min(sheet.getLastRowNum(), 20); r++) {
             Row row = sheet.getRow(r);
             if (row == null) continue;
             int table = -1, ordinal = -1, charset = -1, field = -1, length = -1;
             for (int c = 0; c < row.getLastCellNum(); c++) {
-                String v = text(row, c, fmt).replace("\n", "").strip().toLowerCase();
+                String v = text(row, c, fmt, eval).replace("\n", "").strip().toLowerCase();
                 switch (v) {
                     case COL_TABLE -> table = c;
                     case COL_ORDINAL -> ordinal = c;
@@ -127,11 +128,18 @@ public class CharsetMapController {
         return null;
     }
 
-    private static String text(Row row, int col, DataFormatter fmt) {
+    /** 单元格文本；公式单元格经 evaluator 取计算结果（序号列常为 =C42+1 类公式）。 */
+    private static String text(Row row, int col, DataFormatter fmt, org.apache.poi.ss.usermodel.FormulaEvaluator eval) {
         if (row == null || col < 0) return "";
         Cell cell = row.getCell(col);
         if (cell == null) return "";
-        if (cell.getCellType() == CellType.NUMERIC) return fmt.formatCellValue(cell).trim();
+        if (cell.getCellType() == CellType.FORMULA) {
+            try {
+                return fmt.formatCellValue(cell, eval).strip();
+            } catch (RuntimeException e) {
+                return "";
+            }
+        }
         return fmt.formatCellValue(cell).strip();
     }
 }

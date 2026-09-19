@@ -52,7 +52,9 @@ class BatchDetailExcelTest {
             Row head = ov.getRow(0);
             assertEquals("表名昵称", head.getCell(0).getStringCellValue());
             assertEquals("键值匹配有差异", head.getCell(4).getStringCellValue());
-            assertEquals("对比配置（列号+名称）", head.getCell(7).getStringCellValue());
+            assertEquals("状态情况", head.getCell(7).getStringCellValue());
+            assertEquals("总体评判", head.getCell(8).getStringCellValue());
+            assertEquals("对比配置（列号+名称）", head.getCell(9).getStringCellValue());
             Row r1 = ov.getRow(1);
             assertEquals("INCT0101 · 01A3020D.v01", r1.getCell(0).getStringCellValue());
             assertEquals(100, (long) r1.getCell(1).getNumericCellValue());
@@ -61,7 +63,9 @@ class BatchDetailExcelTest {
             assertEquals(55, (long) r1.getCell(4).getNumericCellValue());
             assertEquals(3, (long) r1.getCell(5).getNumericCellValue());
             assertEquals(2, (long) r1.getCell(6).getNumericCellValue());
-            String cfg1 = r1.getCell(7).getStringCellValue();
+            assertTrue(r1.getCell(7).getStringCellValue().contains("数量差 2"));
+            assertEquals("正常", r1.getCell(8).getStringCellValue()); // |100-98|/(198/2)≈2%
+            String cfg1 = r1.getCell(9).getStringCellValue();
             assertTrue(cfg1.contains("主键 KEYSEQ="), cfg1);
             assertTrue(cfg1.contains("共 3 列"), cfg1);
             assertTrue(cfg1.contains("第3列"), cfg1);

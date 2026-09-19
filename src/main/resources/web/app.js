@@ -436,7 +436,8 @@ const RecordRow = {
   </div>`,
   methods: {
     keyText(k) {
-      return (k || "").split(String.fromCharCode(31)).join("  /  ") || "(空键)";
+      // 组合主键分隔符（0x1F）在导出 CSV 与界面统一显示为 ':'（导出层 CsvExporter.displayKey 同规则）
+      return (k || "").split(String.fromCharCode(31)).join(":") || "(空键)";
     },
     statusLabel(s) {
       const a = this.sourceA || "A", b = this.sourceB || "B";
@@ -1699,6 +1700,28 @@ const SettingsPage = {
     }
     function exportConfigs() { window.location = "/api/configs/export"; }
 
+    // 特殊编码字段映射导入（混合编码栏位转码，如 EBCDIC 文件内嵌 UTF-16 字段）
+    const cs = reactive({ busy: false, msg: "", ok: null, file: null, status: null });
+    function onCsFile(ev) { cs.file = ev.target.files[0] || null; }
+    async function importCharset() {
+      if (!cs.file) { cs.msg = "请先选择数据表结构 Excel（.xlsx）"; cs.ok = false; return; }
+      cs.busy = true; cs.msg = "导入中…"; cs.ok = null;
+      try {
+        const fd = new FormData();
+        fd.append("file", cs.file);
+        const r = await api("/api/charset-map/import", { method: "POST", body: fd });
+        cs.ok = true;
+        cs.msg = "导入成功：数据表 " + r.tables + " 个、特殊编码字段 " + r.fields + " 条（" + r.source_file + "）"
+          + (r.db_available ? "，已同步 H2 镜像" : "");
+        loadCharsetStatus();
+      } catch (e) { cs.ok = false; cs.msg = "导入失败: " + e.message; }
+      finally { cs.busy = false; }
+    }
+    async function loadCharsetStatus() {
+      try { cs.status = await api("/api/charset-map/status"); } catch (e) {}
+    }
+    onMounted(loadCharsetStatus);
+
     // 生成路径设置（任务管理：差异CSV导出目录；AI 分析结果随该目录）
     const dirs = reactive({ export_dir: "", msg: "", ok: null });
     async function loadDirs() {
@@ -1720,6 +1743,7 @@ const SettingsPage = {
     return { providers, form, apiKeySet, busy, toast, test, curModels, pickProvider, save, testConn,
              rt, saveRuntime, imp, onImpFiles, importStructure,
              base, onBaseFiles, importBaseline, exportConfigs,
+             cs, onCsFile, importCharset,
              dirs, loadDirs, saveDirs };
   },
   template: `
@@ -1784,6 +1808,19 @@ const SettingsPage = {
       </div>
     </div>
 
+    <div class="card">
+      <div class="card-head">🔤 特殊编码字段映射导入（混合编码转码）</div>
+      <div class="card-body">
+        <p class="ai-hint" style="margin-top:0;">上传源系统<b>下传数据表结构 Excel</b>（含列名「数据表英文名 / 表内字段序号 / BOCS字段内部存储字符集」的 sheet），仅保留非 E 码的特殊字符集字段（如 UTF-16），落库 H2 表 <code>field_charset</code>。对比作业按<b>文件名匹配表名</b>后，对这些栏位做<b>按值探测转码 UTF-8</b>：仅主机单字节字符集（cp037/cp500/cp1047）文件启用、逐值校验，对侧正常文本原样保留（兼容只有一侧有特殊编码的场景），未命中映射的对比零开销。</p>
+        <div class="field"><label>数据表结构 Excel（.xlsx，自动识别全部结构 sheet）</label>
+          <input type="file" accept=".xlsx" @change="onCsFile" /></div>
+        <div class="btn-row">
+          <button class="btn" @click="importCharset" :disabled="cs.busy">{{ cs.busy ? '导入中…' : '导入编码映射' }}</button>
+          <span v-if="cs.status" style="font-size:13px;color:var(--text-soft);">已导入：{{ cs.status.tables }} 表 / {{ cs.status.fields }} 字段{{ cs.status.source_file ? '（' + cs.status.source_file + '）' : '' }}{{ cs.status.db_available ? ' · H2 镜像正常' : ' · 纯文件模式' }}</span>
+          <span v-if="cs.msg" :style="{ color: cs.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ cs.msg }}</span>
+        </div>
+      </div>
+    </div>
     <div class="card">
       <div class="card-head">📥 配置版本管理（基线 / 变更 / 导出）</div>
       <div class="card-body">
@@ -2264,7 +2301,7 @@ const ReportRowRec = {
   <div class="rec" :class="['s-' + row.status, isOpen ? 'open' : '']">
     <div class="rec-head" @click="toggle">
       <span class="caret">▶</span>
-      <span class="key">{{ row.key }}</span>
+      <span class="key">{{ (row.key || '').split(String.fromCharCode(31)).join(':') }}</span>
       <span class="tag" :class="row.status">{{ statusLabel(row.status) }}</span>
       <span class="meta" v-if="row.status==='diff' && row.diff_cols && row.diff_cols.length">差异栏位: {{ row.diff_cols.map(c=>c+1).join(', ') }}</span>
     </div>
@@ -2335,7 +2372,7 @@ const ReportPage = {
   emits: ["open-batch"],
   setup(props, { emit }) {
     const mode = ref("path");
-    const form = reactive({ template_path: "", dir_a: "", dir_b: "", label: "" });
+    const form = reactive({ template_path: "", dir_a: "", dir_b: "", label: "", key_seq: "", omit_seq: "" });
     const up = reactive({ files_a: [], files_b: [], files_tpl: [] });
     const busy = ref(false); const err = ref("");
     const batches = ref([]); let timer = null;
@@ -2355,6 +2392,7 @@ const ReportPage = {
       try {
         const r = await jpost("/api/report-compare", {
           template_path: form.template_path || null, dir_a: form.dir_a, dir_b: form.dir_b, label: form.label || null,
+          key_seq: form.key_seq.trim() || null, omit_seq: form.omit_seq.trim() || null,
         });
         emit("open-batch", r.batch_id);
       } catch (e) { err.value = e.message; } finally { busy.value = false; }
@@ -2371,6 +2409,7 @@ const ReportPage = {
         const r = await api("/api/report-compare/upload", { method: "POST", body: fd });
         const r2 = await jpost("/api/report-compare", {
           template_path: r.template_dir || null, dir_a: r.dir_a, dir_b: r.dir_b, label: form.label || null,
+          key_seq: form.key_seq.trim() || null, omit_seq: form.omit_seq.trim() || null,
         });
         emit("open-batch", r2.batch_id);
       } catch (e) { err.value = e.message; } finally { busy.value = false; }
@@ -2401,6 +2440,12 @@ const ReportPage = {
           </label>
           <label class="field">批次标签（可选，显示在批次任务中）
             <input v-model="form.label" placeholder="如 2026-07-10 夜批量核对" />
+          </label>
+          <label class="field">对比主键栏位（可选，1-based 列序，如 3/4/5；留空按整行内容对比）
+            <input v-model="form.key_seq" placeholder="如 1 或 2/5" spellcheck="false" />
+          </label>
+          <label class="field">跳过栏位（可选，不参与比对的列序，如 6/7）
+            <input v-model="form.omit_seq" placeholder="如 6/7" spellcheck="false" />
           </label>
         </div>
         <div class="btn-row" style="margin-top:10px;">
