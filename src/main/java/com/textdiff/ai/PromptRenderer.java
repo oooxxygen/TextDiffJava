@@ -24,7 +24,7 @@ import java.util.Map;
  */
 public final class PromptRenderer {
     public static final String TEMPLATE_NAME = "analysis-template.md";
-    public static final String TEMPLATE_VERSION = "v2";
+    public static final String TEMPLATE_VERSION = "v3";
 
     /**
      * 提示词预算：适配小上下文窗口（≤256K）。
@@ -166,7 +166,8 @@ public final class PromptRenderer {
         }
         for (DiffFeatureExtractor.ColumnFeature f : cols) {
             String name = names.getOrDefault(f.col, "栏位" + (f.col + 1));
-            cf.append("### 列 ").append(f.col).append("（").append(name).append("），差异 ").append(f.count).append(" 行\n");
+            // 模板 v3 第八节：字段编号一律 1-based
+            cf.append("### 第").append(f.col + 1).append("列 ").append(name).append("，差异 ").append(f.count).append(" 行\n");
             if (!f.commonPrefix.isEmpty() || !f.commonSuffix.isEmpty()) {
                 cf.append("- 公共前缀：`").append(f.commonPrefix).append("`；公共后缀：`").append(f.commonSuffix).append("`\n");
             }
@@ -178,10 +179,25 @@ public final class PromptRenderer {
                 cf.append("- 日期形态样本 ").append(f.dateShaped).append(" 个\n");
             }
             if (f.emptyA + f.emptyB > 0) {
-                cf.append("- 空值样本：A ").append(f.emptyA).append("，B ").append(f.emptyB).append("\n");
+                cf.append("- 空值样本（全量统计）：A ").append(f.emptyA).append("，B ").append(f.emptyB).append("\n");
             }
             if (f.lengthGrows + f.lengthShrinks > 0) {
                 cf.append("- 长度变化：变长 ").append(f.lengthGrows).append("，变短 ").append(f.lengthShrinks).append("\n");
+            }
+            if (!f.topPatterns.isEmpty()) {
+                cf.append("- A→B 模式分布（**全量统计**，").append(f.patternKinds).append(" 种模式 / 共 ")
+                        .append(f.count).append(" 行差异；覆盖率为 模式次数÷该列差异行数）：\n");
+                long shown = 0;
+                for (String[] p : f.topPatterns) {
+                    long c = Long.parseLong(p[2]);
+                    shown += c;
+                    cf.append("    - `").append(p[0].isEmpty() ? "(空)" : p[0]).append("` → `")
+                            .append(p[1].isEmpty() ? "(空)" : p[1]).append("`：").append(c).append(" 次（")
+                            .append(String.format("%.1f", c * 100.0 / f.count)).append("%）\n");
+                }
+                if (shown < f.count) {
+                    cf.append("    - （其余 ").append(f.count - shown).append(" 行为长尾模式，见明细采样）\n");
+                }
             }
             cf.append("- 差异数据明细（TOP ").append(Math.min(budget.maxSamplesPerColumn(), f.samples.size()))
                     .append("，共 ").append(f.count).append(" 行差异）：\n\n");
@@ -199,10 +215,6 @@ public final class PromptRenderer {
         }
         if (cf.isEmpty()) cf.append("（无差异列——动态分析部分省略）");
         ph.put("columnFeatures", cf.toString());
-
-        ph.put("dynamicSection", features.columns.isEmpty()
-                ? ""
-                : "## 四、AI 动态分析要求\n\n请针对上方特征给出：数值分布规律、成因假设、改进意见（按输出格式要求）。");
 
         StringBuilder hints = new StringBuilder();
         for (com.textdiff.engine.RowDiff ignored : features.unmatchedSamples) {

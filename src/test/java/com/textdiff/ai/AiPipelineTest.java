@@ -68,8 +68,11 @@ class AiPipelineTest {
         assertTrue(text.contains("+1")); // 数值差规律
         assertTrue(text.contains("KEYSEQ=1"));
         assertTrue(text.contains("主键均能唯一定位记录"));
-        assertTrue(text.contains("| 主键 | A（旧）值 | B（新）值 |"), "TOP20 差异明细表头"); // 明细表
-        assertTrue(text.contains("## 四、AI 动态分析要求")); // 有差异时动态段存在
+        assertTrue(text.contains("| 主键 | A（旧）值 | B（新）值 |"), "差异明细表头");
+        assertTrue(text.contains("模板版本：v3"), "v3 模板版本号");
+        assertTrue(text.contains("默认值/占位值差异"), "v3 分类规程存在");
+        assertTrue(text.contains("A→B 模式分布（**全量统计**"), "全量模式统计段");
+        assertTrue(text.contains("### 第2列"), "采样节列号 1-based");
     }
 
     @Test
@@ -84,7 +87,6 @@ class AiPipelineTest {
         Path prompt = PromptRenderer.render(dir, job, null, s, null, null);
         String text = Files.readString(prompt, StandardCharsets.UTF_8);
         assertTrue(text.contains("无差异列") || text.contains("动态分析部分省略"));
-        assertFalse(text.contains("## 四、AI 动态分析要求"));
     }
 
     @Test

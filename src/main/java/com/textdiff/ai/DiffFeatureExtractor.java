@@ -16,6 +16,8 @@ import java.util.Map;
  */
 public final class DiffFeatureExtractor {
     public static final int SAMPLE_CAP = 30;
+    /** 提示词展示的模式条目上限（全量统计仍完整计数）。 */
+    public static final int TOP_PATTERNS = 8;
 
     /** 单个差异列的特征。 */
     public static final class ColumnFeature {
@@ -30,6 +32,11 @@ public final class DiffFeatureExtractor {
         public long dateShaped;               // 日期形态样本数（y-n-d / yyyymmdd 等）
         public long emptyA, emptyB;           // 空值占比
         public long lengthGrows, lengthShrinks;
+        /** 全量 A→B 值对计数（key = A + '\u0001' + B，覆盖该列全部差异行，非仅采样）。 */
+        public Map<String, Long> patternCounts = new LinkedHashMap<>();
+        /** 模式分布展示条目：[A值, B值, 次数]（按次数降序，截取 TOP_PATTERNS）。 */
+        public List<String[]> topPatterns = new ArrayList<>();
+        public long patternKinds;             // 不同模式总数
     }
 
     public static final class Features {
@@ -46,9 +53,10 @@ public final class DiffFeatureExtractor {
         try (var stream = ResultFiles.stream(resultFile)) {
             stream.forEach(ex::feed);
         }
-        // 后处理：数值差众数
+        // 后处理：数值差众数 + A→B 模式分布（全量计数）
         for (ColumnFeature f : ex.features.columns.values()) {
             finishNumeric(f);
+            finishPatterns(f);
         }
         return ex.features;
     }
@@ -70,19 +78,33 @@ public final class DiffFeatureExtractor {
             f.count++;
             String a = col < row.aCols.length ? row.aCols[col] : "";
             String b = col < row.bCols.length ? row.bCols[col] : "";
+            // A→B 模式全量计数（样本封顶之外也计）；空值计数同为全量
+            f.patternCounts.merge(a + "\u0001" + b, 1L, Long::sum);
+            if (a.isBlank()) f.emptyA++;
+            if (b.isBlank()) f.emptyB++;
             if (f.samples.size() < SAMPLE_CAP) {
                 f.samples.add(new String[]{a, b, row.key == null ? "" : row.key});
                 f.commonPrefix = commonPrefix(f.commonPrefix, a, b);
                 f.commonSuffix = commonSuffix(f.commonSuffix, a, b);
-                if (isNumeric(a) && isNumeric(b)) {
-                    f.numericPairs++;
-                    if (a.isBlank()) f.emptyA++;
-                    if (b.isBlank()) f.emptyB++;
-                }
+                if (isNumeric(a) && isNumeric(b)) f.numericPairs++;
                 if (looksLikeDate(a) && looksLikeDate(b)) f.dateShaped++;
                 if (a.length() < b.length()) f.lengthGrows++;
                 else if (a.length() > b.length()) f.lengthShrinks++;
             }
+        }
+    }
+
+    /** A→B 模式分布后处理：按次数降序取 TOP_PATTERNS 条展示项。 */
+    private static void finishPatterns(ColumnFeature f) {
+        f.patternKinds = f.patternCounts.size();
+        List<Map.Entry<String, Long>> sorted = new ArrayList<>(f.patternCounts.entrySet());
+        sorted.sort((x, y) -> Long.compare(y.getValue(), x.getValue()));
+        for (int i = 0; i < sorted.size() && i < TOP_PATTERNS; i++) {
+            Map.Entry<String, Long> e = sorted.get(i);
+            int sep = e.getKey().indexOf('\u0001');
+            String a = sep >= 0 ? e.getKey().substring(0, sep) : e.getKey();
+            String b = sep >= 0 ? e.getKey().substring(sep + 1) : "";
+            f.topPatterns.add(new String[]{a, b, String.valueOf(e.getValue())});
         }
     }
 
