@@ -15,7 +15,7 @@ jobs:
       - name: Install toolchain prerequisites (container)
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl unzip zip git
+          apt-get install -y --no-install-recommends ca-certificates curl unzip zip git binutils
           git config --global --add safe.directory '*'
 
       - name: Set up JDK 21
@@ -64,7 +64,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build portable runtime (jpackage, bundled JRE)
-        run: gradlew.bat runtimeZip --no-daemon --console=plain
+        run: .\gradlew.bat runtimeZip --no-daemon --console=plain
 
       - name: Upload artifacts (portable zip)
         uses: actions/upload-artifact@v4
