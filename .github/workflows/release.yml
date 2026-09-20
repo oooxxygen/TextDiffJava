@@ -35,9 +35,13 @@ jobs:
       - name: Build fat jar
         run: ./gradlew bootJar --no-daemon --console=plain -x test
 
-      # runtimeZip 产物固定为 build/image.zip，按平台改名后再上传
-      - name: Rename portable zip
-        run: mv build/image.zip "TextDiffJava-${GITHUB_REF_NAME#v}-linux-portable.zip"
+      # runtimeZip 产物固定为 build/image.zip，按平台改名后再上传；
+      # fat jar 挪到根目录（upload-artifact 以多路径公共祖先为根，留在 build/libs 会导致发布 glob 对不上）
+      - name: Collect artifacts
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          mv build/image.zip "TextDiffJava-${VER}-linux-portable.zip"
+          mv "build/libs/TextDiffJava-${VER}.jar" "TextDiffJava-${VER}.jar"
 
       - name: Pack source zip
         run: |
@@ -51,7 +55,7 @@ jobs:
           name: dist-linux
           path: |
             TextDiffJava-*-linux-portable.zip
-            build/libs/*.jar
+            TextDiffJava-*.jar
             TextDiffJava-*-source.zip
 
   # Windows 10 便携包：jpackage 自带 JRE，解压即用
