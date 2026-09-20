@@ -35,6 +35,10 @@ jobs:
       - name: Build fat jar
         run: ./gradlew bootJar --no-daemon --console=plain -x test
 
+      # runtimeZip 产物固定为 build/image.zip，按平台改名后再上传
+      - name: Rename portable zip
+        run: mv build/image.zip "TextDiffJava-${GITHUB_REF_NAME#v}-linux-portable.zip"
+
       - name: Pack source zip
         run: |
           VER="${GITHUB_REF_NAME#v}"
@@ -46,7 +50,7 @@ jobs:
         with:
           name: dist-linux
           path: |
-            build/distributions/*.zip
+            TextDiffJava-*-linux-portable.zip
             build/libs/*.jar
             TextDiffJava-*-source.zip
 
@@ -68,11 +72,18 @@ jobs:
       - name: Build portable runtime (jpackage, bundled JRE)
         run: .\gradlew.bat runtimeZip --no-daemon --console=plain
 
+      # runtimeZip 产物固定为 build\image.zip，改名后再上传
+      - name: Rename portable zip
+        shell: pwsh
+        run: |
+          $ver = $env:GITHUB_REF_NAME -replace '^v',''
+          Move-Item build\image.zip "TextDiffJava-$ver-windows-portable.zip"
+
       - name: Upload artifacts (portable zip)
         uses: actions/upload-artifact@v4
         with:
           name: dist-windows
-          path: build/distributions/*.zip
+          path: TextDiffJava-*-windows-portable.zip
 
   # 发布：两平台便携包 + 裸 jar + 源码 zip 挂到 Release；Docker 镜像推 GHCR
   publish-release:
