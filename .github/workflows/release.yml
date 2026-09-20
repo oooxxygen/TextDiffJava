@@ -10,13 +10,15 @@ jobs:
     runs-on: ubuntu-latest
     container: ubuntu:20.04
     steps:
-      - uses: actions/checkout@v4
-
+      # git 必须先于 checkout 安装：容器内无 git 时 checkout 会退回 REST API 下载（无 .git，
+      # 后续 git archive 打源码包会报 not a git repository）
       - name: Install toolchain prerequisites (container)
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates curl unzip zip git binutils
           git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v4
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
