@@ -21,6 +21,8 @@ public final class Encoding {
     private static final byte[] BOM_UTF16_BE = {(byte) 0xFE, (byte) 0xFF};
 
     private static final String[] CANDIDATES = {"utf-8", "cp037", "cp500", "cp1047", "gb18030", "latin-1"};
+    private static final java.util.Set<String> EBCDIC_CANDIDATES =
+            java.util.Set.of("cp037", "cp500", "cp1047");
 
     /** 从字节样本检测编码名（返回小写 token，可交 toCharset / iterLines 使用）。 */
     public static String detect(byte[] sample, String delimiter) {
@@ -31,7 +33,11 @@ public final class Encoding {
         long bestDelim = 0;
         double bestRatio = 0.0;
         boolean any = false;
+        // EBCDIC 家族空格是 0x40，不含 0x20；样本出现 0x20 即 ASCII 系文本，
+        // 排除 EBCDIC（否则 ASCII 样本在 Cp037 下也能严格解码且可打印比例达标，分隔符计数偶发反超）
+        boolean hasAsciiSpace = indexOfByte(sample, (byte) 0x20) >= 0;
         for (String enc : CANDIDATES) {
+            if (hasAsciiSpace && EBCDIC_CANDIDATES.contains(enc)) continue;
             String text = tryDecodeStrict(sample, enc);
             if (text == null) continue;            // 解码失败
             double ratio = printableRatio(text);
@@ -166,5 +172,12 @@ public final class Encoding {
         if (arr.length < prefix.length) return false;
         for (int i = 0; i < prefix.length; i++) if (arr[i] != prefix[i]) return false;
         return true;
+    }
+
+    private static int indexOfByte(byte[] arr, byte b) {
+        for (int i = 0; i < arr.length; i++) {
+            if (arr[i] == b) return i;
+        }
+        return -1;
     }
 }

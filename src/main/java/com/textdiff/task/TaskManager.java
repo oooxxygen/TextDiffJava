@@ -213,8 +213,11 @@ public final class TaskManager implements AutoCloseable {
     synchronized void dispatchDue() {
         long now = System.currentTimeMillis() / 1000;
         for (TaskRecord t : tasks.listAll()) {
-            if (!TaskRecord.PENDING.equals(t.status) || t.scheduledAt > now) continue;
-            if (!queued.add(t.taskId)) continue; // 已在执行池队列
+            if (t.scheduledAt > now) continue;
+            synchronized (stateLock) { // 与 run() 的状态迁移互斥，避免对已开跑任务的重复入队
+                if (!TaskRecord.PENDING.equals(t.status)) continue;
+                if (!queued.add(t.taskId)) continue; // 已在执行池队列
+            }
             pool.submit(() -> run(t.taskId));
         }
     }
@@ -229,22 +232,29 @@ public final class TaskManager implements AutoCloseable {
         pool.submit(() -> run(t.taskId));
     }
 
+    /** PENDING → RUNNING 原子迁移：与 dispatchDue（同样持锁检查）互斥，防止定时器与入队双跑同一任务。 */
+    private final Object stateLock = new Object();
+
     void run(String taskId) {
         queued.remove(taskId);
-        TaskRecord t = tasks.get(taskId);
-        if (t == null || !TaskRecord.PENDING.equals(t.status)) return;
-        JobRecord job = store.getJob(t.jobId);
-        if (job == null) {
-            t.status = TaskRecord.FAILED; // 作业已被删除：明确失败而非永久待开始
-            t.error = "作业不存在（可能已删除）";
-            t.finishedAt = System.currentTimeMillis() / 1000;
+        final TaskRecord t;
+        final JobRecord job;
+        synchronized (stateLock) {
+            t = tasks.get(taskId);
+            if (t == null || !TaskRecord.PENDING.equals(t.status)) return;
+            job = store.getJob(t.jobId);
+            if (job == null) {
+                t.status = TaskRecord.FAILED; // 作业已被删除：明确失败而非永久待开始
+                t.error = "作业不存在（可能已删除）";
+                t.finishedAt = System.currentTimeMillis() / 1000;
+                tasks.save(t);
+                return;
+            }
+            t.status = TaskRecord.RUNNING;
+            t.startedAt = System.currentTimeMillis() / 1000;
+            t.error = "";
             tasks.save(t);
-            return;
         }
-        t.status = TaskRecord.RUNNING;
-        t.startedAt = System.currentTimeMillis() / 1000;
-        t.error = "";
-        tasks.save(t);
         try {
             String output = TaskRecord.EXPORT_DIFF.equals(t.taskType) ? runExport(job) : runAi(job);
             t.outputPath = output;

@@ -50,6 +50,16 @@ class EncodingTest {
     }
 
     @Test
+    void asciiSampleNeverDetectedAsEbcdic() {
+        // 回归：纯 ASCII 报表（含 0x20 空格、CRLF）曾被误判为 cp037——EBCDIC 空格是 0x40，
+        // 样本含 0x20 即排除 EBCDIC 候选，防止模板被解成乱码导致表头锚点失效
+        String ascii = "BANK-DAILY-LIST\r\n        LIST\r\n  ACCT  NAME  AMT\r\n"
+                + "  A0001  DEPOSIT  100.00\r\n  END|        3|\r\n";
+        assertEquals("utf-8", Encoding.detect(ascii.getBytes(StandardCharsets.UTF_8), "|"));
+        assertEquals("utf-8", Encoding.detect("hello world\nfoo bar\n".getBytes(StandardCharsets.UTF_8), "|"));
+    }
+
+    @Test
     void resolveEncodingBypassesDetectionForExplicit(@TempDir Path dir) throws Exception {
         Path f = dir.resolve("x.txt");
         Files.write(f, "a | b".getBytes(StandardCharsets.UTF_8));

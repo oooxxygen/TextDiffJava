@@ -67,7 +67,7 @@ public final class CsvExporter {
                 w.write("\r\n");
             }
         } catch (IOException e) {
-            throw new UncheckedIOException("全量 CSV 导出失败: " + file, e);
+            throw new UncheckedIOException("全量 CSV 导出失败: " + file + " (" + e + ")", e);
         }
     }
 
@@ -95,7 +95,7 @@ public final class CsvExporter {
                 }
             }
         } catch (IOException e) {
-            throw new UncheckedIOException("差异 CSV 导出失败: " + file, e);
+            throw new UncheckedIOException("差异 CSV 导出失败: " + file + " (" + e + ")", e);
         }
     }
 

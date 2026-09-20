@@ -35,6 +35,8 @@ tasks.withType<Test> {
     systemProperty("textdiff.base.dir",
             layout.buildDirectory.dir("test-run").get().asFile.absolutePath)
     doFirst { delete(layout.buildDirectory.dir("test-run")) }
+    // 本机 C 盘紧张时，用 TD_TMP 环境变量把测试临时目录（JUnit @TempDir）重定向到大容量盘；CI 不受影响
+    System.getenv("TD_TMP")?.let { jvmArgs("-Djava.io.tmpdir=$it") }
 }
 
 // 便携运行时（jlink）模块集 —— EBCDIC/UTF-16 依赖 jdk.charsets

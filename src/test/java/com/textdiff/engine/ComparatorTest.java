@@ -119,4 +119,20 @@ class ComparatorTest {
         assertEquals("utf-8", out.detectedEncodingB());
         assertFalse(out.usedDiskFallback());
     }
+
+    @Test
+    void noKeyConfigFallsBackToWholeLineKey(@TempDir Path dir) throws Exception {
+        // 回归：未配置 KEYSEQ 时整行作键（整行对比模式），不再把全部记录计为 malformed 导致空结果
+        Path a = write(dir, "a.txt", "k1 | a | x\nk2 | b | y\nk3 | c | z");
+        Path b = write(dir, "b.txt", "k1 | a | x\nk2 | b | Y\nk4 | d | w");
+        ResultSink.ListSink sink = new ResultSink.ListSink();
+        CompareOutcome out = Comparator.compareFiles(a, b, keyCfg(), sink); // 无主键
+        Summary s = out.summary();
+        assertEquals(1, s.equal);   // k1 整行一致
+        assertEquals(0, s.diff);    // 整行作键：键变即不配对，无「部分差异」
+        assertEquals(2, s.onlyA);   // k2（B 侧值不同）、k3 仅 A 有
+        assertEquals(2, s.onlyB);   // k2（B 侧值不同）、k4 仅 B 有
+        assertEquals(0, s.malformedA);
+        assertEquals(0, s.malformedB);
+    }
 }

@@ -127,7 +127,7 @@ public final class Comparator {
             try (Stream<String> la = Encoding.iterLines(pathA, encA, delim)) {
                 for (String[] cols : Parser.parseData(la, delim, tp, trailerA)) {
                     if (transA != null) cols = transA.apply(cols);
-                    String key = engine.keyOf(cols);
+                    String key = keyOf(engine, cols);
                     if (key == null) { summary.malformedA++; continue; }
                     if (index.get(key) != null) {
                         summary.keyDupA++;
@@ -141,7 +141,7 @@ public final class Comparator {
             try (Stream<String> lb = Encoding.iterLines(pathB, encB, delim)) {
                 for (String[] cols : Parser.parseData(lb, delim, tp, trailerB)) {
                     if (transB != null) cols = transB.apply(cols);
-                    String key = engine.keyOf(cols);
+                    String key = keyOf(engine, cols);
                     if (key == null) { summary.malformedB++; continue; }
                     if (bKeys.get(key) != null) {
                         summary.keyDupB++;
@@ -191,5 +191,14 @@ public final class Comparator {
         summary.recnumCheckB = Parser.recnumCheck(trailerB);
 
         return new CompareOutcome(summary, encA, encB, spilled);
+    }
+
+    /**
+     * 取记录主键：配置了 KEYSEQ 用主键列；未配置任何主键时整行作键（等价「整行对比」模式）；
+     * 仅当主键列越界（列不足/格式异常）返回 null 计入 malformed。
+     */
+    private static String keyOf(Rules.RuleEngine engine, String[] cols) {
+        if (engine.keyColumns.isEmpty()) return String.join(Rules.KEY_SEP, cols);
+        return engine.keyOf(cols);
     }
 }
