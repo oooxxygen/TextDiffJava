@@ -116,5 +116,5 @@ jobs:
           files: |
             dist/dist-linux-x64/*
             dist/dist-linux-aarch64/*
-            dist/dist-windows/*
+            dist/dist-windows-x64/*
           generate_release_notes: true
