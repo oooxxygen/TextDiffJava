@@ -5,19 +5,21 @@ on:
     tags: [ 'v*' ]
 
 jobs:
-  # Ubuntu 20.04 便携包：容器锁定 glibc 2.31，jpackage 自带 JRE，解压即用（无需装 Java）
-  portable-linux:
-    runs-on: ubuntu-latest
-    container: ubuntu:20.04
+  # 便携包矩阵：linux-x64 / linux-aarch64（原生 ARM runner）/ windows-x64
+  # jpackage 自带 JRE，解压即用（无需装 Java）；Temurin JRE 仅要求 glibc ≥ 2.17，Ubuntu 20.04 可直接运行
+  portable:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
+          - os: windows-latest
+            platform: windows-x64
+    runs-on: ${{ matrix.os }}
     steps:
-      # git 必须先于 checkout 安装：容器内无 git 时 checkout 会退回 REST API 下载（无 .git，
-      # 后续 git archive 打源码包会报 not a git repository）
-      - name: Install toolchain prerequisites (container)
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl unzip zip git binutils
-          git config --global --add safe.directory '*'
-
       - uses: actions/checkout@v4
 
       - name: Set up JDK 21
@@ -31,67 +33,45 @@ jobs:
 
       - name: Build portable runtime (jpackage, bundled JRE)
         run: ./gradlew runtimeZip --no-daemon --console=plain
-
-      - name: Build fat jar
-        run: ./gradlew bootJar --no-daemon --console=plain -x test
-
-      # runtimeZip 产物固定为 build/image.zip，按平台改名后再上传；
-      # fat jar 挪到根目录（upload-artifact 以多路径公共祖先为根，留在 build/libs 会导致发布 glob 对不上）
-      - name: Collect artifacts
-        run: |
-          VER="${GITHUB_REF_NAME#v}"
-          mv build/image.zip "TextDiffJava-${VER}-linux-portable.zip"
-          mv "build/libs/TextDiffJava-${VER}.jar" "TextDiffJava-${VER}.jar"
-
-      - name: Pack source zip
-        run: |
-          VER="${GITHUB_REF_NAME#v}"
-          git archive --format=zip --prefix="TextDiffJava-${VER}/" \
-            -o "TextDiffJava-${VER}-source.zip" HEAD
-
-      - name: Upload artifacts (portable zip / jar / source)
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-linux
-          path: |
-            TextDiffJava-*-linux-portable.zip
-            TextDiffJava-*.jar
-            TextDiffJava-*-source.zip
-
-  # Windows 10 便携包：jpackage 自带 JRE，解压即用
-  portable-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        if: matrix.platform != 'windows-x64'
 
       - name: Build portable runtime (jpackage, bundled JRE)
         run: .\gradlew.bat runtimeZip --no-daemon --console=plain
+        if: matrix.platform == 'windows-x64'
 
-      # runtimeZip 产物固定为 build\image.zip，改名后再上传
-      - name: Rename portable zip
+      # runtimeZip 产物固定为 build/image.zip，按平台改名后再上传；
+      # fat jar 挪到根目录（upload-artifact 以多路径公共祖先为根，留在 build/libs 会导致发布 glob 对不上）；
+      # jar 与源码 zip 只在 linux-x64 出一份，避免矩阵并行上传重名资产
+      - name: Collect artifacts (linux)
+        if: matrix.platform != 'windows-x64'
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          mv build/image.zip "TextDiffJava-${VER}-${{ matrix.platform }}-portable.zip"
+          if [ "${{ matrix.platform }}" = "linux-x64" ]; then
+            mv "build/libs/TextDiffJava-${VER}.jar" "TextDiffJava-${VER}.jar"
+            git archive --format=zip --prefix="TextDiffJava-${VER}/" \
+              -o "TextDiffJava-${VER}-source.zip" HEAD
+          fi
+
+      - name: Collect artifacts (windows)
+        if: matrix.platform == 'windows-x64'
         shell: pwsh
         run: |
           $ver = $env:GITHUB_REF_NAME -replace '^v',''
-          Move-Item build\image.zip "TextDiffJava-$ver-windows-portable.zip"
+          Move-Item build\image.zip "TextDiffJava-$ver-windows-x64-portable.zip"
 
-      - name: Upload artifacts (portable zip)
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist-windows
-          path: TextDiffJava-*-windows-portable.zip
+          name: dist-${{ matrix.platform }}
+          path: |
+            TextDiffJava-*-portable.zip
+            TextDiffJava-*.jar
+            TextDiffJava-*-source.zip
 
-  # 发布：两平台便携包 + 裸 jar + 源码 zip 挂到 Release；Docker 镜像推 GHCR
+  # 发布：各平台便携包 + 裸 jar + 源码 zip 挂到 Release；Docker 镜像推 GHCR
   publish-release:
-    needs: [ portable-linux, portable-windows ]
+    needs: [ portable ]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -130,8 +110,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/dist-linux/*.zip
-            dist/dist-linux/*.jar
-            dist/dist-linux/*-source.zip
-            dist/dist-windows/*.zip
+            dist/dist-linux-x64/*
+            dist/dist-linux-aarch64/*
+            dist/dist-windows/*
           generate_release_notes: true
