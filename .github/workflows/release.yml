@@ -39,9 +39,13 @@ jobs:
         run: .\gradlew.bat runtimeZip --no-daemon --console=plain
         if: matrix.platform == 'windows-x64'
 
+      # 裸 jar 与源码 zip 只在 linux-x64 出一份，避免矩阵并行上传重名资产
+      - name: Build fat jar
+        if: matrix.platform == 'linux-x64'
+        run: ./gradlew bootJar --no-daemon --console=plain -x test
+
       # runtimeZip 产物固定为 build/image.zip，按平台改名后再上传；
-      # fat jar 挪到根目录（upload-artifact 以多路径公共祖先为根，留在 build/libs 会导致发布 glob 对不上）；
-      # jar 与源码 zip 只在 linux-x64 出一份，避免矩阵并行上传重名资产
+      # fat jar 挪到根目录（upload-artifact 以多路径公共祖先为根，留在 build/libs 会导致发布 glob 对不上）
       - name: Collect artifacts (linux)
         if: matrix.platform != 'windows-x64'
         run: |
