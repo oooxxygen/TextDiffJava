@@ -29,7 +29,8 @@ class AppConfigIniTest {
         assertTrue(text.contains("[ai]"));
         assertTrue(text.contains("enabled = false"));
         assertTrue(text.contains("max-prompt-chars = 120000"));
-        assertTrue(text.contains("max-concurrency = 2"));
+        assertTrue(text.contains("max-concurrency = 1"));
+        assertTrue(text.contains("timeout = 300"));
         // 生成文件解析结果 = 内置默认值
         assertEquals(8080, cfg.server().port());
         assertTrue(cfg.store().enabled());

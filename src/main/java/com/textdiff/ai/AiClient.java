@@ -76,7 +76,8 @@ public final class AiClient {
                          "messages", List.of(Map.of("role", "user", "content", prompt)));
         int attempts = Math.max(0, cfg.retries()) + 1;
         IllegalStateException last = null;
-        for (int attempt = 1; attempt <= attempts; attempt++) {
+        int rateLimited = 0; // 连续 429 次数：专用退避（避免重试风暴加剧账户级限流）
+        for (int attempt = 1; attempt <= attempts + 2; attempt++) {
             try {
                 if (streamSupported) {
                     try {
@@ -88,6 +89,17 @@ public final class AiClient {
                 return blockingComplete(body);
             } catch (ContextTooLongException | NonRetryableException e) {
                 throw e; // 压缩提示词重试 / 直接失败，均不做原样重发
+            } catch (RateLimitException e) {
+                last = e;
+                long wait = e.retryAfterMs() > 0 ? e.retryAfterMs()
+                        : Math.min(60_000, Math.max(5_000, cfg.retryBackoffMs()) << Math.min(rateLimited++, 5));
+                try {
+                    Thread.sleep(wait);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("AI 调用被中断", ie);
+                }
+                continue; // 429 额外多试 2 次，退避后重试
             } catch (IllegalStateException e) {
                 last = e; // 响应结构/接口错误：可重试（服务端偶发空响应）
             } catch (IOException e) {
@@ -96,7 +108,7 @@ public final class AiClient {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("AI 调用被中断", e);
             }
-            if (attempt < attempts) sleep(attempt);
+            if (attempt >= attempts) break; // 非 429 失败：重试预算用完即止
         }
         throw last != null ? last : new IllegalStateException("AI 调用失败：未知错误");
     }
@@ -104,7 +116,7 @@ public final class AiClient {
     /** 非流式：一次性读完整响应。 */
     private String blockingComplete(Map<String, Object> body) throws IOException, InterruptedException {
         HttpResponse<String> resp = send(body, Map.of(), HttpResponse.BodyHandlers.ofString());
-        if (resp.statusCode() / 100 != 2) throw httpError(resp.statusCode(), resp.body());
+        if (resp.statusCode() / 100 != 2) throw httpError(resp.statusCode(), resp.body(), resp);
         return parseCompletion(resp.body());
     }
 
@@ -117,7 +129,7 @@ public final class AiClient {
                 send(body, Map.of("stream", true), HttpResponse.BodyHandlers.ofLines());
         if (resp.statusCode() / 100 != 2) {
             String errBody = String.join("\n", resp.body().toList());
-            throw httpError(resp.statusCode(), errBody);
+            throw httpError(resp.statusCode(), errBody, resp);
         }
         String contentType = resp.headers().firstValue("content-type").orElse("");
         if (!contentType.contains("text/event-stream")) {
@@ -208,8 +220,16 @@ public final class AiClient {
         return "anthropic".equalsIgnoreCase(cfg.protocol());
     }
 
-    private IllegalStateException httpError(int status, String body) {
+    private IllegalStateException httpError(int status, String body, HttpResponse<?> resp) {
         String msg = "AI 接口 HTTP " + status + ": " + truncate(body);
+        if (status == 429) {
+            long retryAfterSec = resp.headers().firstValue("Retry-After")
+                    .flatMap(v -> {
+                        try { return java.util.Optional.of(Long.parseLong(v.trim())); }
+                        catch (NumberFormatException nfe) { return java.util.Optional.<Long>empty(); }
+                    }).orElse(0L);
+            return new RateLimitException(msg, retryAfterSec * 1000);
+        }
         if (status == 400 && CONTEXT_HINTS.matcher(body).find()) {
             return new ContextTooLongException(msg); // 上下文装不下：压缩提示词才有意义
         }
@@ -217,9 +237,19 @@ public final class AiClient {
             return new StreamUnsupportedException(msg);
         }
         if (status == 429 || status / 100 == 5) {
-            return new IllegalStateException(msg); // 瞬时：可重试
+            return new IllegalStateException(msg); // 瞬时：可重试（429 已在上面单独处理）
         }
         return new NonRetryableException(msg); // 参数/鉴权错误重试无意义
+    }
+
+    /** 账户/接口限流（HTTP 429）：专用指数退避 + 服务端 Retry-After。 */
+    public static final class RateLimitException extends IllegalStateException {
+        private final long retryAfterMs;
+        public RateLimitException(String message, long retryAfterMs) {
+            super(message);
+            this.retryAfterMs = retryAfterMs;
+        }
+        public long retryAfterMs() { return retryAfterMs; }
     }
 
     private String parseCompletion(String body) throws IOException {

@@ -197,15 +197,15 @@ public final class AppConfig {
                 base_url =
                 api_key =
                 model =
-                # 单次请求超时（秒）；生成完整分析报告建议 ≥300
-                timeout = 60
+                # 单次请求超时（秒）；生成完整分析报告需 ≥300（Flash 级模型对大文件也要 1–4 分钟）
+                timeout = 300
                 # 提示词字符预算：超限自动压缩重渲，适配小上下文窗口（建议 ≤ 上下文窗口 token 数 × 2）
                 max-prompt-chars = 120000
                 # 弱网容错：瞬时错误（超时/5xx/429）重试次数与退避基数（指数退避）
                 retries = 3
                 retry-backoff-ms = 2000
-                # AI 任务并发上限：批量作业并行完成时同时调用 AI 的最大并发数（防止冲击服务方）
-                max-concurrency = 2
+                # AI 任务并发上限：批量作业并行完成时同时调用 AI 的最大并发数（个人 API 额度建议 1，防止触发账户限流）
+                max-concurrency = 1
                 """.formatted(defEng.maxThreads(), defEng.maxInMemoryBytes());
         try {
             Path parent = path.getParent();
