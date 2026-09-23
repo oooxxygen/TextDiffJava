@@ -69,10 +69,11 @@ public final class AiClient {
 
     /** 发送 prompt，返回模型文本响应。瞬时失败重试；上下文超限抛 ContextTooLongException。 */
     public String complete(String prompt) {
-        Map<String, Object> body = Map.of(
-                "model", cfg.model(),
-                "temperature", 0.2,
-                "messages", List.of(Map.of("role", "user", "content", prompt)));
+        Map<String, Object> body = anthropic()
+                ? Map.of("model", cfg.model(), "temperature", 0.2, "max_tokens", 8192,
+                         "messages", List.of(Map.of("role", "user", "content", prompt)))
+                : Map.of("model", cfg.model(), "temperature", 0.2,
+                         "messages", List.of(Map.of("role", "user", "content", prompt)));
         int attempts = Math.max(0, cfg.retries()) + 1;
         IllegalStateException last = null;
         for (int attempt = 1; attempt <= attempts; attempt++) {
@@ -165,9 +166,15 @@ public final class AiClient {
                 String msg = err.path("message").asText("AI 流式返回 error 块");
                 throw new IllegalStateException("AI 接口错误: " + msg);
             }
-            JsonNode delta = chunk.path("choices").path(0).path("delta").path("content");
-            if (delta.isMissingNode()) delta = chunk.path("choices").path(0).path("text");
-            if (!delta.isMissingNode()) content.append(delta.asText());
+            if (anthropic()) {
+                // Anthropic SSE：content_block_delta 事件携带 delta.text；message_stop 结束
+                JsonNode delta = chunk.path("delta").path("text");
+                if (!delta.isMissingNode()) content.append(delta.asText());
+            } else {
+                JsonNode delta = chunk.path("choices").path(0).path("delta").path("content");
+                if (delta.isMissingNode()) delta = chunk.path("choices").path(0).path("text");
+                if (!delta.isMissingNode()) content.append(delta.asText());
+            }
         }
         if (content.toString().isBlank()) throw new IllegalStateException("AI 流式响应内容为空");
         return content.toString();
@@ -178,14 +185,27 @@ public final class AiClient {
             throws IOException, InterruptedException {
         Map<String, Object> full = new java.util.LinkedHashMap<>(body);
         full.putAll(extra);
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(cfg.baseUrl().replaceAll("/+$", "") + "/chat/completions"))
+        HttpRequest.Builder b = HttpRequest.newBuilder()
+                .uri(URI.create(endpoint()))
                 .timeout(Duration.ofSeconds(cfg.timeoutSeconds()))
                 .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + cfg.apiKey())
-                .POST(HttpRequest.BodyPublishers.ofString(com.textdiff.store.Json.write(full)))
-                .build();
-        return client.send(request, handler);
+                .POST(HttpRequest.BodyPublishers.ofString(com.textdiff.store.Json.write(full)));
+        if (anthropic()) {
+            b.header("x-api-key", cfg.apiKey()).header("anthropic-version", "2023-06-01");
+        } else {
+            b.header("Authorization", "Bearer " + cfg.apiKey());
+        }
+        return client.send(b.build(), handler);
+    }
+
+    /** Anthropic 原生 = base + /v1/messages；OpenAI 兼容 = base + /chat/completions。 */
+    private String endpoint() {
+        String base = cfg.baseUrl().replaceAll("/+$", "");
+        return anthropic() ? base + "/v1/messages" : base + "/chat/completions";
+    }
+
+    private boolean anthropic() {
+        return "anthropic".equalsIgnoreCase(cfg.protocol());
     }
 
     private IllegalStateException httpError(int status, String body) {
@@ -204,9 +224,12 @@ public final class AiClient {
 
     private String parseCompletion(String body) throws IOException {
         JsonNode root = com.textdiff.store.Json.MAPPER.readTree(body);
-        JsonNode content = root.path("choices").path(0).path("message").path("content");
+        JsonNode content = anthropic()
+                ? root.path("content").path(0).path("text")
+                : root.path("choices").path(0).path("message").path("content");
         if (content.isMissingNode() || content.asText().isBlank()) {
-            throw new IllegalStateException("AI 响应缺少 choices[0].message.content");
+            throw new IllegalStateException("AI 响应缺少内容字段（"
+                    + (anthropic() ? "content[0].text" : "choices[0].message.content") + "）");
         }
         return content.asText();
     }

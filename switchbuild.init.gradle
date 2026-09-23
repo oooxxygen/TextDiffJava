@@ -1,0 +1,4 @@
+// 将 Gradle 构建输出重定向到 build2/（避免与主构建目录冲突）
+allprojects {
+    buildDir = file("${rootProject.projectDir}/build2")
+}

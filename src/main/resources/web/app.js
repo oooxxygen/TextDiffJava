@@ -1605,7 +1605,7 @@ const BatchView = {
 const SettingsPage = {
   setup() {
     const providers = AI_PROVIDERS;
-    const form = reactive({ provider: "custom", protocol: "openai", base_url: "", api_key: "", model: "", timeout: 60, enabled: false });
+    const form = reactive({ provider: "custom", protocol: "openai", base_url: "", api_key: "", model: "", timeout: 60, enabled: false, max_concurrency: 2 });
     const apiKeySet = ref(false);
     const busy = ref(false); const toast = ref(""); const test = reactive({ msg: "", ok: null });
 
@@ -1627,6 +1627,7 @@ const SettingsPage = {
         form.base_url = r.base_url || ""; form.model = r.model || "";
         form.timeout = r.timeout || 60; form.enabled = r.enabled; apiKeySet.value = r.api_key_set;
         form.protocol = r.protocol || "openai";
+        form.max_concurrency = r.max_concurrency || 2;
         const hit = providers.find(p => p.base_url === r.base_url && (p.protocol || "openai") === form.protocol);
         form.provider = hit ? hit.id : "custom";
       } catch (e) {}
@@ -1637,7 +1638,8 @@ const SettingsPage = {
       busy.value = true; toast.value = ""; test.msg = "";
       try {
         const payload = { protocol: form.protocol, base_url: form.base_url, model: form.model,
-                          timeout: Number(form.timeout) || 60, enabled: true };
+                          timeout: Number(form.timeout) || 60, enabled: true,
+                          max_concurrency: Number(form.max_concurrency) || 2 };
         if (form.api_key) payload.api_key = form.api_key;  // 留空=不改
         const r = await jpost("/api/settings/ai", payload);
         apiKeySet.value = r.api_key_set; form.api_key = "";
@@ -1751,7 +1753,7 @@ const SettingsPage = {
     <div class="card-head">🤖 AI 大模型接入设置</div>
     <div class="card-body">
       <p class="ai-hint" style="margin-top:0;">
-        支持 <b>OpenAI 兼容</b>（<code>/v1/chat/completions</code>）与 <b>Anthropic 原生</b>（<code>/v1/messages</code>）两种协议。对接 Claude Code 的 API：选「Anthropic Claude（原生）」预设、填 <code>sk-ant-…</code> 密钥即可。仅向模型发送<b>聚合统计</b>，<b>不发送任何单元格原始值</b>；密钥保存在服务端 <code>results/ai_settings.json</code>。
+        支持 <b>OpenAI 兼容</b>（<code>/v1/chat/completions</code>）与 <b>Anthropic 原生</b>（<code>/v1/messages</code>）两种协议。对接 Claude Code 的 API：选「Anthropic Claude（原生）」预设、填 <code>sk-ant-…</code> 密钥即可。仅向模型发送<b>聚合统计</b>，<b>不发送任何单元格原始值</b>；配置保存后<b>即时生效</b>（写入服务端 <code>config.ini</code> [ai] 段，重启后仍有效）。
       </p>
       <div class="form-grid">
         <div class="field"><label>服务商预设</label>
@@ -1772,6 +1774,8 @@ const SettingsPage = {
           <input v-model="form.api_key" type="password" :placeholder="apiKeySet ? '●●●●●●（保留现有）' : 'sk-...'" /></div>
         <div class="field"><label>超时（秒）</label>
           <input v-model="form.timeout" type="number" /></div>
+        <div class="field"><label>AI 并发上限（1–64）</label>
+          <input v-model="form.max_concurrency" type="number" min="1" max="64" /></div>
       </div>
       <div class="btn-row">
         <button class="btn" @click="save" :disabled="busy">{{ busy ? '保存中…' : '保存' }}</button>
@@ -2278,24 +2282,31 @@ const REPORT_STATUS = { pending: "待开始", running: "进行中", done: "已�
 
 /* 报表行渲染：业务行按栏位双栏对照（差异栏位字符级高亮），表头/表尾整行对照。 */
 const ReportRowRec = {
-  props: ["row", "sourceA", "sourceB"],
+  props: ["row", "sourceA", "sourceB", "section"],
   setup(props) {
     const isOpen = ref(false);
     const toggle = () => { isOpen.value = !isOpen.value; };
-    const maxLen = computed(() => Math.max((props.row.a_cols || []).length, (props.row.b_cols || []).length, 1));
-    const isLine = computed(() => maxLen.value === 1); // 表头/表尾整行对照
+    // 整行原貌（报表业务行 a_raw/b_raw；折行记录含 \n，单格整体渲染）优先，缺省回退栏位切分
+    const aDisp = computed(() => props.row.a_raw != null ? [props.row.a_raw] : (props.row.a_cols || []));
+    const bDisp = computed(() => props.row.b_raw != null ? [props.row.b_raw] : (props.row.b_cols || props.row.a_cols || []));
+    const maxLen = computed(() => Math.max(aDisp.value.length, bDisp.value.length, 1));
+    const isLine = computed(() => maxLen.value === 1); // 整行对照（表头/表尾物理行 + 表体整行模式）
     const diffSet = computed(() => new Set(props.row.diff_cols || []));
-    function segs(side, i, val) {
-      if (!diffSet.value.has(i)) return [{ text: val || "", cls: "" }];
-      const a = (props.row.a_cols || [])[i] || "";
-      const b = (props.row.b_cols || [])[i] || "";
+    const showLcol = computed(() => isLine.value && props.section === 'data'
+        && props.row.status === 'diff' && diffSet.value.size > 0); // 差异栏位左列仅业务区展示
+    function segs(side, i) {
+      if (!diffSet.value.has(i)) {
+        return [{ text: (side === "a" ? aDisp.value : bDisp.value)[i] || "", cls: "" }];
+      }
+      const a = aDisp.value[i] || "";
+      const b = bDisp.value[i] || "";
       return segments(side === "a" ? a : b, computeOpcodes(a, b), side);
     }
     function statusLabel(s) {
       const a = props.sourceA || "A", b = props.sourceB || "B";
       return { equal: "完全匹配", diff: "部分匹配", unmatched_a: "仅" + a + "有", unmatched_b: "仅" + b + "有" }[s] || s;
     }
-    return { isOpen, toggle, maxLen, isLine, diffSet, segs, statusLabel };
+    return { isOpen, toggle, maxLen, isLine, showLcol, diffSet, segs, statusLabel, aDisp, bDisp };
   },
   template: `
   <div class="rec" :class="['s-' + row.status, isOpen ? 'open' : '']">
@@ -2303,21 +2314,37 @@ const ReportRowRec = {
       <span class="caret">▶</span>
       <span class="key">{{ (row.key || '').split(String.fromCharCode(31)).join(':') }}</span>
       <span class="tag" :class="row.status">{{ statusLabel(row.status) }}</span>
-      <span class="meta" v-if="row.status==='diff' && row.diff_cols && row.diff_cols.length">差异栏位: {{ row.diff_cols.map(c=>c+1).join(', ') }}</span>
+      <span class="meta" v-if="row.status==='diff' && row.diff_cols && row.diff_cols.length">{{ showLcol ? '差异栏位: ' + row.diff_cols.map(c=>c+1).join(', ') : '内容存在差异' }}</span>
     </div>
     <div class="rec-body" v-if="isOpen">
-      <div class="recgrid">
-        <div class="ghdr">{{ sourceA || 'A' }}<span class="absent-note" v-if="!row.a_cols"> · 无此行</span></div>
-        <div class="ghdr">{{ sourceB || 'B' }}<span class="absent-note" v-if="!row.b_cols"> · 无此行</span></div>
-        <template v-for="i in maxLen" :key="i">
-          <div class="gcell" :class="{ diff: diffSet.has(i-1) }">
-            <span class="ci" v-if="!isLine">{{ i }}</span>
-            <span class="cv"><span v-for="(s,si) in segs('a', i-1, (row.a_cols||[])[i-1]||'')" :key="si" :class="s.cls">{{ s.text }}</span></span>
+      <div class="recgrid" :class="{ 'with-lcol': showLcol }">
+        <template v-if="isLine">
+          <div class="ghdr lcol-head" v-if="showLcol">差异栏位</div>
+          <div class="ghdr">{{ sourceA || 'A' }}<span class="absent-note" v-if="!aDisp.length"> · 无此行</span></div>
+          <div class="ghdr">{{ sourceB || 'B' }}<span class="absent-note" v-if="!bDisp.length"> · 无此行</span></div>
+          <div class="lcol" v-if="showLcol">
+            <span class="lcol-item" v-for="c in row.diff_cols" :key="c">{{ c + 1 }}</span>
           </div>
-          <div class="gcell" :class="{ diff: diffSet.has(i-1) }">
-            <span class="ci" v-if="!isLine">{{ i }}</span>
-            <span class="cv"><span v-for="(s,si) in segs('b', i-1, (row.b_cols||[])[i-1]||'')" :key="si" :class="s.cls">{{ s.text }}</span></span>
+          <div class="gcell" :class="{ diff: diffSet.has(0) }">
+            <span class="cv"><span v-for="(s,si) in segs('a', 0)" :key="si" :class="s.cls">{{ s.text }}</span></span>
           </div>
+          <div class="gcell" :class="{ diff: diffSet.has(0) }">
+            <span class="cv"><span v-for="(s,si) in segs('b', 0)" :key="si" :class="s.cls">{{ s.text }}</span></span>
+          </div>
+        </template>
+        <template v-else>
+          <div class="ghdr">{{ sourceA || 'A' }}<span class="absent-note" v-if="!aDisp.length"> · 无此行</span></div>
+          <div class="ghdr">{{ sourceB || 'B' }}<span class="absent-note" v-if="!bDisp.length"> · 无此行</span></div>
+          <template v-for="i in maxLen" :key="i">
+            <div class="gcell" :class="{ diff: diffSet.has(i-1) }">
+              <span class="ci">{{ i }}</span>
+              <span class="cv"><span v-for="(s,si) in segs('a', i-1)" :key="si" :class="s.cls">{{ s.text }}</span></span>
+            </div>
+            <div class="gcell" :class="{ diff: diffSet.has(i-1) }">
+              <span class="ci">{{ i }}</span>
+              <span class="cv"><span v-for="(s,si) in segs('b', i-1)" :key="si" :class="s.cls">{{ s.text }}</span></span>
+            </div>
+          </template>
         </template>
       </div>
     </div>
@@ -2357,7 +2384,7 @@ const ReportZone = {
     </div>
     <div class="zone-body" v-if="open">
       <div class="empty" v-if="!loading && !rows.length">（无记录）</div>
-      <ReportRowRec v-for="r in rows" :key="r.key + r.status" :row="r" :sourceA="sourceA" :sourceB="sourceB" />
+      <ReportRowRec v-for="r in rows" :key="r.key + r.status" :row="r" :sourceA="sourceA" :sourceB="sourceB" :section="section" />
       <div class="zone-pager" v-if="total > pageSize" @click.stop>
         <button class="mini-btn" :disabled="page<=1" @click="loadPage(page-1)">上一页</button>
         <span>{{ page }} / {{ totalPages }}</span>

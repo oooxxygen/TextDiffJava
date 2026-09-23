@@ -47,8 +47,8 @@ public final class TaskManager implements AutoCloseable {
     private final Path resultsRoot;
     private final Path settingsFile;
     private volatile TaskDirs dirs = TaskDirs.empty();
-    private final int aiConcurrency;
-    private final java.util.concurrent.Semaphore aiPermits;
+    private volatile int aiConcurrency;
+    private volatile java.util.concurrent.Semaphore aiPermits;
     /** 已提交到执行池但尚未开始运行的任务（防止定时调度器重复入队）。 */
     private final java.util.Set<String> queued = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final ExecutorService pool;
@@ -86,6 +86,21 @@ public final class TaskManager implements AutoCloseable {
         backfill();
         // 定时调度：周期扫描到点的 pending 任务（含重启恢复的未来定时任务）
         scheduler.scheduleWithFixedDelay(this::dispatchDue, 15, 15, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    /**
+     * AI 并发度热更新：信号量与执行池运行时重调（设置页保存即生效）。
+     * 新信号量按旧信号量当前剩余许可初始化，已在执行中的任务不受影响。
+     */
+    public synchronized void resizeAiConcurrency(int n) {
+        int next = Math.max(1, n);
+        java.util.concurrent.Semaphore old = this.aiPermits;
+        this.aiPermits = new java.util.concurrent.Semaphore(Math.max(0, old.availablePermits()));
+        this.aiConcurrency = next;
+        if (pool instanceof java.util.concurrent.ThreadPoolExecutor tpe) {
+            tpe.setMaximumPoolSize(next);
+            tpe.setCorePoolSize(next);
+        }
     }
 
     /** 全部任务记录（任务管理页列表）。 */

@@ -85,6 +85,14 @@ public final class JobManager implements AutoCloseable {
         requeueStuckJobs();
     }
 
+    /** 对比并发度热更新：主对比线程池运行时重调大小（设置页保存即生效）。 */
+    public void resizeEnginePool(int maxThreads) {
+        if (pool instanceof java.util.concurrent.ThreadPoolExecutor tpe) {
+            tpe.setMaximumPoolSize(maxThreads);
+            tpe.setCorePoolSize(maxThreads);
+        }
+    }
+
     /** 目录模式批次：每行配置一条规则，glob 配对 dirA/dirB 同名文件 → 多作业。返回批次。 */
     public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines) throws IOException {
         record Planned(JobRecord job) {}

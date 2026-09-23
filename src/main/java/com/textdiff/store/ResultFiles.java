@@ -198,13 +198,14 @@ public final class ResultFiles {
      * RowDiff 的可反序列化 DTO（RowDiff 为 final 字段无默认构造器，Jackson 原生支持 record）。
      * JSONL 行格式即 DTO 格式。
      */
-    record RowDto(String key, String status, String section, String[] aCols, String[] bCols, int[] diffCols) {
+    record RowDto(String key, String status, String section, String[] aCols, String[] bCols, int[] diffCols,
+                  String aRaw, String bRaw) {
         static RowDto of(RowDiff r) {
-            return new RowDto(r.key, r.status, r.section, r.aCols, r.bCols, r.diffCols);
+            return new RowDto(r.key, r.status, r.section, r.aCols, r.bCols, r.diffCols, r.aRaw, r.bRaw);
         }
 
         RowDiff toRowDiff() {
-            return new RowDiff(key, status, section, aCols, bCols, diffCols);
+            return new RowDiff(key, status, section, aCols, bCols, diffCols, aRaw, bRaw);
         }
     }
 

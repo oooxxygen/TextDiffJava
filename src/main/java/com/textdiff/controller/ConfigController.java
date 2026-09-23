@@ -205,9 +205,158 @@ public class ConfigController {
         return out;
     }
 
+    /**
+     * 基线导入：上传 .conf/.txt/.json 配置文件（每行一条 legacy 规则），按昵称合并写入 default.conf
+     * （同名昵称以新内容替换），并同步生成 current.conf。返回写入条数与文件名。
+     */
+    @PostMapping("/configs/import-baseline")
+    public Map<String, Object> importBaseline(@RequestParam("files") List<MultipartFile> files)
+            throws IOException {
+        if (files == null || files.isEmpty()) throw new IllegalArgumentException("未选择配置文件");
+        // 现有基线 → 昵称 → 行内容（保留旧注释之外的规则）
+        Path dir = paths.configsDir();
+        Files.createDirectories(dir);
+        Path baseline = dir.resolve("default.conf");
+        Path current = dir.resolve("current.conf");
+        java.util.LinkedHashMap<String, String> merged = new java.util.LinkedHashMap<>();
+        if (Files.isRegularFile(baseline)) {
+            for (String line : readConfigLines(baseline)) {
+                merged.putIfAbsent(nickOf(line), line);
+            }
+        }
+        int imported = 0;
+        List<String> nicknames = new ArrayList<>();
+        List<String> bad = new ArrayList<>();
+        for (MultipartFile f : files) {
+            for (String line : readConfigLines(Path.of(f.getOriginalFilename() == null ? "in.conf"
+                    : f.getOriginalFilename()).getFileName().toString(),
+                    new String(f.getBytes(), StandardCharsets.UTF_8))) {
+                try {
+                    Rules.parseLegacy(line, ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
+                } catch (RuntimeException e) {
+                    bad.add(line.split(":", 2)[0] + "（" + e.getMessage() + "）");
+                    continue;
+                }
+                String nick = nickOf(line);
+                if (merged.containsKey(nick)) nicknames.remove(nick);
+                merged.put(nick, line);
+                nicknames.add(nick);
+                imported++;
+            }
+        }
+        if (imported == 0) {
+            throw new IllegalArgumentException("未解析到有效配置行" + (bad.isEmpty() ? "" : "；非法行: " + bad));
+        }
+        String outText = String.join(System.lineSeparator(), merged.values()) + System.lineSeparator();
+        Files.writeString(baseline, outText, StandardCharsets.UTF_8);
+        Files.writeString(current, outText, StandardCharsets.UTF_8);
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("imported", imported);
+        out.put("file", baseline.getFileName().toString());
+        out.put("nicknames", nicknames);
+        if (!bad.isEmpty()) out.put("skipped", bad);
+        return out;
+    }
+
+    /** 提取配置行的昵称段（冒号前）。 */
+    private static String nickOf(String line) {
+        return line.split(":", 2)[0].strip();
+    }
+
+    private static List<String> readConfigLines(Path file) throws IOException {
+        return readConfigLines(file.getFileName().toString(), Files.readString(file, StandardCharsets.UTF_8));
+    }
+
+    /** 从文本提取配置行：去空白、跳过 # 注释与空行。 */
+    private static List<String> readConfigLines(String name, String text) {
+        List<String> out = new ArrayList<>();
+        for (String line : text.split("\\r?\\n")) {
+            String t = line.strip();
+            if (!t.isEmpty() && !t.startsWith("#")) out.add(t);
+        }
+        return out;
+    }
+
+    /**
+     * 配置导出 Excel：Sheet1 生效配置（default.conf + configs 目录全部规则解析后的字段）；
+     * Sheet2 基线↔目录差异（昵称在基线但内容/缺失不同 → 修改/新增标识）。
+     */
     @GetMapping("/configs/export")
-    public Map<String, Object> exportStub() {
-        throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Excel 导出未启用");
+    public org.springframework.http.ResponseEntity<byte[]> exportExcel() {
+        Map<String, String> all;
+        Map<String, String> baseline;
+        try {
+            all = readAll();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        baseline = new java.util.LinkedHashMap<>();
+        try {
+            Path b = paths.configsDir().resolve("default.conf");
+            if (Files.isRegularFile(b)) {
+                for (String line : readConfigLines(b)) baseline.put(nickOf(line), line);
+            }
+        } catch (IOException ignored) {
+        }
+
+        try (var wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            var sh1 = wb.createSheet("生效配置");
+            java.util.List<String> heads = java.util.List.of("配置文件", "昵称", "文件名通配", "主键栏位",
+                    "跳过栏位", "分隔符", "编码A", "编码B", "来源A", "来源B");
+            var r0 = sh1.createRow(0);
+            for (int c = 0; c < heads.size(); c++) r0.createCell(c).setCellValue(heads.get(c));
+            int r = 1;
+            for (Map.Entry<String, String> e : all.entrySet()) {
+                try {
+                    CompareConfig cfg = Rules.parseLegacy(e.getValue(),
+                            ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
+                    var row = sh1.createRow(r++);
+                    row.createCell(0).setCellValue(e.getKey());
+                    row.createCell(1).setCellValue(cfg.nickname);
+                    row.createCell(2).setCellValue(cfg.fileGlob);
+                    row.createCell(3).setCellValue(ApiPayloads.seq1based(cfg.keyColumns));
+                    row.createCell(4).setCellValue(ApiPayloads.seq1based(cfg.omitColumns));
+                    row.createCell(5).setCellValue(cfg.delimiter == null ? "" : cfg.delimiter);
+                    row.createCell(6).setCellValue(cfg.encodingA == null ? "auto" : cfg.encodingA);
+                    row.createCell(7).setCellValue(cfg.encodingB == null ? "auto" : cfg.encodingB);
+                    row.createCell(8).setCellValue(cfg.sourceA == null ? "A" : cfg.sourceA);
+                    row.createCell(9).setCellValue(cfg.sourceB == null ? "B" : cfg.sourceB);
+                } catch (RuntimeException ignored) {
+                }
+            }
+            for (int c = 0; c < heads.size(); c++) sh1.setColumnWidth(c, 18 * 256);
+
+            var sh2 = wb.createSheet("基线对比");
+            java.util.List<String> h2 = java.util.List.of("昵称", "基线", "目录配置", "状态");
+            var r20 = sh2.createRow(0);
+            for (int c = 0; c < h2.size(); c++) r20.createCell(c).setCellValue(h2.get(c));
+            int r2 = 1;
+            var names = new java.util.TreeSet<String>();
+            names.addAll(baseline.keySet());
+            names.addAll(all.keySet().stream().map(f -> f.replaceAll("\\.\\w+$", "")).toList());
+            for (String nick : names) {
+                String bLine = baseline.get(nick);
+                String dLine = all.get(nick + ".conf") != null ? all.get(nick + ".conf")
+                        : all.values().stream().filter(v -> nickOf(v).equals(nick)).findFirst().orElse(null);
+                var row = sh2.createRow(r2++);
+                row.createCell(0).setCellValue(nick);
+                row.createCell(1).setCellValue(bLine == null ? "（基线无）" : bLine);
+                row.createCell(2).setCellValue(dLine == null ? "（目录无）" : dLine);
+                row.createCell(3).setCellValue(bLine == null ? "新增" : dLine == null ? "缺失"
+                        : bLine.strip().equals(dLine.strip()) ? "一致" : "已修改");
+            }
+            for (int c = 0; c < h2.size(); c++) sh2.setColumnWidth(c, 42 * 256);
+
+            var buf = new java.io.ByteArrayOutputStream();
+            wb.write(buf);
+            return org.springframework.http.ResponseEntity.ok()
+                    .header("Content-Disposition", "attachment; filename=\"textdiff_configs.xlsx\"")
+                    .contentType(org.springframework.http.MediaType.parseMediaType(
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                    .body(buf.toByteArray());
+        } catch (Exception e) {
+            throw new RuntimeException("配置导出失败: " + e.getMessage(), e);
+        }
     }
 
     // ---- internals ----

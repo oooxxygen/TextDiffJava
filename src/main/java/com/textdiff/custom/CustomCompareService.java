@@ -53,6 +53,14 @@ public final class CustomCompareService implements AutoCloseable {
         requeueStuckJobs();
     }
 
+    /** 对比并发度热更新：自定义格式线程池运行时重调大小（设置页保存即生效）。 */
+    public void resizePool(int threads) {
+        if (pool instanceof java.util.concurrent.ThreadPoolExecutor tpe) {
+            tpe.setMaximumPoolSize(Math.max(1, threads));
+            tpe.setCorePoolSize(Math.max(1, threads));
+        }
+    }
+
     /** 提交批次：路径 A/B 各可为目录（按文件名配对全部文件）或单个文件。 */
     public BatchRecord submit(Path pathA, Path pathB, String label, CustomFormat cfg) throws IOException {
         if (pathA == null || pathB == null || !Files.exists(pathA) || !Files.exists(pathB)) {

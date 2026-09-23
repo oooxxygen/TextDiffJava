@@ -226,11 +226,11 @@ public final class ReportComparator {
                 Row x = da.poll();
                 Row y = db.poll();
                 if (effEqual(x.fields(), y.fields(), skip)) {
-                    out.add(RowDiff.equal(keyLabel(e.getKey(), x), Status.SECTION_DATA, displayOf(x)));
+                    out.add(RowDiff.equal(keyLabel(e.getKey(), x), Status.SECTION_DATA, displayOf(x)).withRaw(x.raw(), y.raw()));
                     equal++;
                 } else {
                     out.add(RowDiff.diff(keyLabel(e.getKey(), x), Status.SECTION_DATA,
-                            displayOf(x), displayOf(y), diffDisplay(x, y, skip)));
+                            displayOf(x), displayOf(y), diffDisplay(x, y, skip)).withRaw(x.raw(), y.raw()));
                     partial++;
                 }
             }
@@ -259,7 +259,7 @@ public final class ReportComparator {
             Row x = sa.get(i), y = sb.get(j);
             int c = x.sortKey().compareTo(y.sortKey());
             if (c == 0) {
-                out.add(RowDiff.equal(rowKey(x), Status.SECTION_DATA, displayOf(x)));
+                out.add(RowDiff.equal(rowKey(x), Status.SECTION_DATA, displayOf(x)).withRaw(x.raw(), null));
                 equal++;
                 i++;
                 j++;
@@ -318,7 +318,7 @@ public final class ReportComparator {
                 usedB[best] = true;
                 Row y = leftB.get(best);
                 out.add(RowDiff.diff(rowKey(x), Status.SECTION_DATA,
-                        displayOf(x), displayOf(y), diffDisplay(x, y, skip)));
+                        displayOf(x), displayOf(y), diffDisplay(x, y, skip)).withRaw(x.raw(), y.raw()));
                 partial++;
             } else {
                 unmatchedA.add(x);
@@ -326,13 +326,13 @@ public final class ReportComparator {
         }
         for (Row x : unmatchedA) {
             out.add(new RowDiff(rowKey(x), Status.UNMATCHED_A, Status.SECTION_DATA,
-                    displayOf(x), null, new int[0]));
+                    displayOf(x), null, new int[0], x.raw(), null));
         }
         for (int bj = 0; bj < leftB.size(); bj++) {
             if (!usedB[bj]) {
                 Row y = leftB.get(bj);
                 out.add(new RowDiff(rowKey(y), Status.UNMATCHED_B, Status.SECTION_DATA,
-                        null, displayOf(y), new int[0]));
+                        null, displayOf(y), new int[0], null, y.raw()));
             }
         }
         return new CompareData(out, 0, partial, 0, 0);
@@ -395,12 +395,12 @@ public final class ReportComparator {
         return r.raw().strip();
     }
 
-    /** 展示列：折行记录 = 各物理行原貌（保持折行显示效果）；普通行 = 切分字段。 */
+    /** 展示列（持久化形态，保持栏位切分供导出/AI 使用）；界面整行展示走 aRaw/bRaw。 */
     private static String[] displayOf(Row r) {
         return r.display() != null ? r.display() : r.fields();
     }
 
-    /** 差异位置：折行记录按物理行号（skip 不适用物理行），普通行按栏位号（剔除 skip）。 */
+    /** 差异位置：折行记录按物理行号（skip 不适用物理行），普通行按栏位号（剔除 skip）——栏位号罗列在界面左侧。 */
     private static int[] diffDisplay(Row x, Row y, Set<Integer> skip) {
         if (x.display() != null || y.display() != null) {
             return diffCols(x.display() != null ? x.display() : new String[]{x.raw()},

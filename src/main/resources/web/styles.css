@@ -295,6 +295,13 @@ label.field { font-size: 12px; color: var(--text-soft); font-weight: 600; }
 /* 缺失侧底色（按格着色，行内三格仍同高对齐） */
 .recgrid .gcell.present { background: var(--only-present-bg); }
 .recgrid .gcell.absent { background: var(--only-missing-bg); }
+/* 整行对照模式的左侧差异栏位列：栏位/行号纵向罗列，跨 A、B 两行 */
+.recgrid.with-lcol { grid-template-columns: max-content minmax(0, 1fr) minmax(0, 1fr); }
+.recgrid .lcol { grid-row: span 2; display: flex; flex-direction: column; gap: 2px; justify-content: center;
+  padding: 4px 10px; background: #fff6f6; border-right: 1px solid var(--border); }
+.recgrid .lcol .lcol-item { font-family: var(--mono); font-size: 11px; color: var(--diff-text);
+  font-weight: 700; text-align: center; min-width: 26px; }
+.recgrid .ghdr.lcol-head { text-align: center; background: #fff6f6; color: var(--diff-text); font-weight: 600; }
 
 /* 字符级高亮 */
 .seg-del { background: var(--char-del); border-radius: 2px; }

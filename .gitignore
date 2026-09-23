@@ -12,3 +12,9 @@ server.log
 build2/
 acceptance-run-rc/
 debug.log
+
+# 运行时产物（含真实密钥/用户数据，不入库）
+config.ini
+store/
+uploads/
+configs/

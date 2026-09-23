@@ -60,6 +60,14 @@ public final class ReportCompareService implements AutoCloseable {
         requeueStuckJobs();
     }
 
+    /** 对比并发度热更新：报表线程池运行时重调大小（设置页保存即生效）。 */
+    public void resizePool(int threads) {
+        if (pool instanceof java.util.concurrent.ThreadPoolExecutor tpe) {
+            tpe.setMaximumPoolSize(Math.max(1, threads));
+            tpe.setCorePoolSize(Math.max(1, threads));
+        }
+    }
+
     /**
      * 提交批次：按文件名配对 dirA/dirB 的非 .header 文件。
      * keySeq/omitSeq = 1-based 列序串（如 "3/4/5"，空串 = 不配置）；主键空 = 整行对比。
