@@ -68,8 +68,8 @@ public final class ReportComparator {
         s.rowCountB = b.rows().size();
         s.controlFormat = control;
         if (control) s.foldLines = Math.max(foldOf(a.rows()), foldOf(b.rows()));
-        s.headerLineDiff = countNonEqual(headerRows);
-        s.footerLineDiff = countNonEqual(footerRows);
+        s.headerLineDiff = countDiffLines(headerRows);
+        s.footerLineDiff = countDiffLines(footerRows);
         s.headerBlockDiff = countNonEqualBlocks(headerRows);
         s.footerBlockDiff = countNonEqualBlocks(footerRows);
         s.equal = data.equal;
@@ -94,8 +94,12 @@ public final class ReportComparator {
         return 1;
     }
 
-    // ---- 表头/表尾：逐块逐行 ----
+    // ---- 表头/表尾：整块一条记录（块内逐物理行对照，差异位 = 行号）----
 
+    /**
+     * 模板版式：每块一条 RowDiff（aCols/bCols = 块内全部物理行）。
+     * 全等 → equal；有差异行 → diff（diffCols = 差异物理行号 0-based）；单侧缺失 → unmatched。
+     */
     private static List<RowDiff> compareBlocks(List<String[]> ba, List<String[]> bb,
                                                String section, String keyPrefix) {
         List<RowDiff> out = new ArrayList<>();
@@ -103,13 +107,24 @@ public final class ReportComparator {
         for (int i = 0; i < blocks; i++) {
             String[] la = i < ba.size() ? ba.get(i) : null;
             String[] lb = i < bb.size() ? bb.get(i) : null;
-            compareBlockLines(la, lb, (i + 1) + "#", section, out);
+            if (la == null && lb == null) continue;
+            String key = keyPrefix + (i + 1);
+            if (la == null) {
+                out.add(RowDiff.onlyB(key, section, lb));
+            } else if (lb == null) {
+                out.add(RowDiff.onlyA(key, section, la));
+            } else if (java.util.Arrays.equals(la, lb)) {
+                out.add(RowDiff.equal(key, section, la));
+            } else {
+                out.add(RowDiff.diff(key, section, la, lb, diffCols(la, lb)));
+            }
         }
         return out;
     }
 
     /**
-     * 控制行版式：双侧块按段签名（控制行原文）配对（免疫段序差异），未配对块整体记单侧缺失。
+     * 控制行版式：双侧块按段签名（控制行原文）配对（免疫段序差异），每对一条 RowDiff，
+     * 未配对块整体记单侧缺失。
      */
     private static List<RowDiff> compareSignedBlocks(List<String[]> ba, List<String> ka,
                                                      List<String[]> bb, List<String> kb,
@@ -120,60 +135,38 @@ public final class ReportComparator {
         for (int i = 0; i < kb.size(); i++) idxB.putIfAbsent(kb.get(i), i);
         for (int i = 0; i < ba.size(); i++) {
             Integer j = idxB.get(ka.get(i));
+            String key = ReportParser.sigShort(ka.get(i)) + "·" + (i + 1);
             if (j == null) {
-                compareBlockLines(ba.get(i), null, ReportParser.sigShort(ka.get(i)) + "·" + (i + 1) + "#", section, out);
+                out.add(RowDiff.onlyA(key, section, ba.get(i)));
                 continue;
             }
             usedB[j] = true;
-            compareBlockLines(ba.get(i), bb.get(j), ReportParser.sigShort(ka.get(i)) + "·" + (i + 1) + "#", section, out);
+            String[] la = ba.get(i);
+            String[] lb = bb.get(j);
+            if (java.util.Arrays.equals(la, lb)) {
+                out.add(RowDiff.equal(key, section, la));
+            } else {
+                out.add(RowDiff.diff(key, section, la, lb, diffCols(la, lb)));
+            }
         }
         for (int j = 0; j < bb.size(); j++) {
-            if (!usedB[j]) {
-                compareBlockLines(null, bb.get(j), ReportParser.sigShort(kb.get(j)) + "·" + (j + 1) + "#", section, out);
-            }
+            if (!usedB[j]) out.add(RowDiff.onlyB(ReportParser.sigShort(kb.get(j)) + "·" + (j + 1), section, bb.get(j)));
         }
         return out;
     }
 
-    /** 一对块的逐行对照（任一侧缺失时整块按行记单侧；key 前缀 + 行号 1-based）。 */
-    private static void compareBlockLines(String[] la, String[] lb, String keyPrefix,
-                                          String section, List<RowDiff> out) {
-        if (la == null && lb == null) return;
-        if (la == null) {
-            for (int j = 0; j < lb.length; j++) out.add(onlyB(keyPrefix + (j + 1), section, lb[j]));
-            return;
-        }
-        if (lb == null) {
-            for (int j = 0; j < la.length; j++) out.add(onlyA(keyPrefix + (j + 1), section, la[j]));
-            return;
-        }
-        int lines = Math.max(la.length, lb.length);
-        for (int j = 0; j < lines; j++) {
-            String va = j < la.length ? la[j] : null;
-            String vb = j < lb.length ? lb[j] : null;
-            String k = keyPrefix + (j + 1);
-            if (va == null) {
-                out.add(onlyB(k, section, vb));
-            } else if (vb == null) {
-                out.add(onlyA(k, section, va));
-            } else if (va.equals(vb)) {
-                out.add(RowDiff.equal(k, section, new String[]{va}));
+    /** 差异行数（表头/表尾按物理行计）：diff 块 = 差异行号数；单侧缺失块 = 该块物理行数。 */
+    private static long countDiffLines(List<RowDiff> rows) {
+        long n = 0;
+        for (RowDiff r : rows) {
+            if (Status.EQUAL.equals(r.status)) continue;
+            if (Status.DIFF.equals(r.status)) {
+                n += r.diffCols.length;
             } else {
-                out.add(RowDiff.diff(k, section, new String[]{va}, new String[]{vb}, new int[]{0}));
+                n += Math.max(r.aCols == null ? 0 : r.aCols.length, r.bCols == null ? 0 : r.bCols.length);
             }
         }
-    }
-
-    private static RowDiff onlyA(String key, String section, String line) {
-        return new RowDiff(key, Status.UNMATCHED_A, section, new String[]{line}, null, new int[0]);
-    }
-
-    private static RowDiff onlyB(String key, String section, String line) {
-        return new RowDiff(key, Status.UNMATCHED_B, section, null, new String[]{line}, new int[0]);
-    }
-
-    private static long countNonEqual(List<RowDiff> rows) {
-        return rows.stream().filter(r -> !Status.EQUAL.equals(r.status)).count();
+        return n;
     }
 
     private static long countNonEqualBlocks(List<RowDiff> rows) {

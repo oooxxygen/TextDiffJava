@@ -17,6 +17,11 @@ import java.util.regex.Pattern;
  *     内容区：剥掉尾部空白（段间分隔空行）后，若内容区尾部与表尾骨架逐行对应（完全相等 / 空白对空白 /
      * 值填充形态匹配）则划为表尾块，其余非空白行为业务行。
  *
+ * 1a）空行占位版式（用户指定规则）：模板中首个「≥5 连续空行且其后仍有骨架行」的空行段 = 报表体占位，
+ * 段前（模板第一行起）= 表头骨架，段后 = 表尾骨架（去首尾空白行）。业务行整体替换空行段；
+ * 段定位优先表头尾行精确锚点，失败时按表头骨架整块匹配（相等 / 值填充 / 竖线标签形态）兜底。
+ * 适用模板：表头块与表尾骨架之间以 5~10 个连续空行标注报表体范围（如 PYDD1040 空行占位模板）。
+ *
  * 2）控制行版式（自分区，无需模板）：以控制行 {@code 1@OD@|@T@|BANK-CODE:..|RPT-ID:..|..} 分段
  * （由 DEPD6020/PYID0200/PYID0210/CRDD0190 样本归纳），支持：
  *  - 折行报表：列头因栏位过多折成多行（F 行），每条业务记录同样折 F 行（如 DEPD602U 表头 2 行、
@@ -70,6 +75,12 @@ public final class ReportParser {
     public static ParsedReport parse(List<String> template, List<String> report) {
         List<String> warnings = new ArrayList<>();
         int m = template.size(), n = report.size();
+        // 新版式（空行占位）：模板首个「≥5 连续空行且其后仍有骨架行」的空行段 = 报表体占位，
+        // 段前 = 表头骨架（整块），段后 = 表尾骨架（用户规则 5~10 空行代表报表体）。
+        int[] blankRun = firstBlankRun(template, 5);
+        if (blankRun != null) {
+            return parseZonedTemplate(template, report, blankRun[0], blankRun[1], warnings);
+        }
         int headerLen = detectHeaderLen(template, report);
         if (headerLen == 0) {
             warnings.add("未能从模板定位表头锚点（模板与报表无逐行一致的非空白行），整文件按业务内容处理");
@@ -100,6 +111,129 @@ public final class ReportParser {
         for (int i = headerLen - 1; i < n; i++) {
             if (report.get(i).equals(anchor)) anchors.add(i);
         }
+        if (anchors.isEmpty()) {
+            // 表头尾行为值填充（无精确锚点）时按骨架整块匹配兜底（相等/值填充/竖线标签形态）
+            anchors = locateHeaderBlocks(template.subList(0, headerLen), report);
+            if (anchors.isEmpty()) {
+                warnings.add("未能按模板表头骨架定位任何报表段，整文件按业务内容处理");
+                for (int i = 0; i < n; i++) {
+                    String raw = report.get(i);
+                    if (raw.isBlank()) continue;
+                    String[] f = splitFields(raw);
+                    rows.add(new Row(0, i + 1, raw, f, sortKey(f)));
+                }
+                return new ParsedReport(headerLen, headerBlocks, footerBlocks, rows, warnings);
+            }
+        }
+        return assembleSections(report, headerLen, anchors, footerZone, warnings,
+                headerBlocks, footerBlocks, rows);
+    }
+
+    /**
+     * 空行占位版式：表头骨架 = 模板 [0, bs)，表尾骨架 = 模板 [be, m)（去首尾空白行），
+     * [bs, be) 的连续空行 = 报表体占位（被业务行替换）。段定位优先表头尾行精确锚点，
+     * 失败时按骨架整块匹配（相等 / 值填充 / 竖线标签形态）。
+     */
+    private static ParsedReport parseZonedTemplate(List<String> template, List<String> report,
+                                                   int bs, int be, List<String> warnings) {
+        int m = template.size(), n = report.size();
+        int headerLen = bs;
+        List<String> footerZone = new ArrayList<>();
+        int fs = be;
+        while (fs < m && template.get(fs).isBlank()) fs++;
+        int fe = m;
+        while (fe > fs && template.get(fe - 1).isBlank()) fe--;
+        footerZone.addAll(template.subList(fs, fe));
+
+        List<String[]> headerBlocks = new ArrayList<>();
+        List<String[]> footerBlocks = new ArrayList<>();
+        List<Row> rows = new ArrayList<>();
+
+        String anchor = template.get(headerLen - 1);
+        List<Integer> anchors = new ArrayList<>();
+        for (int i = headerLen - 1; i < n; i++) {
+            if (report.get(i).equals(anchor)) anchors.add(i);
+        }
+        if (anchors.isEmpty()) {
+            anchors = locateHeaderBlocks(template.subList(0, headerLen), report);
+        }
+        if (anchors.isEmpty()) {
+            warnings.add("未能按模板表头骨架（空行占位规则，表头 " + headerLen + " 行）定位任何报表段，整文件按业务内容处理");
+            for (int i = 0; i < n; i++) {
+                String raw = report.get(i);
+                if (raw.isBlank()) continue;
+                String[] f = splitFields(raw);
+                rows.add(new Row(0, i + 1, raw, f, sortKey(f)));
+            }
+            return new ParsedReport(headerLen, headerBlocks, footerBlocks, rows, warnings);
+        }
+        return assembleSections(report, headerLen, anchors, footerZone, warnings,
+                headerBlocks, footerBlocks, rows);
+    }
+
+    /** 模板首个「长度 ≥ min 连续空白且其后仍有非空白行」的空行段；返回 {start, endExclusive} 或 null。 */
+    static int[] firstBlankRun(List<String> template, int min) {
+        int m = template.size();
+        int runStart = -1;
+        for (int i = 0; i <= m; i++) {
+            boolean blank = i < m && template.get(i).isBlank();
+            if (blank && runStart < 0) runStart = i;
+            if ((!blank || i == m) && runStart >= 0) {
+                int len = i - runStart;
+                if (len >= min && i < m) return new int[]{runStart, i}; // 其后仍有骨架行才是报表体占位
+                runStart = -1;
+            }
+        }
+        return null;
+    }
+
+    /** 表头骨架整块匹配定位（块尾行下标，重叠丢弃）：逐行相等 / 双空白 / 值填充 / 竖线标签形态。 */
+    static List<Integer> locateHeaderBlocks(List<String> skel, List<String> report) {
+        List<Integer> ends = new ArrayList<>();
+        int bs = skel.size(), n = report.size();
+        int prevEnd = -1;
+        for (int p = bs - 1; p < n; p++) {
+            int start = p - bs + 1;
+            if (start <= prevEnd) continue;
+            boolean ok = true;
+            for (int j = 0; j < bs; j++) {
+                String g = report.get(start + j);
+                String t = skel.get(j);
+                if (g.equals(t) || (g.isBlank() && t.isBlank()) || filledLike(g, t)
+                        || pipeLabelLike(g, t)) continue;
+                ok = false;
+                break;
+            }
+            if (ok) {
+                ends.add(p);
+                prevEnd = p;
+            }
+        }
+        return ends;
+    }
+
+    /** 竖线行标签形态匹配：按 | 切分段数一致，模板段（去尾空白）为报表段前缀（值填充保留标签）。 */
+    static boolean pipeLabelLike(String got, String tpl) {
+        if (tpl.indexOf('|') < 0 || got.indexOf('|') < 0) return false;
+        String[] ts = tpl.split("\\|", -1);
+        String[] gs = got.split("\\|", -1);
+        if (ts.length != gs.length) return false;
+        for (int i = 0; i < ts.length; i++) {
+            String t = ts[i].strip();
+            String g = gs[i].strip();
+            if (t.equals(g)) continue;
+            if (!t.isEmpty() && g.startsWith(t)) continue;
+            return false;
+        }
+        return true;
+    }
+
+    /** 段装配（普通/空行占位两种版式共用）：重叠锚点过滤 → 逐段切分表头块 / 表尾块 / 业务行。 */
+    private static ParsedReport assembleSections(List<String> report, int headerLen, List<Integer> anchors,
+                                                 List<String> footerZone, List<String> warnings,
+                                                 List<String[]> headerBlocks, List<String[]> footerBlocks,
+                                                 List<Row> rows) {
+        int n = report.size();
         // 过滤重叠锚点（锚点行偶现于业务区时按噪声丢弃）
         List<Integer> kept = new ArrayList<>();
         int prevEnd = -1; // 上一表头块最后一行下标
@@ -112,6 +246,19 @@ public final class ReportParser {
                 warnings.add("忽略重叠的表头锚点（第 " + (p + 1) + " 行）");
             }
         }
+        // 表尾骨架核（去前导/尾部空白行）；核之前的表尾前导空白行按可用情况保留
+        //（CRDD 段 1-10 表尾=[空行,END]，末段=[END]；空行占位版式模板尾空白不再混入骨架核）
+        List<String> core = new ArrayList<>();
+        int leadBlanks = 0;
+        boolean seenNonBlank = false;
+        for (String f : footerZone) {
+            if (!seenNonBlank && f.isBlank()) leadBlanks++;
+            else {
+                seenNonBlank = true;
+                core.add(f);
+            }
+        }
+        while (!core.isEmpty() && core.get(core.size() - 1).isBlank()) core.remove(core.size() - 1);
 
         int cursor = 0; // 尚未归类的起始行（首段表头块之前若有残行，按业务行处理）
         for (int s = 0; s < kept.size(); s++) {
@@ -133,18 +280,7 @@ public final class ReportParser {
             // 剥掉内容区尾部空白（段间分隔空行 / EOF 空行）
             int end = regionEnd - 1;
             while (end >= regionStart && report.get(end).isBlank()) end--;
-            // 表尾块匹配：骨架核（去前导空白）自内容区尾部向上逐行对齐，
-            // 核之前的表尾前导空白行按可用情况保留（CRDD 段 1-10 表尾=[空行,END]，末段=[END]）
-            List<String> core = new ArrayList<>();
-            int leadBlanks = 0;
-            boolean seenNonBlank = false;
-            for (String f : footerZone) {
-                if (!seenNonBlank && f.isBlank()) leadBlanks++;
-                else {
-                    seenNonBlank = true;
-                    core.add(f);
-                }
-            }
+            // 表尾块匹配：骨架核自内容区尾部向上逐行对齐（相等 / 空白对空白 / 值填充形态）
             boolean footerOk = !core.isEmpty() && end >= regionStart
                     && end - core.size() + 1 >= regionStart;
             if (footerOk) {

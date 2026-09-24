@@ -179,18 +179,28 @@ public final class ReportCompareService implements AutoCloseable {
             } catch (RuntimeException ignored) {
                 // 旧作业 configLine 为 昵称:文件名，解析失败按缺省整行对比
             }
-            if (ReportParser.hasControlLines(la) || ReportParser.hasControlLines(lb)) {
+            // 空行占位模板（表头骨架 + 5~10 连续空行报表体占位 + 表尾骨架）优先于控制行检测：
+            // 用户指定按模板分区（控制行值两侧不同会导致控制行版式签名配对全失败）
+            List<String> tpl = null;
+            Path tplFile = Path.of(job.templateFile == null ? "" : job.templateFile);
+            if (job.templateFile != null && !job.templateFile.isBlank() && Files.isRegularFile(tplFile)) {
+                tpl = readLines(tplFile, Encoding.resolveEncoding(tplFile, "auto", "|"));
+            }
+            boolean zonedTemplate = tpl != null && ReportParser.firstBlankRun(tpl, 5) != null;
+            if (zonedTemplate) {
+                pa = ReportParser.parse(tpl, la);
+                pb = ReportParser.parse(tpl, lb);
+                fieldNames = fieldNamesFor(job);
+            } else if (ReportParser.hasControlLines(la) || ReportParser.hasControlLines(lb)) {
                 // 控制行版式（1@OD@|...，含折行/分页报表）：自分区，模板不参与
                 pa = ReportParser.parseControlFormat(la);
                 pb = ReportParser.parseControlFormat(lb);
                 fieldNames = !pa.columnNames().isEmpty() ? pa.columnNames() : pb.columnNames();
             } else {
-                Path tplFile = Path.of(job.templateFile == null ? "" : job.templateFile);
-                if (job.templateFile == null || job.templateFile.isBlank() || !Files.isRegularFile(tplFile)) {
+                if (tpl == null) {
                     throw new IllegalArgumentException("模板不存在：请在模板路径或数据目录下提供 "
                             + stem(fileName(job.fileA)) + ".header");
                 }
-                List<String> tpl = readLines(tplFile, Encoding.resolveEncoding(tplFile, "auto", "|"));
                 pa = ReportParser.parse(tpl, la);
                 pb = ReportParser.parse(tpl, lb);
                 fieldNames = fieldNamesFor(job);

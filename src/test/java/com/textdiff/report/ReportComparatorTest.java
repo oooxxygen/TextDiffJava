@@ -112,6 +112,20 @@ class ReportComparatorTest {
     }
 
     @Test
+    void 表头块整块一条记录_差异位为物理行号() {
+        List<String> a = report("105", rows(new String[]{"A1", "B1", "C1"}), "5");
+        List<String> b = report("511", rows(new String[]{"A1", "B1", "C1"}), "1");
+        var r = ReportComparator.compare(parse(a), parse(b), List.of());
+        assertEquals(1, r.headerRows().size(), "表头按块一条记录（全部行一起展示）");
+        var h = r.headerRows().get(0);
+        assertEquals(Status.DIFF, h.status);
+        assertEquals(3, h.aCols.length, "块记录 aCols = 全部物理行");
+        assertArrayEquals(new int[]{0}, h.diffCols, "差异位 = 控制行（0-based 物理行号）");
+        assertEquals(1, r.summary().headerLineDiff, "差异行数按物理行计");
+        assertEquals(1, r.summary().headerBlockDiff);
+    }
+
+    @Test
     void 双侧同改_整行相等仍匹配() {
         // 同一行两侧都被加工（值一致）→ 排序后全匹配，不受写入顺序影响
         List<String> a = report("105", rows(new String[]{"A2", "B2", "C2"},

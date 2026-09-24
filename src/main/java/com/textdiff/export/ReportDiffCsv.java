@@ -47,7 +47,7 @@ public final class ReportDiffCsv {
                         w.write(',');
                         w.write(String.valueOf(col + 1));
                         w.write(',');
-                        w.write(escape(folded ? "第" + (col + 1) + "行" : colName(col, colNames)));
+                        w.write(escape(colLabel(r, col, colNames, folded)));
                         w.write(',');
                         w.write(escape(colAt(r.aCols, col)));
                         w.write(',');
@@ -72,6 +72,16 @@ public final class ReportDiffCsv {
     static String colName(int col, List<String> names) {
         return names != null && col < names.size() && !names.get(col).isBlank()
                 ? names.get(col) : "栏位" + (col + 1);
+    }
+
+    /**
+     * 差异位标签：表头/表尾块与折行记录的差异位是物理行号 → 「第N行」；
+     * 业务行 → 导出映射列名（fieldNames[col]，缺省「栏位N」）。
+     */
+    public static String colLabel(RowDiff r, int col, List<String> names, boolean folded) {
+        boolean lineNo = folded || Status.SECTION_HEADER.equals(r.section)
+                || Status.SECTION_FOOTER.equals(r.section);
+        return lineNo ? "第" + (col + 1) + "行" : colName(col, names);
     }
 
     private static String escape(String v) {

@@ -120,6 +120,8 @@ public final class ReportDetailExcel {
             }
             Path jsonl = Path.of(job.resultDir).resolve(ResultFiles.RESULT_JSONL);
             List<String> names = readFieldNames(job);
+            ReportSummary sum = readSummary(job);
+            boolean folded = sum != null && sum.controlFormat;
             try (var stream = ResultFiles.stream(jsonl)) {
                 for (RowDiff row : (Iterable<RowDiff>) stream::iterator) {
                     if (Status.EQUAL.equals(row.status)) continue;
@@ -133,11 +135,11 @@ public final class ReportDetailExcel {
                             Row sheetRow = sheet.createRow(r++);
                             written++;
                             cell(sheetRow, 0, job.nickname);
-                            cell(sheetRow, 1, sectionText);
+                            cell(sheetRow, 1, sectionText(row.section));
                             cell(sheetRow, 2, "部分匹配");
                             cell(sheetRow, 3, row.key);
                             cell(sheetRow, 4, col + 1);
-                            cell(sheetRow, 5, ReportDiffCsv.colName(col, names));
+                            cell(sheetRow, 5, ReportDiffCsv.colLabel(row, col, names, folded));
                             cell(sheetRow, 6, colAt(row.aCols, col));
                             cell(sheetRow, 7, colAt(row.bCols, col));
                         }

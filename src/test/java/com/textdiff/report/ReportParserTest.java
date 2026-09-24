@@ -147,6 +147,73 @@ class ReportParserTest {
         assertFalse(p.warnings().isEmpty());
     }
 
+    // ---- 空行占位版式（用户规则：首个 5~10 连续空行 = 报表体占位，段前表头 / 段后表尾） ----
+
+    @Test
+    void 空行占位模板_空行段为报表体_前后为表头表尾() {
+        List<String> tpl = List.of(
+                "1@OD@|@T@|BANK-CODE:   |ORG-ID:     |RPT-ID:PYDD1040|DAT:     |S-ORG-ID:     |",
+                "1                                                    (      -PYDD1040 )",
+                "                                        THE DEPOSIT BUSINESS LIST FOR OTHER BANKS CHECK",
+                "                                        ===============================================",
+                "",
+                " -----",
+                "  BRCH:     DATE:      PAGE: ",
+                "  BUS-NO      CHQ-TYPE  CHQ-NO",
+                "", "", "", "", "", "", // 行 9~14 = 6 连续空行 = 报表体占位
+                "  STATUS: 11  CCY:     AMOUNT SUM:             COUNT:");
+        List<String> rpt = List.of(
+                "1@OD@|@T@|BANK-CODE:105|ORG-ID:51116|RPT-ID:PYDD1040|DAT:2026/07/10|S-ORG-ID:51016|",
+                "1                                                    ( 51116-PYDD1040 )",
+                "                                        THE DEPOSIT BUSINESS LIST FOR OTHER BANKS CHECK",
+                "                                        ===============================================",
+                "",
+                " -----",
+                "  BRCH: BOC   DATE: 2026/07/10   PAGE: 1",
+                "  BUS-NO      CHQ-TYPE  CHQ-NO",
+                "  UU01  C  0001  MYR  50,000.000  11",
+                "  STATUS: 11  CCY:MYR  AMOUNT SUM:  50,000.000  COUNT:1");
+        ParsedReport p = ReportParser.parse(tpl, rpt);
+        assertEquals(8, p.headerLen());
+        assertEquals(1, p.headerBlocks().size());
+        assertEquals(1, p.footerBlocks().size());
+        assertEquals(1, p.rows().size());
+        assertEquals("UU01", p.rows().get(0).fields()[0]);
+        assertTrue(p.warnings().isEmpty(), "不应有解析告警: " + p.warnings());
+    }
+
+    @Test
+    void 空行占位模板_表头尾行为值填充时整块匹配兜底() {
+        // 表头尾行（BRCH 行）在报表中被值填充、无精确锚点 → 按表头骨架整块匹配定位
+        List<String> tpl = List.of(
+                "  TITLE-A",
+                "  =====",
+                "  BRCH:     DATE:      PAGE: ",
+                "", "", "", "", "", "", // 行 4~9 = 6 连续空行
+                "  END OF REPORT");
+        List<String> rpt = List.of(
+                "  TITLE-A",
+                "  =====",
+                "  BRCH: HQ   DATE: 2026/07/10   PAGE: 1",
+                "  R1  100",
+                "  END OF REPORT");
+        ParsedReport p = ReportParser.parse(tpl, rpt);
+        assertEquals(3, p.headerLen());
+        assertEquals(1, p.headerBlocks().size());
+        assertEquals(1, p.footerBlocks().size());
+        assertEquals(1, p.rows().size());
+        assertTrue(p.warnings().isEmpty(), "不应有解析告警: " + p.warnings());
+    }
+
+    @Test
+    void 竖线标签形态匹配() {
+        assertTrue(ReportParser.pipeLabelLike(
+                "1@OD@|@T@|BANK-CODE:105|ORG-ID:51116|RPT-ID:PYDD1040|DAT:2026/07/10|S-ORG-ID:51016|",
+                "1@OD@|@T@|BANK-CODE:   |ORG-ID:     |RPT-ID:PYDD1040|DAT:     |S-ORG-ID:     |"));
+        assertFalse(ReportParser.pipeLabelLike("1@OD@|@T@|BANK-CODE:105|", "1@OD@|@T@|RPT-ID:X|"));
+        assertFalse(ReportParser.pipeLabelLike("no pipe here", "1@OD@|@T@|"));
+    }
+
     // ---- 真实样本用例 ----
 
     @Test
@@ -207,6 +274,21 @@ class ReportParserTest {
         assertEquals(1, p.footerBlocks().size());
         assertEquals(1, p.rows().size());
         // 两空格切分：CHQ_INST_NAME 空白区并入相邻空白串，无空字段
+        assertArrayEquals(new String[]{"UU01", "00100000400087973", "MYR", "50,000.000", "11"},
+                p.rows().get(0).fields());
+    }
+
+    @Test
+    void 样本_空行占位PYDD模板_配旧样本报表仍正确分区() throws Exception {
+        // ReportData/template 下的新版式模板（表头 8 行 + 6 连续空行占位 + 表尾 STATUS）
+        Path tplFile = Path.of("O:/CodeRepos/ExampleData/ReportData/template/01.PYDD104U.header");
+        assumeTrue(Files.isRegularFile(tplFile), "空行占位模板样本不存在");
+        ParsedReport p = ReportParser.parse(lines(tplFile), lines(SAMPLES.resolve("01.PYDD104U.105")));
+        assertEquals(8, p.headerLen());
+        assertEquals(1, p.headerBlocks().size());
+        assertEquals(1, p.footerBlocks().size());
+        assertEquals(1, p.rows().size());
+        assertTrue(p.warnings().isEmpty(), "不应有解析告警: " + p.warnings());
         assertArrayEquals(new String[]{"UU01", "00100000400087973", "MYR", "50,000.000", "11"},
                 p.rows().get(0).fields());
     }
