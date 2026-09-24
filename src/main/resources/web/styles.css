@@ -300,7 +300,8 @@ label.field { font-size: 12px; color: var(--text-soft); font-weight: 600; }
 .recgrid .lcol { grid-row: span 2; display: flex; flex-direction: column; gap: 2px; justify-content: center;
   padding: 4px 10px; background: #fff6f6; border-right: 1px solid var(--border); }
 .recgrid .lcol .lcol-item { font-family: var(--mono); font-size: 11px; color: var(--diff-text);
-  font-weight: 700; text-align: center; min-width: 26px; }
+  font-weight: 700; text-align: left; min-width: 26px; max-width: 150px;
+  word-break: break-all; line-height: 1.4; }
 .recgrid .ghdr.lcol-head { text-align: center; background: #fff6f6; color: var(--diff-text); font-weight: 600; }
 
 /* 字符级高亮 */
@@ -553,4 +554,119 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
   background: #1f2329; color: #fff; padding: 10px 18px; border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lg); font-size: 13px; z-index: 99;
+}
+
+/* ============================================================
+   UI 布局重构层（增量，旧类名全部保持兼容）
+   页头 PageHeader / 工具条 / 列表行 / 分区工具行 / 设置分组 / 响应式
+   ============================================================ */
+:root {
+  --surface-hover: #f2f4f7;
+  --font-title: 17px;
+}
+
+/* 补齐历史模板中使用但未定义的通用类 */
+.hint { font-size: 12px; color: var(--text-soft); }
+.muted { color: var(--text-faint); }
+
+/* ---------- 统一页头：返回 + 标题 + 徽标 + 页级操作 ---------- */
+.page-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 2px 0 16px;
+}
+.page-back {
+  border: 1px solid var(--border-strong); background: var(--surface);
+  color: var(--text-soft); font-size: 13px; cursor: pointer;
+  padding: 6px 12px; border-radius: var(--radius-sm); transition: .15s;
+  flex: none;
+}
+.page-back:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.page-title {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: var(--font-title); font-weight: 700; min-width: 0;
+}
+.page-title .jid { font-family: var(--mono); font-size: 13px; color: var(--text-soft); font-weight: 400; }
+.page-head .spacer { flex: 1; }
+.page-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.page-sub { width: 100%; margin-top: -6px; font-size: 12px; color: var(--text-soft); }
+
+/* ---------- 卡片头右侧操作组（替代散落的内联 margin-left:auto） ---------- */
+.card-head .head-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.card-head .head-title-meta { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* ---------- 统一工具条（搜索/筛选/批量操作行） ---------- */
+.toolbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 18px;
+}
+.toolbar .search-input {
+  flex: 1; min-width: 220px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 9px 12px; font-size: 13px; background: var(--surface); color: var(--text);
+  transition: border-color .15s, box-shadow .15s;
+}
+.toolbar .search-input:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+.toolbar .toolbar-note { font-size: 12px; color: var(--text-faint); }
+.toolbar .toolbar-count { font-size: 12px; color: var(--text-soft); white-space: nowrap; }
+
+/* ---------- 按钮尺寸档位（替代内联 padding 补丁） ---------- */
+.btn.sm { padding: 5px 14px; font-size: 13px; }
+.btn.primary { background: var(--accent); color: #fff; }
+
+/* ---------- 列表行：桌面单行不变形，窄屏降级为两行 ---------- */
+.job-row { flex-wrap: nowrap; }
+.job-row .row-actions { flex: none; }
+@media (max-width: 1100px) {
+  .job-row { flex-wrap: wrap; row-gap: 4px; }
+  .job-row .files { flex-basis: 100%; order: 10; white-space: normal; word-break: break-all; }
+  .job-row .row-actions { order: 11; margin-left: auto; }
+  .job-row .meta-time { order: 12; }
+}
+/* 列表卡片统一去掉与工具条卡片之间的双间距：工具条并入列表卡时用 */
+.card > .toolbar { border-bottom: 1px solid var(--border); }
+
+/* ---------- 分区工具行（搜索/分页/页大小移出分区头） ---------- */
+.zone-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 14px;
+  border: 1px solid var(--border); border-top: none;
+  background: var(--surface-2);
+}
+.zone-toolbar .zt-spacer { flex: 1; }
+/* 分区头内仅保留轻量操作 */
+.zone-head .actions { gap: 6px; }
+
+/* ---------- 设置页 / 长表单页：分组节标题 ---------- */
+.section-title {
+  display: flex; align-items: center; gap: 10px;
+  margin: 26px 0 12px; font-size: 13px; font-weight: 700;
+  color: var(--text-soft); letter-spacing: .5px;
+}
+.section-title::before { content: ""; width: 4px; height: 14px; border-radius: 2px; background: var(--accent); }
+.section-title::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+/* 页面第一组节标题顶到内容区开头 */
+.section-title:first-child { margin-top: 0; }
+
+/* ---------- 表单分区说明 ---------- */
+.form-legend { font-size: 12px; color: var(--text-soft); margin: 0 0 12px; }
+
+/* ---------- 提交页：来源模式切换（沿用 .seg 视觉，占满语义更清晰） ---------- */
+.mode-seg { margin-bottom: 16px; }
+
+/* ---------- 响应式：导航与容器 ---------- */
+@media (max-width: 900px) {
+  .container { padding: 14px; }
+  .page-title { font-size: 15px; }
+  .card-head { flex-wrap: wrap; row-gap: 8px; }
+  .card-head .head-actions { margin-left: 0; flex-basis: 100%; }
+  .summary-metrics { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 620px) {
+  .app-header { padding: 8px 12px; }
+  .logo { font-size: 15px; }
+  .nav-btn { padding: 6px 10px; font-size: 12px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .conc-bar { width: 160px; }
+  .conc-num { width: 96px; }
+  .zone-toolbar .zone-search { width: 120px; }
 }

@@ -150,6 +150,21 @@ const AppToast = {
   </transition>`,
 };
 
+/* PageHeader：统一页头（返回 + 页标题 + 徽标插槽 + 页级操作插槽 + 可选副标题行）。
+   全站详情页/功能页共用，替代各自重复的「← 返回…」按钮行，建立一致的页面身份层级。 */
+const PageHeader = {
+  props: { backText: String, title: String, sub: String },
+  emits: ["back"],
+  template: `
+  <div class="page-head">
+    <button v-if="backText" class="page-back" @click="$emit('back')">← {{ backText }}</button>
+    <div class="page-title">{{ title }}<slot name="meta"></slot></div>
+    <div class="spacer"></div>
+    <div class="page-actions"><slot name="actions"></slot></div>
+    <div class="page-sub" v-if="sub">{{ sub }}</div>
+  </div>`,
+};
+
 /* ---------- 轻量 Markdown 渲染（无依赖、先转义后渲染，防 XSS） ---------- */
 function mdEscape(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -559,27 +574,30 @@ const ZonePanel = {
       <span>{{ label }}</span>
       <span class="count">{{ rows.length }} / {{ total }}{{ active ? ' (筛选)' : '' }}</span>
       <div class="actions" @click.stop>
-        <input class="zone-search" v-model="q" @keyup.enter="doSearch" placeholder="按键值搜索" />
-        <button class="mini-btn" @click="doSearch">搜索</button>
-        <button class="mini-btn" v-if="q.trim()" @click="clearSearch">清除</button>
-        <a v-if="exportUrl" class="mini-btn" :href="exportUrl">导出 Excel</a>
         <button class="mini-btn" @click="toggleExpand">{{ allOpen ? '收起本页' : '展开本页' }}</button>
-        <span class="zone-pager" v-if="open && totalPages > 1">
-          <button class="mini-btn" :disabled="page<=1" @click="prevPage">‹ 上一页</button>
-          第 <input class="pager-input" :value="page" @keyup.enter="gotoInput($event.target.value)" /> / {{ totalPages }} 页
-          <button class="mini-btn" :disabled="page>=totalPages" @click="nextPage">下一页 ›</button>
-        </span>
-        <select class="pager-size" v-if="open" :value="pageSize" @change="setPageSize(+$event.target.value)">
-          <option :value="10">10/页</option>
-          <option :value="50">50/页</option>
-        </select>
+        <a v-if="exportUrl" class="mini-btn" :href="exportUrl">导出 Excel</a>
       </div>
     </div>
-    <!-- note 筛选栏（仅数据分区） -->
-    <div class="note-filter" v-if="supportsNote && open" @click.stop>
-      <button :class="{active: noteFilter===''}" @click="applyNoteFilter('')">全部 {{ fullTotal }}</button>
-      <button :class="{active: noteFilter==='has'}" @click="applyNoteFilter('has')">📝 已评议 {{ hasNoteCount }}</button>
-      <button :class="{active: noteFilter==='none'}" @click="applyNoteFilter('none')">未评议 {{ noNoteCount }}</button>
+    <!-- 分区工具行：搜索 / 评议筛选 / 分页 / 页大小（独立于分区头，不再拥挤） -->
+    <div class="zone-toolbar" v-if="open" @click.stop>
+      <input class="zone-search" v-model="q" @keyup.enter="doSearch" placeholder="按键值搜索" />
+      <button class="mini-btn" @click="doSearch">搜索</button>
+      <button class="mini-btn" v-if="q.trim()" @click="clearSearch">清除</button>
+      <template v-if="supportsNote">
+        <button :class="['mini-btn', noteFilter==='' ? 'active' : '']" @click="applyNoteFilter('')">全部 {{ fullTotal }}</button>
+        <button :class="['mini-btn', noteFilter==='has' ? 'active' : '']" @click="applyNoteFilter('has')">📝 已评议 {{ hasNoteCount }}</button>
+        <button :class="['mini-btn', noteFilter==='none' ? 'active' : '']" @click="applyNoteFilter('none')">未评议 {{ noNoteCount }}</button>
+      </template>
+      <span class="zt-spacer"></span>
+      <span class="zone-pager" v-if="totalPages > 1">
+        <button class="mini-btn" :disabled="page<=1" @click="prevPage">‹ 上一页</button>
+        第 <input class="pager-input" :value="page" @keyup.enter="gotoInput($event.target.value)" /> / {{ totalPages }} 页
+        <button class="mini-btn" :disabled="page>=totalPages" @click="nextPage">下一页 ›</button>
+      </span>
+      <select class="pager-size" :value="pageSize" @change="setPageSize(+$event.target.value)">
+        <option :value="10">10/页</option>
+        <option :value="50">50/页</option>
+      </select>
     </div>
     <div class="zone-body" v-if="open">
       <div class="empty" v-if="total === 0">{{ active ? '无匹配记录' : '无记录' }}</div>
@@ -712,13 +730,13 @@ const ConfigPanel = {
   template: `
   <div class="card">
     <div class="card-head">⚙️ 本次对比配置
-      <span class="group-badge" v-if="(meta.config||{}).group" style="margin-left:10px;">归属组 {{ meta.config.group }}</span>
-      <div style="margin-left:auto; display:flex; gap:8px;">
+      <span class="group-badge" v-if="(meta.config||{}).group">归属组 {{ meta.config.group }}</span>
+      <div class="head-actions">
         <button class="mini-btn" @click="syncLatest" :disabled="busy" title="按昵称从配置库拉取最新生效配置填入">↻ 同步最新配置</button>
         <button v-if="!editing" class="mini-btn" @click="startEdit">编辑</button>
         <button v-if="editing" class="mini-btn" @click="cancel">取消</button>
         <button v-if="editing" class="mini-btn" @click="saveConfig" :disabled="busy">保存到配置</button>
-        <button v-if="editing" class="btn" style="padding:4px 14px;" @click="rerun" :disabled="busy">
+        <button v-if="editing" class="btn sm" @click="rerun" :disabled="busy">
           {{ busy ? '提交中…' : '修改并重新执行' }}
         </button>
       </div>
@@ -760,7 +778,7 @@ const ConfigPanel = {
 /* ---------- 结果视图 ---------- */
 const ResultView = {
   components: { ZonePanel, ConfigPanel },
-  props: ["jobId", "encodings", "backBatch"],
+  props: ["jobId", "encodings", "backBatch", "backTasks"],
   emits: ["rerun", "back"],
   setup(props, { emit }) {
     const meta = ref(null);
@@ -873,6 +891,8 @@ const ResultView = {
     const aiHtml = computed(() => renderMarkdown(ai.content));
     const sourceA = computed(() => srcA(meta.value && meta.value.config));
     const sourceB = computed(() => srcB(meta.value && meta.value.config));
+    // 返回键文案：按进入来源区分（批次 / 任务管理 / 作业列表）
+    const backText = computed(() => props.backBatch ? "返回批次列表" : (props.backTasks ? "返回任务管理" : "返回作业列表"));
 
     async function editLabel() {
       const cur = (meta.value && meta.value.label) || "";
@@ -885,7 +905,7 @@ const ResultView = {
 
     return { meta, summary, zoneCounts, error, skipSet, columnNames, trailerChips,
              diffConcentration, concList, concShown, loadMoreConc,
-             ai, aiHtml, runAnalyze, exportUrl, onRerun, fmtTime, fmtDur, editLabel,
+             ai, aiHtml, runAnalyze, exportUrl, onRerun, fmtTime, fmtDur, editLabel, backText,
              sourceA, sourceB, goBack: () => emit("back"),
              notes, zoneNoteCounts, notesNonce, globalQ, globalApplied, globalNonce,
              doGlobalSearch, clearGlobal, onSaveNote };
@@ -895,9 +915,21 @@ const ResultView = {
     <div class="error-box" v-if="error">{{ error }}</div>
     <div class="loading" v-else-if="!meta">加载中…</div>
     <template v-else>
-      <div style="margin-bottom:12px;">
-        <button class="btn ghost" @click="goBack">{{ backBatch ? '← 返回批次列表' : '← 返回作业列表' }}</button>
-      </div>
+      <PageHeader :back-text="backText" @back="goBack" title="对比结果">
+        <template #meta>
+          <span class="jid">{{ meta.job_id }}</span>
+          <span class="nick-badge" v-if="(meta.config||{}).nickname">{{ meta.config.nickname }}</span>
+          <span class="group-badge" v-if="(meta.config||{}).group">归属组 {{ meta.config.group }}</span>
+          <span class="group-badge" v-if="meta.label" :title="meta.label">🏷 {{ meta.label }}</span>
+          <button class="mini-btn" @click="editLabel">{{ meta.label ? '改标签' : '加标签' }}</button>
+          <span class="badge-status" :class="meta.status">{{ meta.status }}</span>
+          <span v-if="meta.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
+        </template>
+        <template #actions>
+          <a class="mini-btn" :href="'/api/jobs/' + jobId + '/export-all'"
+             title="将三个数据分区（差异/未匹配/完全匹配）合并导出为单个 Excel（含概览/评议note，单元格全文本）">⬇ 全部导出 Excel</a>
+        </template>
+      </PageHeader>
       <!-- 运行中 -->
       <div class="card" v-if="meta.status === 'running' || meta.status === 'pending'">
         <div class="card-body">
@@ -909,15 +941,7 @@ const ResultView = {
 
       <!-- Brief Summary -->
       <div class="card" v-if="summary">
-        <div class="card-head">📊 对比概览 · {{ meta.job_id }}
-          <span class="nick-badge" v-if="(meta.config||{}).nickname" style="margin-left:8px;">{{ meta.config.nickname }}</span>
-          <span class="group-badge" v-if="(meta.config||{}).group" style="margin-left:6px;">归属组 {{ meta.config.group }}</span>
-          <span class="group-badge" v-if="meta.label" style="margin-left:6px;" :title="meta.label">🏷 {{ meta.label }}</span>
-          <button class="mini-btn" style="margin-left:6px;" @click="editLabel">{{ meta.label ? '改标签' : '加标签' }}</button>
-          <span class="badge-status" :class="meta.status">{{ meta.status }}</span><span v-if="meta.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
-          <a class="mini-btn" style="margin-left:auto;" :href="'/api/jobs/' + jobId + '/export-all'"
-             title="将三个数据分区（差异/未匹配/完全匹配）合并导出为单个 Excel（含概览/评议note，单元格全文本）">⬇ 全部导出 Excel</a>
-        </div>
+        <div class="card-head">📊 对比概览</div>
         <div class="card-body">
           <div class="summary-metrics">
             <div class="metric total"><div class="num">{{ summary.total_a }}</div><div class="lbl">{{ sourceA }} 总行数（数据{{summary.data_rows_a}}+尾部{{summary.trailer_rows_a}}）</div></div>
@@ -963,9 +987,9 @@ const ResultView = {
       <!-- AI 优化建议 -->
       <div class="card" v-if="summary">
         <div class="card-head">🤖 AI 优化建议
-          <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+          <div class="head-actions">
             <input v-if="ai.enabled" v-model="ai.model" class="ai-model-input" placeholder="模型" />
-            <button v-if="ai.enabled" class="btn" style="padding:5px 14px;" @click="runAnalyze" :disabled="ai.loading">
+            <button v-if="ai.enabled" class="btn sm" @click="runAnalyze" :disabled="ai.loading">
               {{ ai.loading ? '分析中…' : '生成建议' }}
             </button>
           </div>
@@ -1159,8 +1183,9 @@ const SubmitForm = {
   },
   template: `
   <div>
+    <PageHeader title="新建对比" sub="目录对比生成批次（多文件）；指定路径 / 上传文件生成单文件作业" />
     <div class="card">
-      <div class="card-head">📁 选择对比来源</div>
+      <div class="card-head">① 📁 选择对比来源</div>
       <div class="card-body">
         <div class="seg" style="margin-bottom:16px;">
           <button :class="form.mode==='dirs'?'active':''" @click="form.mode='dirs'">目录对比（批量）</button>
@@ -1203,7 +1228,7 @@ const SubmitForm = {
 
     <!-- 配置选择/搜索 -->
     <div class="card">
-      <div class="card-head">🔎 选择已有配置（按昵称/通配名搜索）</div>
+      <div class="card-head">② 🔎 选择已有配置（按昵称/通配名搜索）</div>
       <div class="card-body">
         <div class="field"><input v-model="cfgQuery" @input="searchConfigs" placeholder="输入昵称关键字搜索，如 INCT" /></div>
         <div class="cfg-results" v-if="cfgResults.length">
@@ -1218,7 +1243,7 @@ const SubmitForm = {
     </div>
 
     <div class="card" v-show="!(form.mode==='dirs' && form.batch_config_file)">
-      <div class="card-head">⚙️ 对比配置{{ form.mode==='dirs' ? '（目录对比的单规则）' : '' }}</div>
+      <div class="card-head">③ ⚙️ 对比配置{{ form.mode==='dirs' ? '（目录对比的单规则）' : '' }}</div>
       <div class="card-body">
         <div class="field mono" style="margin-bottom:14px;">
           <label>配置串（昵称:通配名:KEYSEQ=…:OMITSEQ=…）</label>
@@ -1246,7 +1271,7 @@ const SubmitForm = {
       </div>
     </div>
 
-    <div class="card"><div class="card-body">
+    <div class="card"><div class="card-head">④ 🚀 提交</div><div class="card-body">
       <label class="field" style="display:block;margin-bottom:10px;">
         <span>标签（可选，标注本次对比目的/来源）</span>
         <input v-model="form.label" placeholder="如：月结对账-生产环境" style="width:100%;" />
@@ -1392,9 +1417,13 @@ const JobList = {
   },
   template: `
   <div>
-    <div class="card"><div class="card-body" style="padding:12px 18px;">
-      <div class="field"><input v-model="q" placeholder="🔎 搜索作业/批次（按 ID、目录、文件路径）" /></div>
-    </div></div>
+    <PageHeader title="作业列表" sub="批次 / 单文件作业 / 文本拆分作业统一入口，点击行查看详情" />
+    <div class="card">
+      <div class="toolbar">
+        <input class="search-input" v-model="q" placeholder="🔎 搜索作业/批次（按 ID、目录、文件路径）" />
+        <span class="toolbar-count">批次 {{ fBatches.length }} · 单文件作业 {{ fJobs.length }}<template v-if="fSplit.length"> · 拆分 {{ fSplit.length }}</template></span>
+      </div>
+    </div>
 
     <!-- 多选批量删除工具条 -->
     <div class="bulk-bar" v-if="selCount">
@@ -1406,8 +1435,7 @@ const JobList = {
     <div class="card" v-if="fBatches.length">
       <div class="card-head">📦 批量对比批次（点击进入查看各文件）
         <label class="sel-all" @click.stop><input type="checkbox" :checked="allBatchesSel" @change="toggleAllBatches" /> 全选批次</label>
-      </div>
-      <div>
+      </div>      <div>
         <div class="job-row batch-row" :class="{ selected: isBatchSel(b.batch.batch_id) }" v-for="b in fBatches" :key="b.batch.batch_id" @click="openBatchEntry(b)">
           <input class="row-check" type="checkbox" :checked="isBatchSel(b.batch.batch_id)" @click.stop="toggleBatch(b.batch.batch_id)" />
           <span class="nick-badge" v-if="isReport(b)" title="报表对比批次">🧾 报表</span>
@@ -1544,15 +1572,16 @@ const BatchView = {
   },
   template: `
   <div v-if="ov">
-    <div style="margin-bottom:12px;">
-      <button class="btn ghost" @click="goBack">← 返回作业列表</button>
-    </div>
-    <div class="card">
-      <div class="card-head">📦 批量对比批次 · {{ ov.batch.batch_id }}
-        <span class="group-badge" v-if="ov.batch.label" style="margin-left:6px;" :title="ov.batch.label">🏷 {{ ov.batch.label }}</span>
-        <button class="mini-btn" style="margin-left:6px;" @click="editLabel">{{ ov.batch.label ? '改标签' : '加标签' }}</button>
+    <PageHeader back-text="返回作业列表" @back="goBack" title="批量对比批次">
+      <template #meta>
+        <span class="jid">{{ ov.batch.batch_id }}</span>
+        <span class="group-badge" v-if="ov.batch.label" :title="ov.batch.label">🏷 {{ ov.batch.label }}</span>
+        <button class="mini-btn" @click="editLabel">{{ ov.batch.label ? '改标签' : '加标签' }}</button>
         <span class="badge-status" :class="ov.status">{{ ov.status }}</span>
-      </div>
+      </template>
+    </PageHeader>
+    <div class="card">
+      <div class="card-head">📦 批次概况</div>
       <div class="card-body">
         <div class="summary-metrics">
           <div class="metric total"><div class="num">{{ ov.total_files }}</div><div class="lbl">对比文件数</div></div>
@@ -1572,10 +1601,12 @@ const BatchView = {
 
     <div class="card">
       <div class="card-head">📄 文件对比结果（点击查看单文件详情）
-        <a class="mini-btn" style="margin-left:auto;" :href="exportHref"
-           title="导出批次明细 Excel：文件昵称 / 归属组 / 对比配置 / 对比详情（记录总数与差异情况）。已选归属组时只导出该组">⬇ 导出明细 Excel{{ groupFilter ? '（' + groupFilter + '）' : '' }}</a>
-        <a class="mini-btn" style="margin-left:8px;" :href="exportAllHref"
-           title="打包下载批次内每个表的全量导出 Excel（zip）">📦 打包下载全部表</a>
+        <div class="head-actions">
+          <a class="mini-btn" :href="exportHref"
+             title="导出批次明细 Excel：文件昵称 / 归属组 / 对比配置 / 对比详情（记录总数与差异情况）。已选归属组时只导出该组">⬇ 导出明细 Excel{{ groupFilter ? '（' + groupFilter + '）' : '' }}</a>
+          <a class="mini-btn" :href="exportAllHref"
+             title="打包下载批次内每个表的全量导出 Excel（zip）">📦 打包下载全部表</a>
+        </div>
       </div>
       <div class="card-body" style="padding:12px 18px;">
         <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
@@ -1760,7 +1791,10 @@ const SettingsPage = {
              dirs, loadDirs, saveDirs };
   },
   template: `
-  <div class="card">
+  <div>
+    <PageHeader title="设置" sub="AI 接入 · 数据映射 · 配置版本 · 任务路径 —— 所有修改即时生效并持久化" />
+    <div class="section-title">AI 分析</div>
+    <div class="card">
     <div class="card-head">🤖 AI 大模型接入设置</div>
     <div class="card-body">
       <p class="ai-hint" style="margin-top:0;">
@@ -1794,6 +1828,7 @@ const SettingsPage = {
         <span v-if="test.msg" :style="{ color: test.ok ? 'var(--eq-bar)' : 'var(--diff-bar)', fontSize:'13px' }">{{ test.msg }}</span>
       </div>
     </div>
+    </div>
 
     <div class="card">
       <div class="card-head">⚡ 批量分析并发度</div>
@@ -1810,6 +1845,7 @@ const SettingsPage = {
       </div>
     </div>
 
+    <div class="section-title">数据映射与导入</div>
     <div class="card">
       <div class="card-head">🗺️ 列名映射导入（源系统字段配置）</div>
       <div class="card-body">
@@ -1836,6 +1872,7 @@ const SettingsPage = {
         </div>
       </div>
     </div>
+    <div class="section-title">配置版本管理</div>
     <div class="card">
       <div class="card-head">📥 配置版本管理（基线 / 变更 / 导出）</div>
       <div class="card-body">
@@ -1853,6 +1890,7 @@ const SettingsPage = {
         </div>
       </div>
     </div>
+    <div class="section-title">任务与路径</div>
     <div class="card">
       <div class="card-head">📁 任务生成路径设置</div>
       <div class="card-body">
@@ -1980,16 +2018,17 @@ const TaskManagerPage = {
   },
   template: `
   <div>
-    <div class="card"><div class="card-body" style="padding:12px 18px;">
-      <div class="field"><input v-model="q" placeholder="🔎 搜索任务（按批次/作业/文件/产物路径）" /></div>
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px;">
-        <span class="count">已选 {{ selTasks.size }} 项任务</span>
+    <PageHeader title="任务管理" sub="对比完成后自动生成的产物任务（差异CSV导出 / AI分析）的统一重生成与清理入口" />
+    <div class="card">
+      <div class="toolbar">
+        <input class="search-input" v-model="q" placeholder="🔎 搜索任务（按批次/作业/文件/产物路径）" />
+        <span class="toolbar-count">已选 {{ selTasks.size }} 项任务</span>
         <input type="datetime-local" v-model="runAt" style="width:210px;" title="留空 = 立即执行；选择未来时间 = 定时执行" />
         <button class="mini-btn" @click="batchRegen" :disabled="!selTasks.size">⚡ 批量重新生成（差异CSV / AI分析）</button>
         <button class="mini-btn" @click="selTasks.clear()" :disabled="!selTasks.size">清空选择</button>
-        <span class="count" style="opacity:.7;">勾选作业后提交；填了时间则到点自动执行（重启后仍恢复）</span>
+        <span class="toolbar-note">勾选作业后提交；填了时间则到点自动执行（重启后仍恢复）</span>
       </div>
-    </div></div>
+    </div>
 
     <div class="card" v-for="b in batches" :key="b.batch.batch_id">
       <div class="job-row batch-row" @click="toggleBatch(b.batch.batch_id)">
@@ -2166,6 +2205,7 @@ const SplitPage = {
   },
   template: `
   <div>
+    <PageHeader title="文本拆分" sub="按规则把输入文本拆成组（A 必填，B 可选），提交后生成拆分作业" />
     <div class="card">
       <div class="card-head">🪓 文本拆分 · 配置</div>
       <div class="card-body" style="padding:14px 18px;">
@@ -2269,14 +2309,16 @@ const SplitResultView = {
   },
   template: `
   <div v-if="meta">
-    <div style="margin-bottom:12px;">
-      <button class="btn ghost" @click="back">← 返回作业列表</button>
-    </div>
-    <div class="card">
-      <div class="card-head">🪓 拆分结果 · {{ meta.job_id }}
+    <PageHeader back-text="返回作业列表" @back="back" title="拆分结果">
+      <template #meta>
+        <span class="jid">{{ meta.job_id }}</span>
         <span class="group-badge" v-if="meta.label" :title="meta.label">🏷 {{ meta.label }}</span>
-        <span class="badge-status" :class="meta.status">{{ meta.status }}</span><span v-if="meta.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
-      </div>
+        <span class="badge-status" :class="meta.status">{{ meta.status }}</span>
+        <span v-if="meta.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
+      </template>
+    </PageHeader>
+    <div class="card">
+      <div class="card-head">🪓 拆分概览</div>
       <div class="card-body" style="padding:12px 18px;">
         <div v-if="meta.error" class="err" style="color:var(--diff-bar);">{{ meta.error }}</div>
         <div><b>拆分规则：</b></div>
@@ -2293,7 +2335,8 @@ const SplitResultView = {
       </div>
     </div>
 
-    <div class="card" v-for="side in sides" v-if="meta.summary && meta.summary[side]" :key="side">
+    <template v-for="side in sides" :key="side">
+      <div class="card" v-if="meta.summary && meta.summary[side]">
       <div class="card-head">输入 {{ side.toUpperCase() }} · 共 {{ meta.summary[side].total }} 行
         · trailer {{ meta.summary[side].trailer }} 行</div>
       <div>
@@ -2303,15 +2346,17 @@ const SplitResultView = {
           <span class="count">{{ g.count }} 条</span>
           <span class="meta-time">{{ isOpen(side, g.name) ? '▲ 收起' : '▼ 查看' }}</span>
         </div>
-        <div v-for="g in meta.summary[side].groups" :key="g.name + '-body'"
-             v-if="isOpen(side, g.name)" class="saved-content"
-             style="white-space:pre-wrap;padding:8px 14px;max-height:320px;overflow:auto;">
-          <div v-if="opened[side + ':' + g.name].total > opened[side + ':' + g.name].rows.length"
-               style="color:var(--muted);">（仅展示前 {{ opened[side + ':' + g.name].rows.length }} / {{ opened[side + ':' + g.name].total }} 行，完整请导出）</div>
-          <div v-for="(ln, k) in opened[side + ':' + g.name].rows" :key="k">{{ ln }}</div>
-        </div>
+        <template v-for="g in meta.summary[side].groups" :key="g.name + '-body'">
+          <div v-if="isOpen(side, g.name)" class="saved-content"
+               style="white-space:pre-wrap;padding:8px 14px;max-height:320px;overflow:auto;">
+            <div v-if="opened[side + ':' + g.name].total > opened[side + ':' + g.name].rows.length"
+                 style="color:var(--muted);">（仅展示前 {{ opened[side + ':' + g.name].rows.length }} / {{ opened[side + ':' + g.name].total }} 行，完整请导出）</div>
+            <div v-for="(ln, k) in opened[side + ':' + g.name].rows" :key="k">{{ ln }}</div>
+          </div>
+        </template>
       </div>
-    </div>
+      </div>
+    </template>
   </div>
   <div v-else class="empty">加载中…</div>`,
 };
@@ -2321,18 +2366,23 @@ const REPORT_STATUS = { pending: "待开始", running: "进行中", done: "已�
 
 /* 报表行渲染：业务行按栏位双栏对照（差异栏位字符级高亮），表头/表尾整行对照。 */
 const ReportRowRec = {
-  props: ["row", "sourceA", "sourceB", "section"],
+  props: ["row", "sourceA", "sourceB", "section", "fieldNames"],
   setup(props) {
-    const isOpen = ref(false);
+    const isOpen = ref(props.section !== 'data'); // 表头/表尾块默认展开：全部行一起展示
     const toggle = () => { isOpen.value = !isOpen.value; };
     // 整行原貌（报表业务行 a_raw/b_raw；折行记录含 \n，单格整体渲染）优先，缺省回退栏位切分
     const aDisp = computed(() => props.row.a_raw != null ? [props.row.a_raw] : (props.row.a_cols || []));
     const bDisp = computed(() => props.row.b_raw != null ? [props.row.b_raw] : (props.row.b_cols || props.row.a_cols || []));
     const maxLen = computed(() => Math.max(aDisp.value.length, bDisp.value.length, 1));
     const isLine = computed(() => maxLen.value === 1); // 整行对照（表头/表尾物理行 + 表体整行模式）
+    const isFolded = computed(() => (props.row.a_raw || props.row.b_raw || "").includes("\n"));
     const diffSet = computed(() => new Set(props.row.diff_cols || []));
     const showLcol = computed(() => isLine.value && props.section === 'data'
         && props.row.status === 'diff' && diffSet.value.size > 0); // 差异栏位左列仅业务区展示
+    // 差异位标签：折行记录/表头表尾块差异位 = 物理行号「第N行」；业务行 = 导出映射「列号·列名」
+    const colName = (c) => ((props.fieldNames || [])[c]) || ('栏位' + (c + 1));
+    const colLabel = (c) => isFolded.value ? '第' + (c + 1) + '行' : (c + 1) + '·' + colName(c);
+    const diffLabelText = computed(() => (props.row.diff_cols || []).map(colLabel).join(', '));
     function segs(side, i) {
       if (!diffSet.value.has(i)) {
         return [{ text: (side === "a" ? aDisp.value : bDisp.value)[i] || "", cls: "" }];
@@ -2345,7 +2395,7 @@ const ReportRowRec = {
       const a = props.sourceA || "A", b = props.sourceB || "B";
       return { equal: "完全匹配", diff: "部分匹配", unmatched_a: "仅" + a + "有", unmatched_b: "仅" + b + "有" }[s] || s;
     }
-    return { isOpen, toggle, maxLen, isLine, showLcol, diffSet, segs, statusLabel, aDisp, bDisp };
+    return { isOpen, toggle, maxLen, isLine, isFolded, showLcol, diffSet, segs, statusLabel, aDisp, bDisp, colName, colLabel, diffLabelText };
   },
   template: `
   <div class="rec" :class="['s-' + row.status, isOpen ? 'open' : '']">
@@ -2353,7 +2403,7 @@ const ReportRowRec = {
       <span class="caret">▶</span>
       <span class="key">{{ (row.key || '').split(String.fromCharCode(31)).join(':') }}</span>
       <span class="tag" :class="row.status">{{ statusLabel(row.status) }}</span>
-      <span class="meta" v-if="row.status==='diff' && row.diff_cols && row.diff_cols.length">{{ showLcol ? '差异栏位: ' + row.diff_cols.map(c=>c+1).join(', ') : '内容存在差异' }}</span>
+      <span class="meta" v-if="row.status==='diff' && row.diff_cols && row.diff_cols.length">{{ showLcol ? '差异栏位: ' + diffLabelText : '内容存在差异' }}</span>
     </div>
     <div class="rec-body" v-if="isOpen">
       <div class="recgrid" :class="{ 'with-lcol': showLcol }">
@@ -2362,7 +2412,7 @@ const ReportRowRec = {
           <div class="ghdr">{{ sourceA || 'A' }}<span class="absent-note" v-if="!aDisp.length"> · 无此行</span></div>
           <div class="ghdr">{{ sourceB || 'B' }}<span class="absent-note" v-if="!bDisp.length"> · 无此行</span></div>
           <div class="lcol" v-if="showLcol">
-            <span class="lcol-item" v-for="c in row.diff_cols" :key="c">{{ c + 1 }}</span>
+            <span class="lcol-item" v-for="c in row.diff_cols" :key="c" :title="colName(c)">{{ colLabel(c) }}</span>
           </div>
           <div class="gcell" :class="{ diff: diffSet.has(0) }">
             <span class="cv"><span v-for="(s,si) in segs('a', 0)" :key="si" :class="s.cls">{{ s.text }}</span></span>
@@ -2377,11 +2427,11 @@ const ReportRowRec = {
           <template v-for="i in maxLen" :key="i">
             <div class="gcell" :class="{ diff: diffSet.has(i-1) }">
               <span class="ci">{{ i }}</span>
-              <span class="cv"><span v-for="(s,si) in segs('a', i-1)" :key="si" :class="s.cls">{{ s.text }}</span></span>
+              <span class="cv"><span v-if="aDisp[i-1] === undefined" class="absent-note">（无此行）</span><span v-else v-for="(s,si) in segs('a', i-1)" :key="si" :class="s.cls">{{ s.text }}</span></span>
             </div>
             <div class="gcell" :class="{ diff: diffSet.has(i-1) }">
               <span class="ci">{{ i }}</span>
-              <span class="cv"><span v-for="(s,si) in segs('b', i-1)" :key="si" :class="s.cls">{{ s.text }}</span></span>
+              <span class="cv"><span v-if="bDisp[i-1] === undefined" class="absent-note">（无此行）</span><span v-else v-for="(s,si) in segs('b', i-1)" :key="si" :class="s.cls">{{ s.text }}</span></span>
             </div>
           </template>
         </template>
@@ -2393,7 +2443,7 @@ const ReportRowRec = {
 /* 报表分区面板：懒加载分页读取某一 section/zone（base 可换 custom-jobs 等同构端点）。 */
 const ReportZone = {
   components: { ReportRowRec },
-  props: ["jobId", "section", "zone", "title", "tone", "defaultOpen", "sourceA", "sourceB", "base"],
+  props: ["jobId", "section", "zone", "title", "tone", "defaultOpen", "sourceA", "sourceB", "base", "fieldNames"],
   setup(props) {
     const apiBase = computed(() => props.base || "report-jobs");
     const open = ref(!!props.defaultOpen);
@@ -2423,7 +2473,7 @@ const ReportZone = {
     </div>
     <div class="zone-body" v-if="open">
       <div class="empty" v-if="!loading && !rows.length">（无记录）</div>
-      <ReportRowRec v-for="r in rows" :key="r.key + r.status" :row="r" :sourceA="sourceA" :sourceB="sourceB" :section="section" />
+      <ReportRowRec v-for="r in rows" :key="r.key + r.status" :row="r" :sourceA="sourceA" :sourceB="sourceB" :section="section" :field-names="fieldNames" />
       <div class="zone-pager" v-if="total > pageSize" @click.stop>
         <button class="mini-btn" :disabled="page<=1" @click="loadPage(page-1)">上一页</button>
         <span>{{ page }} / {{ totalPages }}</span>
@@ -2484,6 +2534,7 @@ const ReportPage = {
   },
   template: `
   <div>
+    <PageHeader title="报表对比" sub="基于 header 模板核对报表文件（表头 / 业务内容 / 表尾 三分区对照）" />
     <div class="card">
       <div class="card-head">🧾 新建报表对比（基于 header 模板核对）</div>
       <div class="card-body">
@@ -2572,17 +2623,20 @@ const ReportBatchView = {
   },
   template: `
   <div v-if="ov">
-    <div style="margin-bottom:12px;">
-      <button class="btn ghost" @click="goBack">← 返回</button>
-    </div>
-    <div class="card">
-      <div class="card-head">🧾 报表对比批次 · {{ ov.batch.batch_id }}
-        <span class="group-badge" v-if="ov.batch.label" style="margin-left:6px;">🏷 {{ ov.batch.label }}</span>
-        <button class="mini-btn" style="margin-left:6px;" @click="editLabel">{{ ov.batch.label ? '改标签' : '加标签' }}</button>
+    <PageHeader back-text="返回报表对比" @back="goBack" title="报表对比批次">
+      <template #meta>
+        <span class="jid">{{ ov.batch.batch_id }}</span>
+        <span class="group-badge" v-if="ov.batch.label">🏷 {{ ov.batch.label }}</span>
+        <button class="mini-btn" @click="editLabel">{{ ov.batch.label ? '改标签' : '加标签' }}</button>
         <span class="badge-status" :class="ov.status">{{ REPORT_STATUS[ov.status] || ov.status }}</span>
-        <a class="mini-btn" style="margin-left:auto;" :href="exportHref"
+      </template>
+      <template #actions>
+        <a class="mini-btn" :href="exportHref"
            title="Sheet1 报表对比总览（昵称/文件名/总条数/差异统计/条数核对），Sheet2 差异明细">⬇ 导出明细 Excel</a>
-      </div>
+      </template>
+    </PageHeader>
+    <div class="card">
+      <div class="card-head">🧾 批次概况</div>
       <div class="card-body">
         <div class="summary-metrics">
           <div class="metric total"><div class="num">{{ ov.total_files }}</div><div class="lbl">报表数</div></div>
@@ -2655,21 +2709,23 @@ const ReportResultView = {
   },
   template: `
   <div v-if="sum">
-    <div style="margin-bottom:12px;">
-      <button class="btn ghost" @click="goBack">← 返回批次</button>
-      <a class="mini-btn" style="margin-left:8px;" :href="exportHref"
-         title="仅导出单侧不匹配 + 行部分匹配（部分匹配一条差异栏位一行）">⬇ 导出差异 CSV</a>
-    </div>
+    <PageHeader back-text="返回批次" @back="goBack" :title="sum.label || '报表对比结果'">
+      <template #meta>
+        <span class="jid">{{ fileName(sum.file_a) }} ↔ {{ fileName(sum.file_b) }}</span>
+        <span class="badge-status" :class="sum.status">{{ REPORT_STATUS[sum.status] || sum.status }}</span>
+      </template>
+      <template #actions>
+        <a class="mini-btn" :href="exportHref"
+           title="仅导出单侧不匹配 + 行部分匹配（部分匹配一条差异栏位一行）">⬇ 导出差异 CSV</a>
+      </template>
+    </PageHeader>
     <div class="card" v-if="sum.status === 'error'">
       <div class="card-head">❌ 对比失败</div>
       <div class="card-body"><div class="error-box">{{ sum.error }}</div></div>
     </div>
     <template v-else>
       <div class="card">
-        <div class="card-head">🧾 {{ sum.label }}
-          <span class="jid" style="margin-left:6px;">{{ fileName(sum.file_a) }} ↔ {{ fileName(sum.file_b) }}</span>
-          <span class="badge-status" :class="sum.status">{{ REPORT_STATUS[sum.status] || sum.status }}</span>
-        </div>
+        <div class="card-head">🧾 对比概览</div>
         <div class="card-body" v-if="s">
           <div class="summary-metrics">
             <div class="metric total"><div class="num">{{ s.row_count_a }}</div><div class="lbl">总条数 A（程序计数）</div></div>
@@ -2697,12 +2753,12 @@ const ReportResultView = {
         </div>
       </div>
 
-      <ReportZone :job-id="jobId" section="header" zone="diff" title="表头差异（含仅单侧存在的段）" tone="diff"
-                  :default-open="true" sourceA="A" sourceB="B" :key="'h' + jobId" />
-      <ReportZone :job-id="jobId" section="footer" zone="diff" title="表尾差异" tone="diff"
-                  :default-open="true" sourceA="A" sourceB="B" :key="'f' + jobId" />
+      <ReportZone :job-id="jobId" section="header" zone="all" title="报表头 · 全部行对照（差异字符高亮）" tone="diff"
+                  :default-open="true" sourceA="A" sourceB="B" :field-names="s.field_names || []" :key="'h' + jobId" />
+      <ReportZone :job-id="jobId" section="footer" zone="all" title="报表尾 · 全部行对照（差异字符高亮）" tone="diff"
+                  :default-open="true" sourceA="A" sourceB="B" :field-names="s.field_names || []" :key="'f' + jobId" />
       <ReportZone :job-id="jobId" section="data" zone="diff" title="业务内容 · 部分匹配" tone="diff"
-                  :default-open="true" sourceA="A" sourceB="B" :key="'d1' + jobId" />
+                  :default-open="true" sourceA="A" sourceB="B" :field-names="s.field_names || []" :key="'d1' + jobId" />
       <ReportZone :job-id="jobId" section="data" zone="unmatched" title="业务内容 · 单侧不匹配" tone="unmatched"
                   :default-open="true" sourceA="A" sourceB="B" :key="'d2' + jobId" />
       <ReportZone :job-id="jobId" section="data" zone="equal" title="业务内容 · 完全匹配（已按字段排序对齐）" tone="equal"
@@ -2769,6 +2825,7 @@ const CustomPage = {
   },
   template: `
   <div>
+    <PageHeader title="自定义格式对比" sub="非传统结构化文本（如 MT950 报文）按段起止/主键正则解析并配对对比" />
     <div class="card">
       <div class="card-head">📐 新建自定义格式对比（非传统结构化文本 · 按段解析匹配）</div>
       <div class="card-body">
@@ -2858,15 +2915,16 @@ const CustomBatchView = {
   },
   template: `
   <div v-if="ov">
-    <div style="margin-bottom:12px;">
-      <button class="btn ghost" @click="goBack">← 返回</button>
-    </div>
-    <div class="card">
-      <div class="card-head">📐 自定义格式对比批次 · {{ ov.batch.batch_id }}
-        <span class="group-badge" v-if="ov.batch.label" style="margin-left:6px;">🏷 {{ ov.batch.label }}</span>
-        <button class="mini-btn" style="margin-left:6px;" @click="editLabel">{{ ov.batch.label ? '改标签' : '加标签' }}</button>
+    <PageHeader back-text="返回段对比" @back="goBack" title="自定义格式对比批次">
+      <template #meta>
+        <span class="jid">{{ ov.batch.batch_id }}</span>
+        <span class="group-badge" v-if="ov.batch.label">🏷 {{ ov.batch.label }}</span>
+        <button class="mini-btn" @click="editLabel">{{ ov.batch.label ? '改标签' : '加标签' }}</button>
         <span class="badge-status" :class="ov.status">{{ REPORT_STATUS[ov.status] || ov.status }}</span>
-      </div>
+      </template>
+    </PageHeader>
+    <div class="card">
+      <div class="card-head">📐 批次概况</div>
       <div class="card-body">
         <div class="summary-metrics">
           <div class="metric total"><div class="num">{{ ov.total_files }}</div><div class="lbl">文件数</div></div>
@@ -2926,21 +2984,23 @@ const CustomResultView = {
   },
   template: `
   <div v-if="sum">
-    <div style="margin-bottom:12px;">
-      <button class="btn ghost" @click="goBack">← 返回批次</button>
-      <a class="mini-btn" style="margin-left:8px;" :href="exportHref"
-         title="仅导出有差异段（一条差异行一行）与单侧段（整段一条）">⬇ 导出差异 CSV</a>
-    </div>
+    <PageHeader back-text="返回批次" @back="goBack" :title="sum.label || '自定义格式对比结果'">
+      <template #meta>
+        <span class="jid">{{ fileName(sum.file_a) }} ↔ {{ fileName(sum.file_b) }}</span>
+        <span class="badge-status" :class="sum.status">{{ REPORT_STATUS[sum.status] || sum.status }}</span>
+      </template>
+      <template #actions>
+        <a class="mini-btn" :href="exportHref"
+           title="仅导出有差异段（一条差异行一行）与单侧段（整段一条）">⬇ 导出差异 CSV</a>
+      </template>
+    </PageHeader>
     <div class="card" v-if="sum.status === 'error'">
       <div class="card-head">❌ 对比失败</div>
       <div class="card-body"><div class="error-box">{{ sum.error }}</div></div>
     </div>
     <template v-else>
       <div class="card">
-        <div class="card-head">📐 {{ sum.label }}
-          <span class="jid" style="margin-left:6px;">{{ fileName(sum.file_a) }} ↔ {{ fileName(sum.file_b) }}</span>
-          <span class="badge-status" :class="sum.status">{{ REPORT_STATUS[sum.status] || sum.status }}</span>
-        </div>
+        <div class="card-head">📐 对比概览</div>
         <div class="card-body" v-if="s">
           <div class="summary-metrics">
             <div class="metric total"><div class="num">{{ s.segments_a }}</div><div class="lbl">段数 A</div></div>
@@ -3030,11 +3090,11 @@ const App = {
   <div class="app-header">
     <div class="logo"><span class="dot"></span> TextDiff</div>
     <button class="nav-btn" :class="tab==='submit'?'active':''" @click="tab='submit'">新建对比</button>
-    <button class="nav-btn" :class="tab==='report'?'active':''" @click="tab='report'">报表对比</button>
-    <button class="nav-btn" :class="tab==='custom'?'active':''" @click="tab='custom'">自定义格式对比</button>
-    <button class="nav-btn" :class="tab==='split'?'active':''" @click="tab='split'">文本拆分</button>
+    <button class="nav-btn" :class="['report','reportbatch','reportresult'].includes(tab)?'active':''" @click="tab='report'">报表对比</button>
+    <button class="nav-btn" :class="['custom','custombatch','customresult'].includes(tab)?'active':''" @click="tab='custom'">自定义格式对比</button>
+    <button class="nav-btn" :class="['split','splitresult'].includes(tab)?'active':''" @click="tab='split'">文本拆分</button>
     <div class="spacer"></div>
-    <button class="nav-btn" :class="(tab==='jobs'||tab==='batch')?'active':''" @click="tab='jobs'">作业列表</button>
+    <button class="nav-btn" :class="['jobs','batch'].includes(tab)?'active':''" @click="tab='jobs'">作业列表</button>
     <button class="nav-btn" :class="tab==='tasks'?'active':''" @click="tab='tasks'">任务管理</button>
     <span class="nav-divider"></span>
     <button class="nav-btn" :class="tab==='result'?'active':''" @click="tab='result'" :disabled="!jobId">结果</button>
@@ -3059,11 +3119,11 @@ const App = {
     <SplitResultView v-else-if="tab==='splitresult' && splitJobId" :job-id="splitJobId" :key="splitJobId" @back="backToJobs" />
     <BatchView v-else-if="tab==='batch' && batchId" :batch-id="batchId" :key="batchId" @open="openChild" @back="backToJobs" />
     <ResultView v-else-if="tab==='result' && jobId" :job-id="jobId" :key="jobId + '-' + resultNonce" :encodings="encodings"
-                :back-batch="backBatch" @rerun="onRerun" @back="onResultBack" />
+                :back-batch="backBatch" :back-tasks="backTab==='tasks'" @rerun="onRerun" @back="onResultBack" />
     <SettingsPage v-else-if="tab==='settings'" />
     <AppDialog />
     <AppToast />
   </div>`,
 };
 
-createApp(App).mount("#app");
+createApp(App).component("PageHeader", PageHeader).mount("#app");
