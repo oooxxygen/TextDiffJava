@@ -90,7 +90,7 @@ public final class TaskManager implements AutoCloseable {
 
     /**
      * AI 并发度热更新：信号量与执行池运行时重调（设置页保存即生效）。
-     * 新信号量按旧信号量当前剩余许可初始化，已在执行中的任务不受影响。
+     * 新信号量按旧信号量当前剩余许可初始化，已在执行中的任务不受影响。缩容先降 core，扩容先升 max。
      */
     public synchronized void resizeAiConcurrency(int n) {
         int next = Math.max(1, n);
@@ -98,8 +98,13 @@ public final class TaskManager implements AutoCloseable {
         this.aiPermits = new java.util.concurrent.Semaphore(Math.max(0, old.availablePermits()));
         this.aiConcurrency = next;
         if (pool instanceof java.util.concurrent.ThreadPoolExecutor tpe) {
-            tpe.setMaximumPoolSize(next);
-            tpe.setCorePoolSize(next);
+            if (next < tpe.getCorePoolSize()) {
+                tpe.setCorePoolSize(next);
+                tpe.setMaximumPoolSize(next);
+            } else {
+                tpe.setMaximumPoolSize(next);
+                tpe.setCorePoolSize(next);
+            }
         }
     }
 

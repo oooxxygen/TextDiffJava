@@ -85,11 +85,16 @@ public final class JobManager implements AutoCloseable {
         requeueStuckJobs();
     }
 
-    /** 对比并发度热更新：主对比线程池运行时重调大小（设置页保存即生效）。 */
+    /** 对比并发度热更新：主对比线程池运行时重调大小（设置页保存即生效）。缩容先降 core，扩容先升 max。 */
     public void resizeEnginePool(int maxThreads) {
         if (pool instanceof java.util.concurrent.ThreadPoolExecutor tpe) {
-            tpe.setMaximumPoolSize(maxThreads);
-            tpe.setCorePoolSize(maxThreads);
+            if (maxThreads < tpe.getCorePoolSize()) {
+                tpe.setCorePoolSize(maxThreads);
+                tpe.setMaximumPoolSize(maxThreads);
+            } else {
+                tpe.setMaximumPoolSize(maxThreads);
+                tpe.setCorePoolSize(maxThreads);
+            }
         }
     }
 

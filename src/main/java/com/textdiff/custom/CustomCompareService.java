@@ -53,11 +53,17 @@ public final class CustomCompareService implements AutoCloseable {
         requeueStuckJobs();
     }
 
-    /** 对比并发度热更新：自定义格式线程池运行时重调大小（设置页保存即生效）。 */
+    /** 对比并发度热更新：自定义格式线程池运行时重调大小（设置页保存即生效）。缩容先降 core，扩容先升 max。 */
     public void resizePool(int threads) {
+        int n = Math.max(1, threads);
         if (pool instanceof java.util.concurrent.ThreadPoolExecutor tpe) {
-            tpe.setMaximumPoolSize(Math.max(1, threads));
-            tpe.setCorePoolSize(Math.max(1, threads));
+            if (n < tpe.getCorePoolSize()) {
+                tpe.setCorePoolSize(n);
+                tpe.setMaximumPoolSize(n);
+            } else {
+                tpe.setMaximumPoolSize(n);
+                tpe.setCorePoolSize(n);
+            }
         }
     }
 
