@@ -28,10 +28,34 @@ public final class HtmlReportWriter {
             .build();
 
     public static String render(String title, JobMeta meta, String markdown) {
-        Node doc = PARSER.parse(markdown == null ? "" : markdown);
+        String md = markdown == null ? "" : markdown;
+        String[] lead = extractVerdict(md); // 【总体结论】/【最终评判】两行 → 报头；其余进正文
+        Node doc = PARSER.parse(lead[2]);
         String body = RENDERER.render(doc);
         DiffGrade.Grade grade = meta == null ? null : DiffGrade.of(meta.totalA, meta.totalB);
-        return template(title, meta, grade, body);
+        return template(title, meta, grade, lead[0], lead[1], body);
+    }
+
+    /**
+     * 提取正文中的结论行：【总体结论】一段话依据 与 【最终评判】等级（模板 v3.1 约定，位于 AI 生成提示/标题之后）。
+     * 返回 {结论依据, 最终评判, 去除后的正文}；缺失时前两项为空串。
+     */
+    private static String[] extractVerdict(String md) {
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("(?m)^【(总体结论|最终评判)】(.*)$");
+        String basis = "", verdict = "";
+        java.util.List<String> drop = new java.util.ArrayList<>();
+        java.util.regex.Matcher m = p.matcher(md);
+        while (m.find()) {
+            if (m.group(1).equals("总体结论") && basis.isEmpty()) {
+                basis = m.group(2).strip();
+                drop.add(java.util.regex.Matcher.quoteReplacement(m.group(0)));
+            } else if (m.group(1).equals("最终评判") && verdict.isEmpty()) {
+                verdict = m.group(2).strip();
+                drop.add(java.util.regex.Matcher.quoteReplacement(m.group(0)));
+            }
+        }
+        for (String d : drop) md = md.replace(d + "\n", "").replace(d, "");
+        return new String[]{basis, verdict, md};
     }
 
     private static String esc(String s) {
@@ -39,19 +63,26 @@ public final class HtmlReportWriter {
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
-    private static String template(String title, JobMeta meta, DiffGrade.Grade grade, String body) {
+    private static String template(String title, JobMeta meta, DiffGrade.Grade grade,
+                                   String basis, String verdict, String body) {
         String ta = meta == null ? "—" : String.valueOf(meta.totalA);
         String tb = meta == null ? "—" : String.valueOf(meta.totalB);
         String eq = meta == null ? "—" : String.valueOf(meta.equal);
         String df = meta == null ? "—" : String.valueOf(meta.diff);
         String oa = meta == null ? "—" : String.valueOf(meta.onlyA);
         String ob = meta == null ? "—" : String.valueOf(meta.onlyB);
-        String gradeCls = switch (grade == null ? "" : grade.label()) {
+        // 最终评判：优先 AI 判词（【最终评判】），与数值分级（DiffGrade）取更严重者，避免判词弱化真实差异规模
+        String gradeLabel = grade == null ? "—" : grade.label();
+        String finalLabel = pickSevere(gradeLabel, verdict.isEmpty() ? gradeLabel : verdict);
+        String gradeCls = switch (finalLabel) {
             case "严重问题" -> "severe";
             case "差异明显" -> "mark";
             case "保持关注" -> "watch";
             default -> "ok";
         };
+        String basisHtml = basis.isEmpty()
+                ? ""
+                : "<div class=\"basis\"><div class=\"basis-lbl\">结论依据</div><p>" + esc(basis) + "</p></div>";
         return """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -87,21 +118,40 @@ header.masthead h1 {
 header.masthead .files { color: var(--ink-soft); font-size: 13px; line-height: 1.7; }
 header.masthead .files b { color: var(--ink); font-weight: 600; }
 
-/* 数据事实条：账页式对齐，tabular-nums 保证数位对齐 */
+/* 数据事实条：六项事实固定一行（紧凑格，不换行） */
 section.facts {
-  display: flex; flex-wrap: wrap; align-items: stretch; gap: 0;
+  display: flex; flex-wrap: nowrap; align-items: stretch; gap: 0;
   border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
-  margin: 26px 0 34px;
+  margin: 26px 0 0;
 }
-.facts .cell { padding: 12px 20px 12px 0; margin-right: 20px; }
+.facts .cell { flex: 1 1 0; min-width: 0; padding: 10px 8px 10px 0; text-align: center; }
 .facts .num {
-  font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.3;
+  font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.3;
 }
-.facts .lbl { font-size: 12px; color: var(--ink-soft); }
-.facts .sep { border-left: 1px solid var(--rule); padding-left: 20px; }
-.facts .grade { margin-left: auto; align-self: center; text-align: right; padding-right: 4px; }
+.facts .lbl { font-size: 11.5px; color: var(--ink-soft); white-space: nowrap; }
+.facts .sep { border-left: 1px solid var(--rule); }
 
-.grade-badge { display: inline-block; font-size: 13px; font-weight: 700; padding: 3px 12px; border-radius: 3px; }
+/* 结论条：左侧结论依据（蓝框一段话），右侧最终评判（绿框） */
+section.verdict {
+  display: flex; flex-wrap: wrap; align-items: stretch; gap: 14px;
+  border-bottom: 1px solid var(--rule);
+  margin: 0 0 30px; padding: 14px 0 16px;
+}
+.verdict .basis {
+  flex: 1 1 260px; min-width: 0; display: flex; gap: 10px; align-items: flex-start;
+  border: 1px solid #C7D6EC; border-left: 4px solid var(--ledger);
+  background: #F4F7FB; border-radius: 3px; padding: 9px 14px;
+}
+.verdict .basis-lbl { flex: none; font-size: 12px; font-weight: 700; color: var(--ledger); padding-top: 2px; }
+.verdict .basis p { margin: 0; font-size: 13.5px; line-height: 1.75; }
+.verdict .grade {
+  flex: none; align-self: center; text-align: center;
+  border: 1px solid #BFE3CC; border-radius: 3px; background: #F2FAF5;
+  padding: 8px 18px; min-width: 132px;
+}
+.verdict .grade .lbl { font-size: 12px; color: var(--ink-soft); margin-bottom: 3px; }
+
+.grade-badge { display: inline-block; font-size: 14px; font-weight: 700; padding: 3px 14px; border-radius: 3px; }
 .grade-badge.ok { color: var(--ok); background: #EDF7F0; }
 .grade-badge.watch { color: var(--warn); background: #FBF3E6; }
 .grade-badge.mark { color: #932F10; background: #FAEBE0; }
@@ -165,8 +215,12 @@ footer { margin-top: 48px; padding-top: 14px; border-top: 1px solid var(--rule);
     <div class="cell sep"><div class="num">%s</div><div class="lbl">完全匹配</div></div>
     <div class="cell sep"><div class="num">%s</div><div class="lbl">有差异</div></div>
     <div class="cell sep"><div class="num">%s</div><div class="lbl">仅 A 存在</div></div>
-    <div class="cell"><div class="num">%s</div><div class="lbl">仅 B 存在</div></div>
-    <div class="cell grade"><div class="lbl">总体评判</div><span class="grade-badge %s">%s</span></div>
+    <div class="cell sep"><div class="num">%s</div><div class="lbl">仅 B 存在</div></div>
+  </section>
+
+  <section class="verdict">
+    %s
+    <div class="grade"><div class="lbl">最终评判</div><span class="grade-badge %s">%s</span></div>
   </section>
 
   <article>
@@ -181,7 +235,22 @@ footer { margin-top: 48px; padding-top: 14px; border-top: 1px solid var(--rule);
                 .formatted(esc(title), esc(title),
                         esc(meta == null ? "" : meta.fileA), esc(meta == null ? "" : meta.fileB),
                         ta, tb, eq, df, oa, ob,
-                        gradeCls, esc(grade == null ? "—" : grade.label()),
+                        basisHtml, gradeCls, esc(finalLabel),
                         body);
+    }
+
+    /** 最终评判取 AI 判词与数值分级中更严重的一档（序越大越严重），避免 AI 判词弱化真实差异规模。 */
+    private static String pickSevere(String a, String b) {
+        return rank(a) >= rank(b) ? a : b;
+    }
+
+    private static int rank(String label) {
+        return switch (label) {
+            case "正常" -> 0;
+            case "保持关注" -> 1;
+            case "差异明显" -> 2;
+            case "严重问题" -> 3;
+            default -> -1;
+        };
     }
 }

@@ -24,7 +24,7 @@ import java.util.Map;
  */
 public final class PromptRenderer {
     public static final String TEMPLATE_NAME = "analysis-template.md";
-    public static final String TEMPLATE_VERSION = "v3";
+    public static final String TEMPLATE_VERSION = "v3.1";
 
     /**
      * 提示词预算：适配小上下文窗口（≤256K）。
@@ -191,8 +191,8 @@ public final class PromptRenderer {
                 for (String[] p : f.topPatterns) {
                     long c = Long.parseLong(p[2]);
                     shown += c;
-                    cf.append("    - `").append(p[0].isEmpty() ? "(空)" : p[0]).append("` → `")
-                            .append(p[1].isEmpty() ? "(空)" : p[1]).append("`：").append(c).append(" 次（")
+                    cf.append("    - `").append(valCell(p[0])).append(" → ").append(valCell(p[1])).append("`：")
+                            .append(c).append(" 次（")
                             .append(String.format("%.1f", c * 100.0 / f.count)).append("%）\n");
                 }
                 if (shown < f.count) {
@@ -208,9 +208,9 @@ public final class PromptRenderer {
                     cf.append("\n（其余 ").append(f.samples.size() - shown + 1).append(" 组明细省略）\n");
                     break;
                 }
-                cf.append("| ").append(cell(s.length > 2 ? s[2] : ""))
-                        .append(" | ").append(cell(s[0]))
-                        .append(" | ").append(cell(s[1])).append(" |\n");
+                cf.append("| ").append(keyCell(s.length > 2 ? s[2] : ""))
+                        .append(" | ").append(valCell(s[0]))
+                        .append(" | ").append(valCell(s[1])).append(" |\n");
             }
         }
         if (cf.isEmpty()) cf.append("（无差异列——动态分析部分省略）");
@@ -293,9 +293,23 @@ public final class PromptRenderer {
         return s == null ? "" : s.replace("\n", "\\n").replace("\r", "\\r");
     }
 
+    /** 空格可见符（␣）：原值的前导/尾随空格在 Markdown/HTML 中会被折叠，AI 采样值统一可视化为 ␣。 */
+    static final String SPACE_MARK = "\u2423";
+
     /** Markdown 表格单元格：压平换行并转义竖线。 */
     private static String cell(String s) {
         return oneLine(s).replace("|", "\\|");
+    }
+
+    /** 主键展示：组合主键内部连接符（0x1F 不可见）→ " : "，便于识别各栏位边界。 */
+    private static String keyCell(String key) {
+        return cell(key == null ? "" : key.replace(com.textdiff.engine.Rules.KEY_SEP, " : "));
+    }
+
+    /** 原值展示：包「」并空格可视化（␣），空值显式标注（空）——保证补零/补空格差异在采样与报告中不被折叠。 */
+    private static String valCell(String v) {
+        if (v == null || v.isEmpty()) return "（空）";
+        return "「" + cell(v).replace(" ", SPACE_MARK) + "」";
     }
 
     /**
