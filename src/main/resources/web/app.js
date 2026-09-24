@@ -29,6 +29,17 @@ function fmtTime(ts) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+/* ---------- 工具：秒数 -> 耗时可读文本（37秒 / 8分03秒 / 1时05分30秒） ---------- */
+function fmtDur(sec) {
+  if (sec == null || sec < 0 || !isFinite(sec)) return "—";
+  sec = Math.round(sec);
+  if (sec < 60) return sec + "秒";
+  const m = Math.floor(sec / 60), s = sec % 60;
+  if (m < 60) return m + "分" + String(s).padStart(2, "0") + "秒";
+  const h = Math.floor(m / 60);
+  return h + "时" + String(m % 60).padStart(2, "0") + "分" + String(s).padStart(2, "0") + "秒";
+}
+
 /* ---------- 工具：自定义来源名（替代默认 A/B），贯穿结果页/列表/导出 ---------- */
 function srcA(cfg) { return (cfg && cfg.source_a) ? cfg.source_a : "A"; }
 function srcB(cfg) { return (cfg && cfg.source_b) ? cfg.source_b : "B"; }
@@ -874,7 +885,7 @@ const ResultView = {
 
     return { meta, summary, zoneCounts, error, skipSet, columnNames, trailerChips,
              diffConcentration, concList, concShown, loadMoreConc,
-             ai, aiHtml, runAnalyze, exportUrl, onRerun, fmtTime, editLabel,
+             ai, aiHtml, runAnalyze, exportUrl, onRerun, fmtTime, fmtDur, editLabel,
              sourceA, sourceB, goBack: () => emit("back"),
              notes, zoneNoteCounts, notesNonce, globalQ, globalApplied, globalNonce,
              doGlobalSearch, clearGlobal, onSaveNote };
@@ -938,7 +949,7 @@ const ResultView = {
             </div>
           </div>
           <div style="margin-top:12px; font-size:12px; color:var(--text-soft);">
-            触发时间 {{ fmtTime(meta.created_at) }} · 完成时间 {{ fmtTime(meta.finished_at) }}<span v-if="meta.locked"> · 🔒 已锁定</span><br/>
+            触发时间 {{ fmtTime(meta.created_at) }} · 完成时间 {{ fmtTime(meta.finished_at) }}<span v-if="meta.started_at && meta.finished_at"> · ⏱ 耗时 {{ fmtDur(meta.finished_at - meta.started_at) }}</span><span v-if="meta.locked"> · 🔒 已锁定</span><br/>
             编码 {{ sourceA }}={{ meta.detected_encoding_a }} · {{ sourceB }}={{ meta.detected_encoding_b }}
             <span v-if="meta.used_disk_fallback"> · ⚠ 已启用磁盘回退</span>
             <span v-if="summary.recnum_check_a===false || summary.recnum_check_b===false"> · ⚠ RecNum 校验不一致</span>
@@ -1873,6 +1884,8 @@ const TaskManagerPage = {
     const selTasks = reactive(new Set()); // 批量重新生成选中的任务
     const runAt = ref("");                // 可选执行时间（datetime-local；空 = 立即）
     const q = ref("");
+    const nowSec = ref(Math.floor(Date.now() / 1000)); // running 任务实时计时的走针基准
+    setInterval(() => { nowSec.value = Math.floor(Date.now() / 1000); }, 1000);
     let timer = null; let stopped = false;
     async function load() {
       try {
@@ -1888,6 +1901,26 @@ const TaskManagerPage = {
     const typeText = (t) => TASK_TYPE_TEXT[t.task_type] || t.task_type;
     const statusText = (t) => TASK_STATUS_TEXT[t.status] || t.status;
     const fileName = (t) => (t.file_a || "").split(/[\\/]/).pop();
+    // 执行耗时：完成任务 = 结束-开始；进行中 = 实时已运行（nowSec 走针驱动刷新）；未开始 = 不显示
+    const durTask = (t) => {
+      if (t.status === "running") return t.started_at > 0 ? "已运行 " + fmtDur(nowSec.value - t.started_at) : "";
+      if ((t.status === "done" || t.status === "failed") && t.started_at > 0 && t.finished_at > 0)
+        return "耗时 " + fmtDur(t.finished_at - t.started_at);
+      return "";
+    };
+    const durJob = (j) => {
+      if (j.status === "running") return j.started_at > 0 ? "已运行 " + fmtDur(nowSec.value - j.started_at) : "";
+      if ((j.status === "done" || j.status === "error") && j.started_at > 0 && j.finished_at > 0)
+        return "耗时 " + fmtDur(j.finished_at - j.started_at);
+      return "";
+    };
+    const durBatch = (b) => {
+      const s = b.batch.started_at || 0, f = b.batch.finished_at || 0;
+      if (b.status === "running") return s > 0 ? "已运行 " + fmtDur(nowSec.value - s) : "";
+      if ((b.status === "done" || b.status === "error") && s > 0 && f > 0)
+        return "总耗时 " + fmtDur(f - s);
+      return "";
+    };
     function toggle(set, id) { set.has(id) ? set.delete(id) : set.add(id); }
     // 展开批次时懒加载其子作业列表（层级与对比结果批次页一致）
     const batchChildren = reactive({});
@@ -1940,6 +1973,7 @@ const TaskManagerPage = {
       catch (e) { notify(e.message, "error"); }
     }
     return { batches, standalone, openBatches, openJobs, q, tasksOf, typeText, statusText, fileName,
+             durTask, durJob, durBatch,
              toggle, toggleBatch, batchChildren, regen, delTask, fmtTime,
              selTasks, runAt, jobAllSel, toggleJobSel, batchRegen,
              open: (id) => emit("open", id), openBatch: (id) => emit("open-batch", id) };
@@ -1965,6 +1999,7 @@ const TaskManagerPage = {
         <span class="group-badge" v-if="b.batch.label">🏷 {{ b.batch.label }}</span>
         <span class="meta-time">{{ fmtTime(b.batch.created_at) }}</span>
         <span class="count">共 {{ b.total_files }} 文件</span>
+        <span class="dur" :class="{ running: b.status==='running' }" v-if="durBatch(b)" title="批次执行耗时（首作业开始 → 末作业完成）">⏱ {{ durBatch(b) }}</span>
         <span class="row-actions" @click.stop>
           <button class="mini-btn" @click="openBatch(b.batch.batch_id)">批次详情</button>
           <button class="mini-btn" @click.stop="toggleBatch(b.batch.batch_id)">{{ openBatches.has(b.batch.batch_id) ? '收起 ▲' : '展开 ▼' }}</button>
@@ -1976,6 +2011,7 @@ const TaskManagerPage = {
             <label class="sel-all" style="margin-left:0;margin-right:10px;" @click.stop title="选中该作业的差异CSV + AI分析任务"><input type="checkbox" :checked="jobAllSel(c.job_id)" @change="toggleJobSel(c.job_id)" /></label>
             <span class="jid">{{ (c.file_a||'').split(/[\\\\/]/).pop() }}</span>
             <span class="badge-status" :class="c.status">{{ c.status }}</span>
+            <span class="dur" :class="{ running: c.status==='running' }" v-if="durJob(c)">⏱ {{ durJob(c) }}</span>
             <span class="row-actions" @click.stop>
               <button class="mini-btn" @click="open(c.job_id)">结果</button>
               <button class="mini-btn" v-if="tasksOf(c.job_id).length" @click.stop="toggle(openJobs, c.job_id)">{{ openJobs.has(c.job_id) ? '收起 ▲' : '展开 ▼' }}</button>
@@ -1990,6 +2026,7 @@ const TaskManagerPage = {
               <span class="group-badge" v-if="t.trigger==='batch'">批量</span>
               <span class="group-badge" v-if="t.scheduled_at>0 && t.status==='pending'">⏰ {{ fmtTime(t.scheduled_at) }} 执行</span>
               <span class="meta-time" v-if="t.finished_at">{{ fmtTime(t.finished_at) }}</span>
+              <span class="dur" :class="{ running: t.status==='running' }" v-if="durTask(t)">⏱ {{ durTask(t) }}</span>
               <span class="row-actions">
                 <button class="mini-btn" @click="regen(t.task_id)" :disabled="t.status==='running'">↻ 重新生成</button>
                 <button class="mini-btn danger" @click="delTask(t.task_id)">删除</button>
@@ -2010,6 +2047,7 @@ const TaskManagerPage = {
             <span class="jid">{{ j.job_id }}</span>
             <span class="badge-status" :class="j.status">{{ j.status }}</span>
             <span class="files">{{ j.file_a }} ↔ {{ j.file_b }}</span>
+            <span class="dur" :class="{ running: j.status==='running' }" v-if="durJob(j)">⏱ {{ durJob(j) }}</span>
             <span class="row-actions" @click.stop>
               <button class="mini-btn" @click="open(j.job_id)">结果</button>
               <button class="mini-btn" v-if="tasksOf(j.job_id).length" @click.stop="toggle(openJobs, j.job_id)">{{ openJobs.has(j.job_id) ? '收起 ▲' : '展开 ▼' }}</button>
@@ -2024,6 +2062,7 @@ const TaskManagerPage = {
               <span class="group-badge" v-if="t.trigger==='batch'">批量</span>
               <span class="group-badge" v-if="t.scheduled_at>0 && t.status==='pending'">⏰ {{ fmtTime(t.scheduled_at) }} 执行</span>
               <span class="meta-time" v-if="t.finished_at">{{ fmtTime(t.finished_at) }}</span>
+              <span class="dur" :class="{ running: t.status==='running' }" v-if="durTask(t)">⏱ {{ durTask(t) }}</span>
               <span class="row-actions">
                 <button class="mini-btn" @click="regen(t.task_id)" :disabled="t.status==='running'">↻ 重新生成</button>
                 <button class="mini-btn danger" @click="delTask(t.task_id)">删除</button>

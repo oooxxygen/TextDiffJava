@@ -36,6 +36,7 @@ final class ApiViews {
         m.put("status", apiStatus(job));
         m.put("error", job.error);
         m.put("created_at", job.createdAt);
+        m.put("started_at", job.startedAt);
         m.put("finished_at", job.finishedAt);
         m.put("label", job.label == null || job.label.isEmpty() ? job.nickname : job.label);
         m.put("locked", job.locked);
@@ -92,6 +93,12 @@ final class ApiViews {
         b.put("batch_type", batch.batchType == null || batch.batchType.isEmpty() ? "file" : batch.batchType);
         b.put("template_dir", batch.templateDir);
         b.put("no_rule_files", batch.noRuleFiles == null ? List.of() : batch.noRuleFiles);
+        // 批次执行耗时区间：最早开始的作业 → 最晚完成的作业（无一完成时回退最早创建）
+        long minStart = jobs.stream().mapToLong(j -> j.startedAt).filter(v -> v > 0).min().orElse(0);
+        if (minStart == 0) minStart = jobs.stream().mapToLong(j -> j.createdAt).min().orElse(0);
+        if (minStart == 0) minStart = batch.createdAt;
+        b.put("started_at", minStart);
+        b.put("finished_at", jobs.stream().mapToLong(j -> j.finishedAt).max().orElse(0));
         m.put("batch", b);
         m.put("status", status);
         m.put("total_files", jobs.size());
@@ -120,6 +127,7 @@ final class ApiViews {
         m.put("label", job.label == null || job.label.isEmpty() ? job.nickname : job.label);
         m.put("locked", job.locked);
         m.put("created_at", job.createdAt);
+        m.put("started_at", job.startedAt);
         m.put("finished_at", job.finishedAt);
         m.put("file_a", job.fileA);
         m.put("file_b", job.fileB);
