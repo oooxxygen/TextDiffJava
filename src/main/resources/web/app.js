@@ -2395,7 +2395,18 @@ const ReportRowRec = {
       const a = props.sourceA || "A", b = props.sourceB || "B";
       return { equal: "完全匹配", diff: "部分匹配", unmatched_a: "仅" + a + "有", unmatched_b: "仅" + b + "有" }[s] || s;
     }
-    return { isOpen, toggle, maxLen, isLine, isFolded, showLcol, diffSet, segs, statusLabel, aDisp, bDisp, colName, colLabel, diffLabelText };
+    // 表头/表尾块：整块单柄横向滚动（格内容不再各自出滚动条）；同分区内多块滚动位置联动
+    const isBlock = computed(() => props.section === 'header' || props.section === 'footer');
+    function onHScroll(e) {
+      const el = e.target;
+      if (!el.classList || !el.classList.contains("hscroll")) return;
+      const zb = el.closest(".zone-body");
+      if (!zb) return;
+      zb.querySelectorAll(".rec-body.hscroll").forEach(o => {
+        if (o !== el && o.scrollLeft !== el.scrollLeft) o.scrollLeft = el.scrollLeft;
+      });
+    }
+    return { isOpen, toggle, maxLen, isLine, isFolded, isBlock, showLcol, diffSet, segs, statusLabel, aDisp, bDisp, colName, colLabel, diffLabelText, onHScroll };
   },
   template: `
   <div class="rec" :class="['s-' + row.status, isOpen ? 'open' : '']">
@@ -2405,8 +2416,8 @@ const ReportRowRec = {
       <span class="tag" :class="row.status">{{ statusLabel(row.status) }}</span>
       <span class="meta" v-if="row.status==='diff' && row.diff_cols && row.diff_cols.length">{{ showLcol ? '差异栏位: ' + diffLabelText : '内容存在差异' }}</span>
     </div>
-    <div class="rec-body" v-if="isOpen">
-      <div class="recgrid" :class="{ 'with-lcol': showLcol }">
+    <div class="rec-body" :class="{ hscroll: isBlock }" v-if="isOpen" @scroll.self="onHScroll">
+      <div class="recgrid" :class="[{ 'with-lcol': showLcol }, { hblock: isBlock }]">
         <template v-if="isLine">
           <div class="ghdr lcol-head" v-if="showLcol">差异栏位</div>
           <div class="ghdr">{{ sourceA || 'A' }}<span class="absent-note" v-if="!aDisp.length"> · 无此行</span></div>

@@ -304,6 +304,14 @@ label.field { font-size: 12px; color: var(--text-soft); font-weight: 600; }
   word-break: break-all; line-height: 1.4; }
 .recgrid .ghdr.lcol-head { text-align: center; background: #fff6f6; color: var(--diff-text); font-weight: 600; }
 
+/* 表头/表尾整块横向联动：块内仅底部一根拖动柄（单滚动容器），所有行/两侧联动；
+   列宽 minmax(max-content,1fr)——内容窄时平分铺满（同普通布局），超宽时按内容宽出块容器横向滚动 */
+.rec-body.hscroll { overflow-x: auto; }
+.rec-body.hscroll::-webkit-scrollbar { height: 9px; }
+.rec-body.hscroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; }
+.rec-body.hscroll .recgrid.hblock { grid-template-columns: minmax(max-content, 1fr) minmax(max-content, 1fr); }
+.rec-body.hscroll .gcell .cv { overflow: visible; }
+
 /* 字符级高亮 */
 .seg-del { background: var(--char-del); border-radius: 2px; }
 .seg-ins { background: var(--char-ins); border-radius: 2px; }
