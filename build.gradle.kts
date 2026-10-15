@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.textdiff"
-version = "0.9.0"
+version = "0.9.1"
 
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(21) }
@@ -39,13 +39,16 @@ tasks.withType<Test> {
     System.getenv("TD_TMP")?.let { jvmArgs("-Djava.io.tmpdir=$it") }
 }
 
-// 便携运行时（jlink）模块集 —— EBCDIC/UTF-16 依赖 jdk.charsets
+// 便携运行时（jlink）模块集
+// jdk.charsets：EBCDIC/UTF-16；java.security.jgss：Tomcat 启动 createDefaultRealm 即加载（缺则 web 容器起不来）；
+// java.net.http：AiClient 的 HttpClient；java.security.sasl：java.naming 的 SASL 认证
 runtime {
     options.set(listOf("--strip-debug", "--compress", "2", "--no-header-files", "--no-man-pages"))
     modules.set(listOf(
         "java.base", "java.logging", "java.sql", "java.naming",
         "java.management", "java.desktop", "jdk.charsets", "jdk.crypto.ec",
-        "java.instrument", "jdk.unsupported"
+        "java.instrument", "jdk.unsupported",
+        "java.security.jgss", "java.security.sasl", "java.net.http"
     ))
     jpackage {
         imageName = "TextDiff"
