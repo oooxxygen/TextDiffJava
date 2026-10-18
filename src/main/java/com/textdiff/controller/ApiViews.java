@@ -93,6 +93,8 @@ final class ApiViews {
         b.put("batch_type", batch.batchType == null || batch.batchType.isEmpty() ? "file" : batch.batchType);
         b.put("template_dir", batch.templateDir);
         b.put("no_rule_files", batch.noRuleFiles == null ? List.of() : batch.noRuleFiles);
+        b.put("missing_files", batch.missingFiles == null ? List.of() : batch.missingFiles);
+        b.put("extract_failed", batch.extractFailed == null ? List.of() : batch.extractFailed);
         // 批次执行耗时区间：最早开始的作业 → 最晚完成的作业（无一完成时回退最早创建）
         long minStart = jobs.stream().mapToLong(j -> j.startedAt).filter(v -> v > 0).min().orElse(0);
         if (minStart == 0) minStart = jobs.stream().mapToLong(j -> j.createdAt).min().orElse(0);
@@ -105,6 +107,8 @@ final class ApiViews {
         m.put("diff_files", diffFiles);
         m.put("done", done);
         m.put("no_rule_count", batch.noRuleFiles == null ? 0 : batch.noRuleFiles.size());
+        m.put("missing_count", batch.missingFiles == null ? 0 : batch.missingFiles.size());
+        m.put("extract_failed_count", batch.extractFailed == null ? 0 : batch.extractFailed.size());
         return m;
     }
 

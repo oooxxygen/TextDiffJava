@@ -68,7 +68,7 @@ public class SubmitController {
             rows.add(new String[]{configLine, pair.a(), pair.b(), nick});
         }
         BatchRecord batch = jobs.createBatchFromPairs(
-                p.label() == null ? "直连对比" : p.label(), rows);
+                p.label() == null ? "直连对比" : p.label(), rows, p.kind());
         List<String> ids = jobs.listJobs(batch.id).stream().map(j -> j.id).toList();
         return Map.of("batch_id", batch.id, "job_ids", ids);
     }
@@ -96,8 +96,10 @@ public class SubmitController {
             sb.append(strOr(body.get("file_glob"), "*"));
             String keySeq = str(body.get("key_seq"));
             String omitSeq = str(body.get("omit_seq"));
+            String priSeq = str(body.get("pri_seq"));
             if (keySeq != null && !keySeq.isBlank()) sb.append(":KEYSEQ=").append(keySeq.strip());
             if (omitSeq != null && !omitSeq.isBlank()) sb.append(":OMITSEQ=").append(omitSeq.strip());
+            if (priSeq != null && !priSeq.isBlank()) sb.append(":PRISEQ=").append(priSeq.strip());
             String delim = str(body.get("delimiter"));
             if (delim != null) sb.append(":DELIM=").append(delim);
             sb.append(":ENCA=").append(strOr(body.get("encoding_a"), "auto"));
@@ -108,7 +110,7 @@ public class SubmitController {
         }
         if (lines.isEmpty()) throw new IllegalArgumentException("无生效配置行");
 
-        BatchRecord batch = jobs.createBatch(Path.of(dirA), Path.of(dirB), lines);
+        BatchRecord batch = jobs.createBatch(Path.of(dirA), Path.of(dirB), lines, str(body.get("kind")));
         return Map.of("batch_id", batch.id);
     }
 

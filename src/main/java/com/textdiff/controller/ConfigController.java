@@ -17,16 +17,19 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/** 配置端点：configs 目录下的 legacy 配置行文件（{nickname}.conf）CRUD、解析预览、结构 CSV（列名映射）导入。 */
+/** 配置端点：configs 目录下的 legacy 配置行文件（{nickname}.conf）CRUD、解析预览、结构 CSV（列名映射）导入、预解压设置。 */
 @RestController
 @RequestMapping("/api")
 public class ConfigController {
     private final AppPaths paths;
     private final com.textdiff.store.FieldMapStore fieldMaps;
+    private final com.textdiff.config.AppConfig appConfig;
 
-    public ConfigController(AppPaths paths, com.textdiff.store.FieldMapStore fieldMaps) {
+    public ConfigController(AppPaths paths, com.textdiff.store.FieldMapStore fieldMaps,
+                            com.textdiff.config.AppConfig appConfig) {
         this.paths = paths;
         this.fieldMaps = fieldMaps;
+        this.appConfig = appConfig;
     }
 
     @GetMapping("/configs")
@@ -81,7 +84,9 @@ public class ConfigController {
         sb.append(":SRCA=").append(strOr(body.get("source_a")));
         sb.append(":SRCB=").append(strOr(body.get("source_b")));
         sb.append(":TRAILER=").append(body.get("trailer_prefix") == null ? "" : body.get("trailer_prefix"));
-        // 现有同名配置保留其 ignore/replace/cols 扩展字段
+        String priSeq = str(body.get("pri_seq"));
+        if (priSeq != null && !priSeq.isBlank()) sb.append(":PRISEQ=").append(priSeq.strip());
+        // 现有同名配置保留其 ignore/replace/cols 扩展字段；PRISEQ 请求未带时沿用现值
         CompareConfig existing = findConfig(nickname);
         CompareConfig parsed = Rules.parseLegacy(sb.toString(),
                 ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
@@ -89,6 +94,10 @@ public class ConfigController {
             parsed.ignoreColumns = existing.ignoreColumns;
             parsed.replaceRules = existing.replaceRules;
             parsed.columnNames = existing.columnNames;
+            if ((priSeq == null || priSeq.isBlank()) && existing.priSeqSet) {
+                parsed.priSeq = existing.priSeq;
+                parsed.priSeqSet = true;
+            }
         }
         String line = Rules.toLegacyLine(parsed, true);
         Path dir = paths.configsDir();
@@ -96,6 +105,28 @@ public class ConfigController {
         Path file = dir.resolve(nickname.strip() + ".conf");
         Files.writeString(file, line + System.lineSeparator(), StandardCharsets.UTF_8);
         return Map.of("files", List.of(file.getFileName().toString()), "nickname", nickname.strip());
+    }
+
+    /** 预解压设置读取（设置页）：临时解压目录 + 预解压数量。 */
+    @GetMapping("/settings/extract")
+    public Map<String, Object> extractSettings() {
+        com.textdiff.config.EngineConfig e = appConfig.engine();
+        return Map.of("extract_dir", e.extractDir(), "pre_extract_count", e.preExtractCount());
+    }
+
+    /** 预解压设置保存：改内存 + 写回 config.ini [engine]，保存后立即热生效。 */
+    @PostMapping("/settings/extract")
+    public Map<String, Object> saveExtractSettings(@RequestBody Map<String, Object> body) {
+        String dir = str(body.get("extract_dir"));
+        int count;
+        try {
+            count = Integer.parseInt(str(body.get("pre_extract_count")).strip());
+        } catch (RuntimeException e) {
+            count = appConfig.engine().preExtractCount();
+        }
+        appConfig.updateExtractSettings(dir == null ? "" : dir.strip(), count);
+        com.textdiff.config.EngineConfig e = appConfig.engine();
+        return Map.of("ok", true, "extract_dir", e.extractDir(), "pre_extract_count", e.preExtractCount());
     }
 
     @GetMapping("/configs/raw")

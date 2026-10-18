@@ -246,6 +246,7 @@ public class JobController {
                 deletedBatchJobIds.add(j.id);
             }
             store.deleteBatch(bid);
+            if (jobs.extractService != null) jobs.extractService.cleanupBatch(bid); // 级联清理解压临时目录
             deletedBatches++;
         }
         if (!deletedBatchJobIds.isEmpty()) taskStore.deleteForJobs(deletedBatchJobIds);

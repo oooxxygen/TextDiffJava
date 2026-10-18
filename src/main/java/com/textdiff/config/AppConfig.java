@@ -48,9 +48,20 @@ public final class AppConfig {
 
     /** 对比线程池上限热更新：改内存值并写回 ini [engine] 段（各线程池由调用方同步 resize）。 */
     public void updateEngineMaxThreads(int maxThreads) {
-        this.engine = new EngineConfig(maxThreads, engine.maxInMemoryBytes());
+        this.engine = new EngineConfig(maxThreads, engine.maxInMemoryBytes(),
+                engine.extractDir(), engine.preExtractCount());
         if (iniPath != null) {
             setIniValue(iniPath, "engine", "max-threads", String.valueOf(maxThreads));
+        }
+    }
+
+    /** 预解压设置热更新：改内存值并写回 ini [engine] 段（ExtractService 下一轮调度即按新值运行）。 */
+    public void updateExtractSettings(String extractDir, int preExtractCount) {
+        this.engine = new EngineConfig(engine.maxThreads(), engine.maxInMemoryBytes(),
+                extractDir, preExtractCount);
+        if (iniPath != null) {
+            setIniValue(iniPath, "engine", "extract-dir", engine.extractDir());
+            setIniValue(iniPath, "engine", "pre-extract-count", String.valueOf(engine.preExtractCount()));
         }
     }
 
@@ -71,6 +82,11 @@ public final class AppConfig {
         long maxInMemoryBytes = Long.parseLong(
                 pick(env.apply("TEXTDIFF_MAX_IN_MEMORY_BYTES"), eng.get("in-memory-bytes"),
                         String.valueOf(defEng.maxInMemoryBytes())));
+        String extractDir = pick(env.apply("TEXTDIFF_EXTRACT_DIR"), eng.get("extract-dir"),
+                defEng.extractDir());
+        int preExtractCount = parseIntOrDefault(pick(env.apply("TEXTDIFF_PRE_EXTRACT_COUNT"),
+                eng.get("pre-extract-count"), String.valueOf(defEng.preExtractCount())),
+                defEng.preExtractCount());
 
         boolean storeEnabled = Boolean.parseBoolean(
                 pick(env.apply("TEXTDIFF_STORE_ENABLED"), sto.get("enabled"), "true"));
@@ -92,8 +108,16 @@ public final class AppConfig {
                         "2")));
 
         return new AppConfig(new ServerConfig(host, port),
-                new EngineConfig(maxThreads, maxInMemoryBytes),
+                new EngineConfig(maxThreads, maxInMemoryBytes, extractDir, preExtractCount),
                 new StoreConfig(storeEnabled), ai, iniPath);
+    }
+
+    private static int parseIntOrDefault(String v, int def) {
+        try {
+            return Integer.parseInt(v.strip());
+        } catch (RuntimeException e) {
+            return def;
+        }
     }
 
     /**

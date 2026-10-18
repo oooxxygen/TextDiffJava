@@ -18,10 +18,13 @@ import java.util.Map;
 public class BatchController {
     private final JobStore store;
     private final com.textdiff.store.TaskStore taskStore;
+    private final com.textdiff.task.ExtractService extractService;
 
-    public BatchController(JobStore store, com.textdiff.store.TaskStore taskStore) {
+    public BatchController(JobStore store, com.textdiff.store.TaskStore taskStore,
+                           com.textdiff.task.ExtractService extractService) {
         this.store = store;
         this.taskStore = taskStore;
+        this.extractService = extractService;
     }
 
     @GetMapping("/{id}")
@@ -72,6 +75,7 @@ public class BatchController {
         }
         store.deleteBatch(id);
         taskStore.deleteForJobs(jobIds); // 级联清理任务管理中的跟踪记录
+        extractService.cleanupBatch(id); // 级联清理解压临时目录残留
         return Map.of("ok", true);
     }
 

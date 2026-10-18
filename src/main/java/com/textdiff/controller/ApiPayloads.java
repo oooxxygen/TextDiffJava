@@ -18,8 +18,8 @@ final class ApiPayloads {
             String config_text, String nickname, String file_glob,
             String delimiter, String trailer_prefix,
             String encoding_a, String encoding_b, String source_a, String source_b,
-            String key_seq, String omit_seq, List<String> column_names,
-            JsonNode replace_rules, String label, String group,
+            String key_seq, String omit_seq, String pri_seq, List<String> column_names,
+            JsonNode replace_rules, String label, String group, String kind,
             List<Pair> pairs) {
         record Pair(String a, String b) {}
     }
@@ -36,6 +36,7 @@ final class ApiPayloads {
         sb.append(p.file_glob() == null || p.file_glob().isBlank() ? "*" : p.file_glob().strip());
         if (p.key_seq() != null && !p.key_seq().isBlank()) sb.append(":KEYSEQ=").append(p.key_seq().strip());
         if (p.omit_seq() != null && !p.omit_seq().isBlank()) sb.append(":OMITSEQ=").append(p.omit_seq().strip());
+        if (p.pri_seq() != null && !p.pri_seq().isBlank()) sb.append(":PRISEQ=").append(p.pri_seq().strip());
         if (p.column_names() != null && !p.column_names().isEmpty()) {
             sb.append(":COLS=").append(Rules.encodeStringList(p.column_names()));
         }
@@ -65,6 +66,7 @@ final class ApiPayloads {
         m.put("ignore_columns", cfg.ignoreColumns);
         m.put("key_seq", seq1based(cfg.keyColumns));
         m.put("omit_seq", seq1based(cfg.omitColumns));
+        m.put("pri_seq", cfg.priSeqSet ? String.valueOf(cfg.priSeq) : null);
         m.put("column_names", cfg.columnNames);
         m.put("replace_rules", replaceRulesMap(cfg.replaceRules));
         m.put("group", cfg.group == null || cfg.group.isEmpty() ? cfg.nickname : cfg.group);

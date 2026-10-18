@@ -48,6 +48,16 @@ public class WebBeansConfig {
         return new JobManager(store, paths.resultsDir(), cfg.engine(), fieldMaps, charsetMaps);
     }
 
+    /** 压缩文件预解压服务：*.gz 逻辑名匹配 → 临时目录解压 → 预解压池动态补位调度。 */
+    @Bean(destroyMethod = "close")
+    public com.textdiff.task.ExtractService extractService(DualJobStore store, JobManager jobManager,
+                                                           AppPaths paths, AppConfig cfg) {
+        com.textdiff.task.ExtractService svc =
+                new com.textdiff.task.ExtractService(store, jobManager, paths, cfg);
+        jobManager.extractService = svc;
+        return svc;
+    }
+
     /** 任务管理：登记/执行作业完成后的默认生成任务（差异 CSV 导出 + AI 分析）。 */
     @Bean(destroyMethod = "close")
     public com.textdiff.store.TaskStore taskStore(AppPaths paths, AppConfig cfg) {

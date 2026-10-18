@@ -15,7 +15,11 @@ public final class BatchRecord {
     public boolean locked;
     /** dirA 中未被任何配置 glob 命中的文件名（提交时算好存档）。 */
     public java.util.List<String> noRuleFiles;
-    /** 批次类型：null/"file" = 文件对比；"report" = 报表对比。 */
+    /** 未能读取到相应文件：配置条目在两侧目录（含解压逻辑名）均未配对出文件（昵称 · 通配名）。 */
+    public java.util.List<String> missingFiles;
+    /** 压缩文件解压失败清单（文件名（原因）），解压期追加。 */
+    public java.util.List<String> extractFailed;
+    /** 批次类型：null/"file" = 文件对比；"report" = 报表对比；"custom" = 自定义格式；"ctis" = CTIS。 */
     public String batchType;
     /** 报表对比：模板目录（文件对比为 null）。 */
     public String templateDir;

@@ -12,6 +12,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
@@ -217,9 +218,17 @@ public final class ResultFiles {
         return dto.toRowDiff();
     }
 
-    private static void writeJson(Path file, Object o) {        try {
+    /** 元数据 JSON 落盘：临时文件 + 原子替换（读侧轮询永不见空/半截文件）。 */
+    private static void writeJson(Path file, Object o) {
+        try {
             Files.createDirectories(file.getParent());
-            Files.writeString(file, Json.write(o), StandardCharsets.UTF_8);
+            Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+            Files.writeString(tmp, Json.write(o), StandardCharsets.UTF_8);
+            try {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+            }
         } catch (IOException e) {
             throw new UncheckedIOException("写入失败: " + file, e);
         }

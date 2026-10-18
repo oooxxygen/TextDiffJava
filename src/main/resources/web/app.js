@@ -624,7 +624,7 @@ const ConfigPanel = {
       nickname: "", file_glob: "*", delimiter: " | ", trailer_prefix: "|||||",
       encoding_a: "auto", encoding_b: "auto",
       source_a: "A", source_b: "B",
-      key_seq: "", omit_seq: "", replace_rules_text: "",
+      key_seq: "", omit_seq: "", pri_seq: "", replace_rules_text: "",
     });
     // 可被“同步最新配置”覆盖，故用 ref（而非只读 computed）
     const columnNames = ref((props.meta.config || {}).column_names || []);
@@ -647,6 +647,7 @@ const ConfigPanel = {
       form.source_b = c.source_b || "B";
       form.key_seq = seqToStr(c.key_columns);
       form.omit_seq = seqToStr(c.omit_columns);
+      form.pri_seq = c.pri_seq || "";
       form.replace_rules_text = rrToText(c.replace_rules);
       columnNames.value = c.column_names || [];
     }
@@ -666,6 +667,7 @@ const ConfigPanel = {
         encoding_a: form.encoding_a, encoding_b: form.encoding_b,
         source_a: form.source_a || null, source_b: form.source_b || null,
         key_seq: form.key_seq || null, omit_seq: form.omit_seq || null,
+        pri_seq: form.pri_seq || null,
         // 透传列名，确保重跑结果与正常发起一致地显示列名
         column_names: columnNames.value && columnNames.value.length ? columnNames.value : null,
       };
@@ -764,6 +766,11 @@ const ConfigPanel = {
           <input v-model="form.source_b" :readonly="!editing" /></div>
         <div class="field mono"><label>尾部前缀</label>
           <input v-model="form.trailer_prefix" :readonly="!editing" /></div>
+        <div class="field"><label>对比优先级 PRISEQ（1 最高）</label>
+          <select v-model="form.pri_seq" :disabled="!editing">
+            <option value="">默认（5）</option>
+            <option v-for="n in [1,2,3,4,5]" :key="n" :value="String(n)">{{ n }}</option>
+          </select></div>
       </div>
       <div class="field mono" style="margin-top:12px;">
         <label>按列正则替换（JSON，列 1-based）</label>
@@ -1035,7 +1042,7 @@ const ResultView = {
 /* ---------- 提交表单 ---------- */
 const SubmitForm = {
   components: { SeqField },
-  props: ["encodings"],
+  props: ["encodings", "ctis"],
   emits: ["submitted", "batched"],
   setup(props, { emit }) {
     const form = reactive({
@@ -1046,7 +1053,7 @@ const SubmitForm = {
       nickname: "", delimiter: " | ", trailer_prefix: "|||||",
       encoding_a: "auto", encoding_b: "auto",
       source_a: "A", source_b: "B",
-      key_seq: "", omit_seq: "",
+      key_seq: "", omit_seq: "", pri_seq: "",
       replace_rules_text: "",
       batch_config_file: "__all__",
       column_names: [],
@@ -1069,6 +1076,7 @@ const SubmitForm = {
       form.file_glob = c.file_glob || "*";
       form.key_seq = seqToStr(c.key_columns);
       form.omit_seq = seqToStr(c.omit_columns);
+      form.pri_seq = c.pri_seq || "";
       if (c.delimiter) form.delimiter = c.delimiter;
       form.column_names = c.column_names || [];   // 携带列名映射
       form.config_text = "";
@@ -1088,7 +1096,7 @@ const SubmitForm = {
           nickname: form.nickname, file_glob: form.file_glob || "*",
           delimiter: form.delimiter, encoding_a: form.encoding_a, encoding_b: form.encoding_b,
           trailer_prefix: form.trailer_prefix,
-          key_seq: form.key_seq, omit_seq: form.omit_seq || null,
+          key_seq: form.key_seq, omit_seq: form.omit_seq || null, pri_seq: form.pri_seq || null,
         };
         if (form.replace_rules_text.trim()) body.replace_rules = JSON.parse(form.replace_rules_text);
         const r = await jpost("/api/configs", body);
@@ -1135,8 +1143,10 @@ const SubmitForm = {
         encoding_a: form.encoding_a, encoding_b: form.encoding_b,
         source_a: form.source_a || null, source_b: form.source_b || null,
         key_seq: form.key_seq || null, omit_seq: form.omit_seq || null,
+        pri_seq: form.pri_seq || null,
         column_names: (form.column_names && form.column_names.length) ? form.column_names : null,
         label: form.label || null,
+        kind: props.ctis ? "ctis" : null,
       };
       if (form.replace_rules_text.trim()) {
         try { p.replace_rules = JSON.parse(form.replace_rules_text); }
@@ -1160,12 +1170,14 @@ const SubmitForm = {
           const p = { dir_a: form.dir_a, dir_b: form.dir_b,
                       delimiter: form.delimiter, encoding_a: form.encoding_a, encoding_b: form.encoding_b,
                       source_a: form.source_a || null, source_b: form.source_b || null,
-                      label: form.label || null };
+                      label: form.label || null,
+                      kind: props.ctis ? "ctis" : null };
           if (form.batch_config_file === "__all__") p.use_all = true;   // 全部生效配置(current.conf)
           else if (form.batch_config_file) p.config_file = form.batch_config_file;
           else {
             p.nickname = form.nickname || null; p.file_glob = form.file_glob || "*";
             p.key_seq = form.key_seq || null; p.omit_seq = form.omit_seq || null;
+            p.pri_seq = form.pri_seq || null;
             if (!form.key_seq) throw new Error("请填写主键序列（或选择「全部配置」/一个配置文件）");
           }
           const r = await jpost("/api/batch-compare", p);
@@ -1183,14 +1195,16 @@ const SubmitForm = {
   },
   template: `
   <div>
-    <PageHeader title="新建对比" sub="目录对比生成批次（多文件）；指定路径 / 上传文件生成单文件作业" />
+    <PageHeader :title="ctis ? 'CTIS 对比' : '新建对比'"
+                :sub="ctis ? 'CTIS 专用文本对比（配置来源于系统共用配置库）；目录批量 / 指定路径，支持压缩文件预解压与 PRISEQ 优先级'
+                           : '目录对比生成批次（多文件）；指定路径 / 上传文件生成单文件作业'" />
     <div class="card">
       <div class="card-head">① 📁 选择对比来源</div>
       <div class="card-body">
         <div class="seg" style="margin-bottom:16px;">
           <button :class="form.mode==='dirs'?'active':''" @click="form.mode='dirs'">目录对比（批量）</button>
           <button :class="form.mode==='paths'?'active':''" @click="form.mode='paths'">指定文件路径</button>
-          <button :class="form.mode==='uploads'?'active':''" @click="form.mode='uploads'">上传文件</button>
+          <button v-if="!ctis" :class="form.mode==='uploads'?'active':''" @click="form.mode='uploads'">上传文件</button>
         </div>
 
         <div v-if="form.mode==='dirs'">
@@ -1200,11 +1214,11 @@ const SubmitForm = {
             <div class="field"><label>对比配置文件（多规则，可选）</label>
               <select v-model="form.batch_config_file">
                 <option value="__all__">全部配置（current.conf 生效，含修改，推荐）</option>
-                <option value="">（不选 = 用下方单规则）</option>
+                <option v-if="!ctis" value="">（不选 = 用下方单规则）</option>
                 <option v-for="f in cfgFiles" :key="f" :value="f">{{ f }}</option>
               </select></div>
           </div>
-          <p class="hint" style="margin-top:10px;">目录对比将生成<b>批次</b>：选配置文件则按其多条规则的通配名匹配并同名配对；不选则用下方单条配置。无匹配规则的文件不对比，会在批次里列出。</p>
+          <p class="hint" style="margin-top:10px;">目录对比将生成<b>批次</b>：选配置文件则按其多条规则的通配名匹配并同名配对；不选则用下方单条配置。无匹配规则的文件不对比，会在批次里列出。目录内的 <code>*.gz</code> 压缩文件（含日期后缀）会先解压再参与匹配对比。</p>
         </div>
         <div v-else-if="form.mode==='paths'" class="form-grid">
           <div class="field mono"><label>A 文件路径</label><input v-model="form.path_a" /></div>
@@ -1242,7 +1256,7 @@ const SubmitForm = {
       </div>
     </div>
 
-    <div class="card" v-show="!(form.mode==='dirs' && form.batch_config_file)">
+    <div class="card" v-show="!ctis && !(form.mode==='dirs' && form.batch_config_file)">
       <div class="card-head">③ ⚙️ 对比配置{{ form.mode==='dirs' ? '（目录对比的单规则）' : '' }}</div>
       <div class="card-body">
         <div class="field mono" style="margin-bottom:14px;">
@@ -1260,6 +1274,11 @@ const SubmitForm = {
           <div class="field"><label>B 编码</label>
             <select v-model="form.encoding_b"><option v-for="e in encodings" :key="e" :value="e">{{ e }}</option></select></div>
           <div class="field mono"><label>尾部前缀</label><input v-model="form.trailer_prefix" /></div>
+          <div class="field"><label>对比优先级 PRISEQ（1 最高）</label>
+            <select v-model="form.pri_seq">
+              <option value="">默认（5）</option>
+              <option v-for="n in [1,2,3,4,5]" :key="n" :value="String(n)">{{ n }}</option>
+            </select></div>
         </div>
         <div class="field mono" style="margin-top:14px;">
           <label>按列正则替换（可选，JSON：{"6": [["\\\\s",""]]}，列为 1-based）</label>
@@ -1334,9 +1353,10 @@ const JobList = {
     const fBatches = computed(() => !ql.value ? batches.value : batches.value.filter(b =>
       (b.batch.batch_id + " " + b.batch.dir_a + " " + b.batch.dir_b + " " + b.batch.config_source
        + " " + (b.batch.label || "")).toLowerCase().includes(ql.value)));
-    // 报表对比批次：徽标区分 + 点击进报表批次视图；自定义格式对比批次同理
+    // 报表对比批次：徽标区分 + 点击进报表批次视图；自定义格式对比批次同理；CTIS 批次走普通文件批次视图
     const isReport = (b) => (b.batch || {}).batch_type === "report";
     const isCustom = (b) => (b.batch || {}).batch_type === "custom";
+    const isCtis = (b) => (b.batch || {}).batch_type === "ctis";
     const openBatchEntry = (b) => emit(isReport(b) ? "open-report-batch"
         : isCustom(b) ? "open-custom-batch" : "open-batch", b.batch.batch_id);
     // 需求：报表对比结果在结果界面独立成卡，与文件/段对比一并查看；from 标记让返回键回到本页
@@ -1412,7 +1432,7 @@ const JobList = {
 
     return { batches, standalone, splitJobs, q, fBatches, fFileBatches, fReportBatches, fJobs, fSplit,
              fmtTime, srcA, srcB, gradeOf,
-             isReport, isCustom, openBatchEntry, openReportBatchFromList,
+             isReport, isCustom, isCtis, openBatchEntry, openReportBatchFromList,
              open: (id) => emit("open", id), openBatch: (id) => emit("open-batch", id),
              openSplit: (id) => emit("open-split", id),
              lockJob, unlockJob, delJob, lockBatch, unlockBatch, delBatch,
@@ -1464,7 +1484,8 @@ const JobList = {
       </div>      <div>
         <div class="job-row batch-row" :class="{ selected: isBatchSel(b.batch.batch_id) }" v-for="b in fFileBatches" :key="b.batch.batch_id" @click="openBatchEntry(b)">
           <input class="row-check" type="checkbox" :checked="isBatchSel(b.batch.batch_id)" @click.stop="toggleBatch(b.batch.batch_id)" />
-          <span class="nick-badge" v-if="isCustom(b)" title="自定义格式对比批次">📐 段对比</span>
+          <span class="nick-badge" v-if="isCtis(b)" title="CTIS 文本对比批次">🔀 CTIS</span>
+          <span class="nick-badge" v-else-if="isCustom(b)" title="自定义格式对比批次">📐 段对比</span>
           <span class="jid">{{ b.batch.batch_id }}</span>
           <span class="badge-status" :class="b.status">{{ b.status }}</span>
           <span class="files">{{ b.batch.dir_a }} ↔ {{ b.batch.dir_b }}</span>
@@ -1620,6 +1641,12 @@ const BatchView = {
         </div>
         <div v-if="ov.batch.no_rule_files && ov.batch.no_rule_files.length" class="no-rule" style="margin-top:10px;">
           ⚠ 无对应对比规则（未对比）：{{ ov.batch.no_rule_files.join('、') }}
+        </div>
+        <div v-if="ov.batch.extract_failed && ov.batch.extract_failed.length" class="no-rule" style="margin-top:10px;">
+          🗜 解压失败（附具体文件名）：{{ ov.batch.extract_failed.join('；') }}
+        </div>
+        <div v-if="ov.batch.missing_files && ov.batch.missing_files.length" class="no-rule" style="margin-top:10px;">
+          ❓ 未能读取到相应文件（昵称 · 通配名）：{{ ov.batch.missing_files.join('；') }}
         </div>
       </div>
     </div>
@@ -1809,11 +1836,35 @@ const SettingsPage = {
     }
     onMounted(loadDirs);
 
+    // 临时解压设置（压缩文件预解压）：目录 + 预解压数量，保存即热生效并持久化 config.ini
+    const extract = reactive({ extract_dir: "", pre_extract_count: 8, msg: "", ok: null });
+    async function loadExtract() {
+      try {
+        const r = await api("/api/settings/extract");
+        extract.extract_dir = r.extract_dir || "";
+        extract.pre_extract_count = r.pre_extract_count || 8;
+      } catch (e) {}
+    }
+    async function saveExtract() {
+      extract.msg = "保存中…"; extract.ok = null;
+      const n = parseInt(extract.pre_extract_count, 10);
+      if (isNaN(n) || n < 1) { extract.ok = false; extract.msg = "预解压数量需为 ≥1 的整数"; return; }
+      try {
+        const r = await jpost("/api/settings/extract",
+                { extract_dir: extract.extract_dir.trim(), pre_extract_count: n });
+        extract.extract_dir = r.extract_dir; extract.pre_extract_count = r.pre_extract_count;
+        extract.ok = true; extract.msg = "已保存并立即生效";
+        setTimeout(() => extract.msg = "", 2500);
+      } catch (e) { extract.ok = false; extract.msg = "保存失败: " + e.message; }
+    }
+    onMounted(loadExtract);
+
     return { providers, form, apiKeySet, busy, toast, test, curModels, pickProvider, save, testConn,
              rt, saveRuntime, imp, onImpFiles, importStructure,
              base, onBaseFiles, importBaseline, exportConfigs,
              cs, onCsFile, importCharset,
-             dirs, loadDirs, saveDirs };
+             dirs, loadDirs, saveDirs,
+             extract, loadExtract, saveExtract };
   },
   template: `
   <div>
@@ -1927,6 +1978,23 @@ const SettingsPage = {
         <div class="btn-row">
           <button class="btn" @click="saveDirs">保存路径设置</button>
           <span v-if="dirs.msg" :style="{ color: dirs.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ dirs.msg }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">🗜 临时解压设置（压缩文件预解压）</div>
+      <div class="card-body">
+        <p class="ai-hint" style="margin-top:0;">目录批量对比时 <code>*.gz</code> 压缩文件（含 <code>.YYYYMMDD+1位标识</code> 日期后缀）先复制到临时解压目录解压再对比，原目录不改动；解压产物随对比完成自动删除。预解压数量 = 已解压待比文本的动态补位上限（按 PRISEQ 优先级排序）。修改保存后<b>立即热生效</b>并持久化到 config.ini。</p>
+        <div class="form-grid">
+          <div class="field mono"><label>临时解压目录（相对路径按数据目录解析）</label>
+            <input v-model="extract.extract_dir" placeholder="默认 ./temp" /></div>
+          <div class="field"><label>预解压数量（并行度×2 可按需调整）</label>
+            <input v-model="extract.pre_extract_count" type="number" min="1" max="200" placeholder="默认 8" /></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn" @click="saveExtract">保存解压设置</button>
+          <span v-if="extract.msg" :style="{ color: extract.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ extract.msg }}</span>
         </div>
       </div>
     </div>
@@ -3166,6 +3234,7 @@ const App = {
   <div class="app-header">
     <div class="logo"><span class="dot"></span> TextDiff</div>
     <button class="nav-btn" :class="tab==='submit'?'active':''" @click="tab='submit'">新建对比</button>
+    <button class="nav-btn" :class="tab==='ctis'?'active':''" @click="tab='ctis'">CTIS对比</button>
     <button class="nav-btn" :class="['report','reportbatch','reportresult'].includes(tab)?'active':''" @click="tab='report'">报表对比</button>
     <button class="nav-btn" :class="['custom','custombatch','customresult'].includes(tab)?'active':''" @click="tab='custom'">自定义格式对比</button>
     <button class="nav-btn" :class="['split','splitresult'].includes(tab)?'active':''" @click="tab='split'">文本拆分</button>
@@ -3178,6 +3247,7 @@ const App = {
   </div>
   <div class="container">
     <SubmitForm v-if="tab==='submit'" :encodings="encodings" @submitted="onSubmitted" @batched="onBatched" />
+    <SubmitForm v-else-if="tab==='ctis'" :encodings="encodings" :ctis="true" @submitted="onSubmitted" @batched="onBatched" />
     <ReportPage v-else-if="tab==='report'" @open-batch="openReportBatch" />
     <ReportBatchView v-else-if="tab==='reportbatch' && reportBatchId" :batch-id="reportBatchId" :key="reportBatchId"
                      :back-text="reportBackTab === 'jobs' ? '返回作业列表' : '返回报表对比'"

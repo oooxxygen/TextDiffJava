@@ -22,6 +22,10 @@ public final class CompareConfig {
     public String group = "";
     public String sourceA = "A";
     public String sourceB = "B";
+    /** 对比优先级 1~5（1 最高）；未显式配置 = 5，全局作业队列按 (PRISEQ 升序, FIFO) 出队。 */
+    public int priSeq = 5;
+    /** PRISEQ 是否显式配置（仅显式时写回配置行并在界面展示）。 */
+    public boolean priSeqSet = false;
 
     /** 比对时需要跳过的列集合（omit ∪ ignore）。 */
     public Set<Integer> skipSet() {

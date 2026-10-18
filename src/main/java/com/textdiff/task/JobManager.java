@@ -16,15 +16,15 @@ import com.textdiff.store.Json;
 import com.textdiff.store.ResultFiles;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -43,9 +43,12 @@ public final class JobManager implements AutoCloseable {
     private final JobStore store;
     private final Path resultsRoot;
     private final long maxInMemoryBytes;
-    private final ExecutorService pool;
+    private final java.util.concurrent.ThreadPoolExecutor pool;
     private final ScheduledExecutorService commandPoller;
-    private final ConcurrentMap<String, Future<?>> tasks = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, PrioritizedRunnable> tasks = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicLong submitSeq = new java.util.concurrent.atomic.AtomicLong();
+    /** 压缩文件预解压服务（装配时注入；null = 不启用，运行时兜底同步解压）。 */
+    public volatile ExtractService extractService;
     /** 字段名映射（可空：测试/未导入场景）。作业运行时按文件名自动填充列名。 */
     private final com.textdiff.store.FieldMapStore fieldMaps;
     /** 作业完成回调（任务管理器挂载点：登记差异 CSV 导出 + AI 分析两条默认生成任务）。 */
@@ -74,7 +77,13 @@ public final class JobManager implements AutoCloseable {
         this.maxInMemoryBytes = engine.maxInMemoryBytes();
         this.fieldMaps = fieldMaps;
         this.charsetMaps = charsetMaps;
-        this.pool = Executors.newFixedThreadPool(engine.maxThreads());
+        this.pool = new java.util.concurrent.ThreadPoolExecutor(engine.maxThreads(), engine.maxThreads(),
+                60L, TimeUnit.SECONDS, new java.util.concurrent.PriorityBlockingQueue<>(),
+                r -> {
+                    Thread t = new Thread(r, "compare-worker");
+                    t.setDaemon(true);
+                    return t;
+                });
         this.commandPoller = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "command-poller");
             t.setDaemon(true);
@@ -100,32 +109,69 @@ public final class JobManager implements AutoCloseable {
 
     /** 目录模式批次：每行配置一条规则，glob 配对 dirA/dirB 同名文件 → 多作业。返回批次。 */
     public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines) throws IOException {
-        record Planned(JobRecord job) {}
+        return createBatch(dirA, dirB, configLines, null);
+    }
 
+    /**
+     * 目录模式批次（压缩感知）。kind 非空（如 "ctis"）时作为批次/作业类型标记，路由与展示用。
+     * *.gz（含 .YYYYMMDD+1位标识 9 位数字后缀）按逻辑名参与 glob 匹配：匹配到的先解压后对比
+     * （预解压池调度，同名多版本按文件名升序解压覆盖、最新生效）；未匹配的逻辑名计入 noRuleFiles；
+     * 一条配置在两侧目录（普通文件 + 压缩逻辑名）都未配对出文件 → missingFiles（昵称 · 通配名）。
+     */
+    public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines, String kind) throws IOException {
         String batchId = newId();
         BatchRecord batch = new BatchRecord(batchId,
                 dirA.toAbsolutePath().normalize() + " vs " + dirB.toAbsolutePath().normalize(),
                 dirA.toAbsolutePath().normalize().toString(),
                 dirB.toAbsolutePath().normalize().toString(),
                 configLines.size() + " 行配置", 0);
+        if (kind != null && !kind.isBlank()) batch.batchType = kind;
 
         List<JobRecord> jobs = new ArrayList<>();
         java.util.Set<String> matched = new java.util.HashSet<>();
+        List<String> missingFiles = new ArrayList<>();
         for (String line : configLines) {
             if (line.strip().isEmpty() || line.strip().startsWith("#")) continue;
             CompareConfig cfg = Rules.parseLegacy(line, DEFAULT_DELIM, DEFAULT_TRAILER);
             String configLine = Rules.toLegacyLine(cfg, true); // 规范化全量行：结果页展示与重跑依据
+            int pairsForCfg = 0;
+            // 普通文件配对（现状逻辑）
             for (String[] pair : Rules.pairFiles(dirA, dirB, cfg.fileGlob)) {
                 String fileName = Path.of(pair[0]).getFileName().toString();
                 matched.add(fileName);
+                pairsForCfg++;
                 String jobId = newId();
                 JobRecord job = new JobRecord(jobId, batchId,
                         cfg.nickname + " · " + fileName, configLine, pair[0], pair[1],
                         resultsRoot.resolve(jobId).toAbsolutePath().toString());
+                if (kind != null && !kind.isBlank()) job.jobType = kind;
                 jobs.add(job);
             }
+            // 压缩文件配对：逻辑名匹配 glob；同逻辑名普通文件已存在时压缩版本忽略（普通优先）
+            var gzA = gzipByLogical(dirA, cfg.fileGlob);
+            var gzB = gzipByLogical(dirB, cfg.fileGlob);
+            for (Map.Entry<String, List<Path>> entry : gzA.entrySet()) {
+                List<Path> bs = gzB.get(entry.getKey());
+                if (bs == null) continue;
+                List<Path> as = entry.getValue();
+                matched.add(entry.getKey());
+                as.forEach(p -> matched.add(p.getFileName().toString()));
+                bs.forEach(p -> matched.add(p.getFileName().toString()));
+                pairsForCfg++;
+                // 代表路径取文件名最大（最新日期）版本；解压时全版本按升序覆盖，最终即最新
+                String repA = as.get(as.size() - 1).toString();
+                String repB = bs.get(bs.size() - 1).toString();
+                String jobId = newId();
+                JobRecord job = new JobRecord(jobId, batchId,
+                        cfg.nickname + " · " + entry.getKey(), configLine, repA, repB,
+                        resultsRoot.resolve(jobId).toAbsolutePath().toString());
+                if (kind != null && !kind.isBlank()) job.jobType = kind;
+                jobs.add(job);
+            }
+            if (pairsForCfg == 0) missingFiles.add(cfg.nickname + " · " + cfg.fileGlob);
         }
         batch.noRuleFiles = unmatchedFiles(dirA, matched);
+        batch.missingFiles = missingFiles;
         batch.jobCount = jobs.size();
         store.saveBatch(batch);
         for (JobRecord job : jobs) {
@@ -135,16 +181,45 @@ public final class JobManager implements AutoCloseable {
         return batch;
     }
 
+    /** 目录内 *.gz 按逻辑名分组（文件名升序），仅保留逻辑名匹配 glob 且无同名普通文件的组。 */
+    private static java.util.LinkedHashMap<String, List<Path>> gzipByLogical(Path dir, String glob)
+            throws IOException {
+        java.util.LinkedHashMap<String, List<Path>> out = new java.util.LinkedHashMap<>();
+        if (!Files.isDirectory(dir)) return out;
+        try (var ds = Files.newDirectoryStream(dir)) {
+            for (Path p : ds) {
+                if (!Files.isRegularFile(p)) continue;
+                String n = p.getFileName().toString();
+                if (!ExtractService.isGzipName(n)) continue;
+                String logical = ExtractService.logicalName(n);
+                if (!Rules.matchGlob(logical, glob)) continue;
+                if (Files.exists(dir.resolve(logical))) continue; // 普通文件存在 → 压缩版本忽略
+                out.computeIfAbsent(logical, k -> new ArrayList<>()).add(p);
+            }
+        }
+        for (List<Path> l : out.values()) {
+            l.sort(java.util.Comparator.comparing(x -> x.getFileName().toString()));
+        }
+        return out;
+    }
+
     /** 上传模式批次：调用方已确定文件对（M3 multipart 落盘后调用）。 */
     public BatchRecord createBatchFromPairs(String label, List<String[]> pairs) throws IOException {
+        return createBatchFromPairs(label, pairs, null);
+    }
+
+    /** 直连模式批次（kind 非空时作为批次/作业类型标记，如 "ctis"）。 */
+    public BatchRecord createBatchFromPairs(String label, List<String[]> pairs, String kind) throws IOException {
         String batchId = newId();
         BatchRecord batch = new BatchRecord(batchId, label, null, null, "upload", pairs.size());
+        if (kind != null && !kind.isBlank()) batch.batchType = kind;
         store.saveBatch(batch);
         for (String[] p : pairs) {
             // p = {configLine, fileA, fileB, nickname}
             String jobId = newId();
             JobRecord job = new JobRecord(jobId, batchId, p[3], p[0], p[1], p[2],
                     resultsRoot.resolve(jobId).toAbsolutePath().toString());
+            if (kind != null && !kind.isBlank()) job.jobType = kind;
             store.saveJob(job);
             submit(job);
         }
@@ -162,8 +237,57 @@ public final class JobManager implements AutoCloseable {
             if (cr != null) cr.accept(job.id); // 自定义格式对比作业由专用执行器消费
             return;
         }
+        if (extractService != null && extractService.shouldExtract(job)) {
+            extractService.enqueue(job); // 压缩文件：先解压（预解压池调度），完成后再入对比池
+            return;
+        }
         if (tasks.containsKey(job.id)) return;
-        tasks.put(job.id, pool.submit(() -> runJob(job.id)));
+        tasks.put(job.id, new PrioritizedRunnable(priSeqOf(job), submitSeq.getAndIncrement(),
+                () -> runJob(job.id)));
+        pool.execute(tasks.get(job.id));
+    }
+
+    /** 对比优先级：配置行 PRISEQ（缺省 5，解析失败同样回退 5）。 */
+    private static int priSeqOf(JobRecord job) {
+        try {
+            return Rules.parseLegacy(job.configLine, DEFAULT_DELIM, DEFAULT_TRAILER).priSeq;
+        } catch (RuntimeException e) {
+            return 5;
+        }
+    }
+
+    /** 优先级任务：PRISEQ 升序 + FIFO 出队；内嵌 FutureTask 提供取消/中断句柄。 */
+    static final class PrioritizedRunnable implements Runnable, Comparable<PrioritizedRunnable> {
+        private final int pri;
+        private final long seq;
+        private final java.util.concurrent.FutureTask<Void> task;
+
+        PrioritizedRunnable(int pri, long seq, Runnable body) {
+            this.pri = pri;
+            this.seq = seq;
+            this.task = new java.util.concurrent.FutureTask<>(body, null);
+        }
+
+        @Override public void run() {
+            task.run();
+        }
+
+        void cancel(boolean mayInterruptIfRunning) {
+            task.cancel(mayInterruptIfRunning);
+        }
+
+        boolean isCancelled() {
+            return task.isCancelled();
+        }
+
+        boolean isDone() {
+            return task.isDone();
+        }
+
+        @Override public int compareTo(PrioritizedRunnable o) {
+            int c = Integer.compare(pri, o.pri);
+            return c != 0 ? c : Long.compare(seq, o.seq);
+        }
     }
 
     void runJob(String jobId) {
@@ -191,9 +315,11 @@ public final class JobManager implements AutoCloseable {
             }
             ResultFiles.JsonlSink sink = ResultFiles.JsonlSink.create(dir.resolve(ResultFiles.RESULT_JSONL));
             try (sink) {
-                com.textdiff.engine.FieldTranscoder transA = resolveTranscoder(job.fileA, cfg.encodingA, cfg.delimiter);
-                com.textdiff.engine.FieldTranscoder transB = resolveTranscoder(job.fileB, cfg.encodingB, cfg.delimiter);
-                CompareOutcome outcome = Comparator.compareFiles(Path.of(job.fileA), Path.of(job.fileB),
+                Path inputA = resolveInput(job, job.fileA);
+                Path inputB = resolveInput(job, job.fileB);
+                com.textdiff.engine.FieldTranscoder transA = resolveTranscoder(inputA.toString(), cfg.encodingA, cfg.delimiter);
+                com.textdiff.engine.FieldTranscoder transB = resolveTranscoder(inputB.toString(), cfg.encodingB, cfg.delimiter);
+                CompareOutcome outcome = Comparator.compareFiles(inputA, inputB,
                         cfg, sink, maxInMemoryBytes, dir.resolve("tmp"), transA, transB);
                 Summary s = outcome.summary();
                 job.keyWarning = s.keyDupA > 0 || s.keyDupB > 0; // 需求：主键配置错误醒目提示
@@ -210,8 +336,8 @@ public final class JobManager implements AutoCloseable {
             job.status = JobRecord.DONE;
             job.finishedAt = System.currentTimeMillis() / 1000;
         } catch (Exception e) {
-            Future<?> f = tasks.get(jobId);
-            if (f != null && f.isCancelled()) {
+            PrioritizedRunnable pr = tasks.get(jobId);
+            if (pr != null && pr.isCancelled()) {
                 job.status = JobRecord.STOPPED; // 中断导致的异常归为用户终止
             } else {
                 job.status = JobRecord.FAILED;
@@ -222,13 +348,20 @@ public final class JobManager implements AutoCloseable {
         store.saveJob(job);
         java.util.function.Consumer<JobRecord> hook = doneHook;
         if (hook != null && JobRecord.DONE.equals(job.status)) hook.accept(job); // 状态落盘后登记生成任务
+        if (extractService != null) extractService.onJobFinished(job); // 终态清理解压产物并补位
         tasks.remove(jobId);
+    }
+
+    /** 运行输入解析：压缩文件侧替换为解压产物路径（无解压服务时按原路径）。 */
+    private Path resolveInput(JobRecord job, String path) {
+        if (extractService == null || path == null) return Path.of(path);
+        return extractService.resolveInput(job, path);
     }
 
     /** 终止作业：running 尽力中断，pending 直接置 stopped。返回是否产生了状态变更。 */
     public boolean cancel(String jobId) {
-        Future<?> f = tasks.get(jobId);
-        if (f != null) f.cancel(true);
+        PrioritizedRunnable pr = tasks.get(jobId);
+        if (pr != null) pr.cancel(true);
         JobRecord job = store.getJob(jobId);
         if (job == null) return false;
         if (JobRecord.PENDING.equals(job.status) || JobRecord.RUNNING.equals(job.status)) {
@@ -386,7 +519,7 @@ public final class JobManager implements AutoCloseable {
     public boolean awaitIdle(long timeout, TimeUnit unit) throws InterruptedException {
         long deadline = System.nanoTime() + unit.toNanos(timeout);
         while (System.nanoTime() < deadline) {
-            boolean allDone = tasks.values().stream().allMatch(Future::isDone);
+            boolean allDone = tasks.values().stream().allMatch(PrioritizedRunnable::isDone);
             if (allDone && tasks.values().stream().noneMatch(f -> !f.isDone())) {
                 // 双重确认：store 状态无 pending/running
                 boolean busy = store.listJobs(null).stream()

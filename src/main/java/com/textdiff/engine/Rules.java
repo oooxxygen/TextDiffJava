@@ -24,7 +24,7 @@ public final class Rules {
 
     private static final String[] EXT_KEYS = {
             "KEYSEQ", "OMITSEQ", "IGNORESEQ", "DELIM", "ENCA", "ENCB",
-            "SRCA", "SRCB", "TRAILER", "REPLACE", "COLS", "MTIME"
+            "SRCA", "SRCB", "TRAILER", "REPLACE", "COLS", "MTIME", "PRISEQ"
     };
     private static final Pattern TOKEN_SPLIT =
             Pattern.compile(":(?=(?:" + String.join("|", EXT_KEYS) + ")=)");
@@ -77,6 +77,12 @@ public final class Rules {
                 case "TRAILER" -> { if (!value.strip().isEmpty()) cfg.trailerPrefix = value.strip(); }
                 case "REPLACE" -> cfg.replaceRules = decodeReplace(value.strip());
                 case "COLS" -> cfg.columnNames = decodeStringList(value.strip());
+                case "PRISEQ" -> {
+                    int n = Integer.parseInt(value.strip());
+                    if (n < 1 || n > 5) throw new IllegalArgumentException("PRISEQ 取值 1~5: " + value);
+                    cfg.priSeq = n;
+                    cfg.priSeqSet = true;
+                }
                 default -> { /* MTIME 等忽略 */ }
             }
         }
@@ -100,6 +106,7 @@ public final class Rules {
             parts.add("TRAILER=" + (cfg.trailerPrefix == null ? "" : cfg.trailerPrefix));
             if (!cfg.replaceRules.isEmpty()) parts.add("REPLACE=" + encodeReplace(cfg.replaceRules));
             if (!cfg.columnNames.isEmpty()) parts.add("COLS=" + encodeStringList(cfg.columnNames));
+            if (cfg.priSeqSet) parts.add("PRISEQ=" + cfg.priSeq); // 仅显式配置写回（缺省 5 不落行）
         }
         return String.join(":", parts);
     }
