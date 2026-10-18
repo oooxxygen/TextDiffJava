@@ -8,6 +8,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -99,6 +100,93 @@ public class TaskController {
         return Map.of("ok", true);
     }
 
+    /** 任务产物文件列表（name/size/exists 供任务管理页分文件展示）。 */
+    @GetMapping("/tasks/{id}/files")
+    public Map<String, Object> files(@PathVariable String id) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (String p : outputsOf(id)) {
+            Path f = Path.of(p);
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("index", out.size());
+            m.put("path", p);
+            m.put("name", f.getFileName().toString());
+            m.put("exists", java.nio.file.Files.isRegularFile(f));
+            try {
+                m.put("size", java.nio.file.Files.isRegularFile(f) ? java.nio.file.Files.size(f) : 0);
+            } catch (Exception e) {
+                m.put("size", 0);
+            }
+            out.add(m);
+        }
+        return Map.of("files", out);
+    }
+
+    /** 下载任务产物（按 outputs 下标）；CSV 分片后逐文件下载入口。 */
+    @GetMapping("/tasks/{id}/files/{index}")
+    public org.springframework.http.ResponseEntity<byte[]> downloadFile(@PathVariable String id,
+                                                                        @PathVariable int index) {
+        List<String> outs = outputsOf(id);
+        if (index < 0 || index >= outs.size()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "产物序号越界: " + index);
+        }
+        Path f = Path.of(outs.get(index));
+        if (!java.nio.file.Files.isRegularFile(f)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "产物文件不存在（可能已被清理）: " + f);
+        }
+        return download(f);
+    }
+
+    /** 打包下载任务全部产物（zip）。 */
+    @GetMapping("/tasks/{id}/files/zip")
+    public org.springframework.http.ResponseEntity<byte[]> downloadAll(@PathVariable String id) {
+        List<Path> present = new ArrayList<>();
+        for (String p : outputsOf(id)) {
+            Path f = Path.of(p);
+            if (java.nio.file.Files.isRegularFile(f)) present.add(f);
+        }
+        if (present.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "无可下载的产物文件");
+        }
+        try {
+            Path dir = java.nio.file.Files.createTempDirectory("taskfiles");
+            Path zip = dir.resolve("任务产物_" + id + ".zip");
+            com.textdiff.export.ExportAssembler.zip(zip, present);
+            org.springframework.http.ResponseEntity<byte[]> resp = download(zip);
+            try (var s = java.nio.file.Files.walk(dir)) {
+                s.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try {
+                        java.nio.file.Files.delete(p);
+                    } catch (Exception ignored) {
+                    }
+                });
+            }
+            return resp;
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "产物打包失败");
+        }
+    }
+
+    private List<String> outputsOf(String id) {
+        TaskRecord t = require(id);
+        return t.outputs == null ? List.of() : t.outputs;
+    }
+
+    /** 附件下载（RFC 5987 中文名）；产物文件只读不删。 */
+    private org.springframework.http.ResponseEntity<byte[]> download(Path file) {
+        try {
+            byte[] body = java.nio.file.Files.readAllBytes(file);
+            return org.springframework.http.ResponseEntity.ok()
+                    .header("Content-Disposition", "attachment; filename*=UTF-8''"
+                            + java.net.URLEncoder.encode(file.getFileName().toString(),
+                                    java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20"))
+                    .contentType(org.springframework.http.MediaType
+                            .parseMediaType("application/octet-stream"))
+                    .body(body);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "产物读取失败");
+        }
+    }
+
     /** 生成路径设置（配置管理界面）：空 = 默认 results/{batchId}/export；AI 分析结果随该目录。 */
     @GetMapping("/settings/tasks")
     public Map<String, Object> taskSettings() {
@@ -124,6 +212,24 @@ public class TaskController {
         m.put("status", t.status);
         m.put("trigger", t.trigger);
         m.put("output_path", t.outputPath);
+        List<Map<String, Object>> files = new ArrayList<>();
+        if (t.outputs != null) {
+            for (String p : t.outputs) {
+                Path f = Path.of(p);
+                Map<String, Object> fm = new LinkedHashMap<>();
+                fm.put("index", files.size());
+                fm.put("name", f.getFileName().toString());
+                fm.put("exists", java.nio.file.Files.isRegularFile(f));
+                try {
+                    fm.put("size", java.nio.file.Files.isRegularFile(f) ? java.nio.file.Files.size(f) : 0);
+                } catch (Exception e) {
+                    fm.put("size", 0);
+                }
+                files.add(fm);
+            }
+        }
+        m.put("output_count", files.size());
+        m.put("outputs", files);
         m.put("error", t.error);
         m.put("created_at", t.createdAt);
         m.put("started_at", t.startedAt);

@@ -1339,6 +1339,10 @@ const JobList = {
     const isCustom = (b) => (b.batch || {}).batch_type === "custom";
     const openBatchEntry = (b) => emit(isReport(b) ? "open-report-batch"
         : isCustom(b) ? "open-custom-batch" : "open-batch", b.batch.batch_id);
+    // 需求：报表对比结果在结果界面独立成卡，与文件/段对比一并查看；from 标记让返回键回到本页
+    const fReportBatches = computed(() => fBatches.value.filter(isReport));
+    const fFileBatches = computed(() => fBatches.value.filter(b => !isReport(b)));
+    const openReportBatchFromList = (b) => emit("open-report-batch", b.batch.batch_id, "jobs");
     const fJobs = computed(() => !ql.value ? standalone.value : standalone.value.filter(j =>
       (j.job_id + " " + (j.file_a || "") + " " + (j.file_b || "")).toLowerCase().includes(ql.value)));
 
@@ -1381,15 +1385,15 @@ const JobList = {
     const isBatchSel = (id) => (selVer.value, selBatches.has(id));
     const selCount = computed(() => (selVer.value, selJobs.size + selBatches.size));
     const allJobsSel = computed(() => (selVer.value, fJobs.value.length > 0 && fJobs.value.every(j => selJobs.has(j.job_id))));
-    const allBatchesSel = computed(() => (selVer.value, fBatches.value.length > 0 && fBatches.value.every(b => selBatches.has(b.batch.batch_id))));
+    const allBatchesSel = computed(() => (selVer.value, fFileBatches.value.length > 0 && fFileBatches.value.every(b => selBatches.has(b.batch.batch_id))));
     function toggleAllJobs() {
       if (allJobsSel.value) fJobs.value.forEach(j => selJobs.delete(j.job_id));
       else fJobs.value.forEach(j => selJobs.add(j.job_id));
       bumpSel();
     }
     function toggleAllBatches() {
-      if (allBatchesSel.value) fBatches.value.forEach(b => selBatches.delete(b.batch.batch_id));
-      else fBatches.value.forEach(b => selBatches.add(b.batch.batch_id));
+      if (allBatchesSel.value) fFileBatches.value.forEach(b => selBatches.delete(b.batch.batch_id));
+      else fFileBatches.value.forEach(b => selBatches.add(b.batch.batch_id));
       bumpSel();
     }
     function clearSel() { selJobs.clear(); selBatches.clear(); bumpSel(); }
@@ -1406,8 +1410,9 @@ const JobList = {
       } catch (e) { notify("批量删除失败: " + e.message, "error"); }
     }
 
-    return { batches, standalone, splitJobs, q, fBatches, fJobs, fSplit, fmtTime, srcA, srcB, gradeOf,
-             isReport, isCustom, openBatchEntry,
+    return { batches, standalone, splitJobs, q, fBatches, fFileBatches, fReportBatches, fJobs, fSplit,
+             fmtTime, srcA, srcB, gradeOf,
+             isReport, isCustom, openBatchEntry, openReportBatchFromList,
              open: (id) => emit("open", id), openBatch: (id) => emit("open-batch", id),
              openSplit: (id) => emit("open-split", id),
              lockJob, unlockJob, delJob, lockBatch, unlockBatch, delBatch,
@@ -1417,11 +1422,11 @@ const JobList = {
   },
   template: `
   <div>
-    <PageHeader title="作业列表" sub="批次 / 单文件作业 / 文本拆分作业统一入口，点击行查看详情" />
+    <PageHeader title="作业列表" sub="批次 / 报表对比 / 单文件作业 / 文本拆分作业统一入口，点击行查看详情" />
     <div class="card">
       <div class="toolbar">
         <input class="search-input" v-model="q" placeholder="🔎 搜索作业/批次（按 ID、目录、文件路径）" />
-        <span class="toolbar-count">批次 {{ fBatches.length }} · 单文件作业 {{ fJobs.length }}<template v-if="fSplit.length"> · 拆分 {{ fSplit.length }}</template></span>
+        <span class="toolbar-count">批次 {{ fFileBatches.length }} · 报表对比 {{ fReportBatches.length }} · 单文件作业 {{ fJobs.length }}<template v-if="fSplit.length"> · 拆分 {{ fSplit.length }}</template></span>
       </div>
     </div>
 
@@ -1432,14 +1437,34 @@ const JobList = {
       <button class="btn danger" @click="bulkDelete">🗑 批量删除选中项</button>
     </div>
 
-    <div class="card" v-if="fBatches.length">
+    <div class="card" v-if="fReportBatches.length">
+      <div class="card-head">🧾 报表对比结果（点击进入查看各报表）</div>      <div>
+        <div class="job-row batch-row" v-for="b in fReportBatches" :key="b.batch.batch_id" @click="openReportBatchFromList(b)">
+          <span class="nick-badge" title="报表对比批次">🧾 报表</span>
+          <span class="jid">{{ b.batch.batch_id }}</span>
+          <span class="badge-status" :class="b.status">{{ b.status }}</span>
+          <span class="files">{{ b.batch.dir_a }} ↔ {{ b.batch.dir_b }}</span>
+          <span class="group-badge" v-if="b.batch.label" :title="b.batch.label">🏷 {{ b.batch.label }}</span>
+          <span class="meta-time">{{ fmtTime(b.batch.created_at) }}</span>
+          <span class="count">共 {{ b.total_files }} 报表 · <b style="color:var(--diff-bar)">{{ b.diff_files }}</b> 有差异</span>
+          <span class="lock-ico" v-if="b.batch.locked" title="已锁定">🔒</span>
+          <span class="row-actions" @click.stop>
+            <button class="mini-btn" @click="editBatchLabel(b)">标签</button>
+            <button class="mini-btn" v-if="!b.batch.locked" @click="lockBatch(b.batch.batch_id)">锁定</button>
+            <button class="mini-btn" v-else @click="unlockBatch(b.batch.batch_id)">解锁</button>
+            <button class="mini-btn danger" @click="delBatch(b.batch.batch_id)">删除</button>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" v-if="fFileBatches.length">
       <div class="card-head">📦 批量对比批次（点击进入查看各文件）
         <label class="sel-all" @click.stop><input type="checkbox" :checked="allBatchesSel" @change="toggleAllBatches" /> 全选批次</label>
       </div>      <div>
-        <div class="job-row batch-row" :class="{ selected: isBatchSel(b.batch.batch_id) }" v-for="b in fBatches" :key="b.batch.batch_id" @click="openBatchEntry(b)">
+        <div class="job-row batch-row" :class="{ selected: isBatchSel(b.batch.batch_id) }" v-for="b in fFileBatches" :key="b.batch.batch_id" @click="openBatchEntry(b)">
           <input class="row-check" type="checkbox" :checked="isBatchSel(b.batch.batch_id)" @click.stop="toggleBatch(b.batch.batch_id)" />
-          <span class="nick-badge" v-if="isReport(b)" title="报表对比批次">🧾 报表</span>
-          <span class="nick-badge" v-else-if="isCustom(b)" title="自定义格式对比批次">📐 段对比</span>
+          <span class="nick-badge" v-if="isCustom(b)" title="自定义格式对比批次">📐 段对比</span>
           <span class="jid">{{ b.batch.batch_id }}</span>
           <span class="badge-status" :class="b.status">{{ b.status }}</span>
           <span class="files">{{ b.batch.dir_a }} ↔ {{ b.batch.dir_b }}</span>
@@ -2010,10 +2035,19 @@ const TaskManagerPage = {
       try { await api("/api/tasks/" + id, { method: "DELETE" }); await load(); }
       catch (e) { notify(e.message, "error"); }
     }
+    // ---- CSV 分文件管理（2 万条/文件的切割产物） ----
+    const openTaskFiles = reactive(new Set());
+    const toggleTaskFiles = (id) => toggle(openTaskFiles, id);
+    const fileNameOf = (p) => (p || "").split(/[\\/]/).pop();
+    const fmtSize = (n) => n >= 1073741824 ? (n / 1073741824).toFixed(1) + " GB"
+      : n >= 1048576 ? (n / 1048576).toFixed(1) + " MB"
+      : n >= 1024 ? (n / 1024).toFixed(0) + " KB" : (n || 0) + " B";
+    const taskZipUrl = (t) => "/api/tasks/" + t.task_id + "/files/zip";
     return { batches, standalone, openBatches, openJobs, q, tasksOf, typeText, statusText, fileName,
              durTask, durJob, durBatch,
              toggle, toggleBatch, batchChildren, regen, delTask, fmtTime,
              selTasks, runAt, jobAllSel, toggleJobSel, batchRegen,
+             openTaskFiles, toggleTaskFiles, fileNameOf, fmtSize, taskZipUrl,
              open: (id) => emit("open", id), openBatch: (id) => emit("open-batch", id) };
   },
   template: `
@@ -2057,20 +2091,35 @@ const TaskManagerPage = {
             </span>
           </div>
           <template v-if="openJobs.has(c.job_id)">
-            <div class="job-row" style="padding-left:64px;" v-for="t in tasksOf(c.job_id)" :key="t.task_id">
-              <span class="jid">{{ typeText(t) }}</span>
-              <span class="badge-status" :class="t.status">{{ statusText(t) }}</span>
-              <span class="files" :title="t.output_path">{{ t.output_path || (t.error ? '✗ ' + t.error : '—') }}</span>
-              <span class="group-badge" v-if="t.trigger==='manual'">手动</span>
-              <span class="group-badge" v-if="t.trigger==='batch'">批量</span>
-              <span class="group-badge" v-if="t.scheduled_at>0 && t.status==='pending'">⏰ {{ fmtTime(t.scheduled_at) }} 执行</span>
-              <span class="meta-time" v-if="t.finished_at">{{ fmtTime(t.finished_at) }}</span>
-              <span class="dur" :class="{ running: t.status==='running' }" v-if="durTask(t)">⏱ {{ durTask(t) }}</span>
-              <span class="row-actions">
-                <button class="mini-btn" @click="regen(t.task_id)" :disabled="t.status==='running'">↻ 重新生成</button>
-                <button class="mini-btn danger" @click="delTask(t.task_id)">删除</button>
-              </span>
-            </div>
+            <template v-for="t in tasksOf(c.job_id)" :key="t.task_id">
+              <div class="job-row" style="padding-left:64px;">
+                <span class="jid">{{ typeText(t) }}</span>
+                <span class="badge-status" :class="t.status">{{ statusText(t) }}</span>
+                <span class="files" :title="t.output_path">{{ t.output_path ? fileNameOf(t.output_path) : (t.error ? '✗ ' + t.error : '—') }}</span>
+                <span class="group-badge" v-if="t.output_count > 1" title="每 2 万条一个文件">📦 {{ t.output_count }} 个文件</span>
+                <span class="group-badge" v-if="t.trigger==='manual'">手动</span>
+                <span class="group-badge" v-if="t.trigger==='batch'">批量</span>
+                <span class="group-badge" v-if="t.scheduled_at>0 && t.status==='pending'">⏰ {{ fmtTime(t.scheduled_at) }} 执行</span>
+                <span class="meta-time" v-if="t.finished_at">{{ fmtTime(t.finished_at) }}</span>
+                <span class="dur" :class="{ running: t.status==='running' }" v-if="durTask(t)">⏱ {{ durTask(t) }}</span>
+                <span class="row-actions">
+                  <button class="mini-btn" v-if="t.output_count > 1" @click.stop="toggleTaskFiles(t.task_id)">{{ openTaskFiles.has(t.task_id) ? '收起 ▲' : '文件 ▼' }}</button>
+                  <a class="mini-btn" v-if="t.output_count > 1" :href="taskZipUrl(t)" title="打包下载全部产物">📦 打包</a>
+                  <button class="mini-btn" @click="regen(t.task_id)" :disabled="t.status==='running'">↻ 重新生成</button>
+                  <button class="mini-btn danger" @click="delTask(t.task_id)">删除</button>
+                </span>
+              </div>
+              <template v-if="openTaskFiles.has(t.task_id)">
+                <div class="job-row" style="padding-left:96px;" v-for="f in (t.outputs || [])" :key="t.task_id + '-' + f.index">
+                  <span class="jid">{{ f.name }}</span>
+                  <span class="count">{{ fmtSize(f.size) }}</span>
+                  <span v-if="!f.exists" class="count" style="color:var(--diff-bar);">✗ 文件不存在（可能已被清理）</span>
+                  <span class="row-actions">
+                    <a class="mini-btn" v-if="f.exists" :href="'/api/tasks/' + t.task_id + '/files/' + f.index">⬇ 下载</a>
+                  </span>
+                </div>
+              </template>
+            </template>
           </template>
         </template>
       </template>
@@ -2093,20 +2142,35 @@ const TaskManagerPage = {
             </span>
           </div>
           <template v-if="openJobs.has(j.job_id)">
-            <div class="job-row" style="padding-left:32px;" v-for="t in tasksOf(j.job_id)" :key="t.task_id">
-              <span class="jid">{{ typeText(t) }}</span>
-              <span class="badge-status" :class="t.status">{{ statusText(t) }}</span>
-              <span class="files" :title="t.output_path">{{ t.output_path || (t.error ? '✗ ' + t.error : '—') }}</span>
-              <span class="group-badge" v-if="t.trigger==='manual'">手动</span>
-              <span class="group-badge" v-if="t.trigger==='batch'">批量</span>
-              <span class="group-badge" v-if="t.scheduled_at>0 && t.status==='pending'">⏰ {{ fmtTime(t.scheduled_at) }} 执行</span>
-              <span class="meta-time" v-if="t.finished_at">{{ fmtTime(t.finished_at) }}</span>
-              <span class="dur" :class="{ running: t.status==='running' }" v-if="durTask(t)">⏱ {{ durTask(t) }}</span>
-              <span class="row-actions">
-                <button class="mini-btn" @click="regen(t.task_id)" :disabled="t.status==='running'">↻ 重新生成</button>
-                <button class="mini-btn danger" @click="delTask(t.task_id)">删除</button>
-              </span>
-            </div>
+            <template v-for="t in tasksOf(j.job_id)" :key="t.task_id">
+              <div class="job-row" style="padding-left:32px;">
+                <span class="jid">{{ typeText(t) }}</span>
+                <span class="badge-status" :class="t.status">{{ statusText(t) }}</span>
+                <span class="files" :title="t.output_path">{{ t.output_path ? fileNameOf(t.output_path) : (t.error ? '✗ ' + t.error : '—') }}</span>
+                <span class="group-badge" v-if="t.output_count > 1" title="每 2 万条一个文件">📦 {{ t.output_count }} 个文件</span>
+                <span class="group-badge" v-if="t.trigger==='manual'">手动</span>
+                <span class="group-badge" v-if="t.trigger==='batch'">批量</span>
+                <span class="group-badge" v-if="t.scheduled_at>0 && t.status==='pending'">⏰ {{ fmtTime(t.scheduled_at) }} 执行</span>
+                <span class="meta-time" v-if="t.finished_at">{{ fmtTime(t.finished_at) }}</span>
+                <span class="dur" :class="{ running: t.status==='running' }" v-if="durTask(t)">⏱ {{ durTask(t) }}</span>
+                <span class="row-actions">
+                  <button class="mini-btn" v-if="t.output_count > 1" @click.stop="toggleTaskFiles(t.task_id)">{{ openTaskFiles.has(t.task_id) ? '收起 ▲' : '文件 ▼' }}</button>
+                  <a class="mini-btn" v-if="t.output_count > 1" :href="taskZipUrl(t)" title="打包下载全部产物">📦 打包</a>
+                  <button class="mini-btn" @click="regen(t.task_id)" :disabled="t.status==='running'">↻ 重新生成</button>
+                  <button class="mini-btn danger" @click="delTask(t.task_id)">删除</button>
+                </span>
+              </div>
+              <template v-if="openTaskFiles.has(t.task_id)">
+                <div class="job-row" style="padding-left:64px;" v-for="f in (t.outputs || [])" :key="t.task_id + '-' + f.index">
+                  <span class="jid">{{ f.name }}</span>
+                  <span class="count">{{ fmtSize(f.size) }}</span>
+                  <span v-if="!f.exists" class="count" style="color:var(--diff-bar);">✗ 文件不存在（可能已被清理）</span>
+                  <span class="row-actions">
+                    <a class="mini-btn" v-if="f.exists" :href="'/api/tasks/' + t.task_id + '/files/' + f.index">⬇ 下载</a>
+                  </span>
+                </div>
+              </template>
+            </template>
           </template>
         </template>
       </div>
@@ -2601,7 +2665,7 @@ const ReportPage = {
 /* 报表批次详情：总览 + 子作业（昵称/文件名/条数/差异统计）+ 导出明细 Excel。 */
 const ReportBatchView = {
   emits: ["open", "back"],
-  props: ["batchId"],
+  props: { batchId: [String, Number], backText: { type: String, default: "返回报表对比" } },
   setup(props, { emit }) {
     const ov = ref(null); const q = ref(""); let timer = null; let stopped = false;
     async function load() {
@@ -2634,7 +2698,7 @@ const ReportBatchView = {
   },
   template: `
   <div v-if="ov">
-    <PageHeader back-text="返回报表对比" @back="goBack" title="报表对比批次">
+    <PageHeader :back-text="backText" @back="goBack" title="报表对比批次">
       <template #meta>
         <span class="jid">{{ ov.batch.batch_id }}</span>
         <span class="group-badge" v-if="ov.batch.label">🏷 {{ ov.batch.label }}</span>
@@ -3083,8 +3147,9 @@ const App = {
     }
     function backToJobs() { tab.value = backTab.value === "tasks" ? "tasks" : "jobs"; }
     function openSplit(id) { splitJobId.value = id; tab.value = "splitresult"; }
-    // 报表对比导航
-    function openReportBatch(id) { reportBatchId.value = id; tab.value = "reportbatch"; }
+    // 报表对比导航（fromJobs：从结果界面进入时，返回键回作业列表而非报表对比页）
+    const reportBackTab = ref("report");
+    function openReportBatch(id, from) { reportBackTab.value = from === "jobs" ? "jobs" : "report"; reportBatchId.value = id; tab.value = "reportbatch"; }
     function openReportJob(id) { reportJobId.value = id; tab.value = "reportresult"; }
     // 自定义格式对比导航
     const customBatchId = ref(null); // 当前查看的自定义格式对比批次
@@ -3092,7 +3157,7 @@ const App = {
     function openCustomBatch(id) { customBatchId.value = id; tab.value = "custombatch"; }
     function openCustomJob(id) { customJobId.value = id; tab.value = "customresult"; }
     return { tab, jobId, batchId, backBatch, backTab, resultNonce, splitJobId, encodings,
-             reportBatchId, reportJobId, customBatchId, customJobId,
+             reportBatchId, reportJobId, reportBackTab, customBatchId, customJobId,
              onSubmitted, onBatched, openJob, openBatch, openChild, openJobFromTasks,
              openBatchFromTasks, onRerun, onResultBack, backToJobs, openSplit,
              openReportBatch, openReportJob, openCustomBatch, openCustomJob };
@@ -3115,7 +3180,8 @@ const App = {
     <SubmitForm v-if="tab==='submit'" :encodings="encodings" @submitted="onSubmitted" @batched="onBatched" />
     <ReportPage v-else-if="tab==='report'" @open-batch="openReportBatch" />
     <ReportBatchView v-else-if="tab==='reportbatch' && reportBatchId" :batch-id="reportBatchId" :key="reportBatchId"
-                     @open="openReportJob" @back="tab='report'" />
+                     :back-text="reportBackTab === 'jobs' ? '返回作业列表' : '返回报表对比'"
+                     @open="openReportJob" @back="tab = reportBackTab" />
     <ReportResultView v-else-if="tab==='reportresult' && reportJobId" :job-id="reportJobId" :key="reportJobId"
                       @back="tab='reportbatch'" />
     <CustomPage v-else-if="tab==='custom'" @open-batch="openCustomBatch" />

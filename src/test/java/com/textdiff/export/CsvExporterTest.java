@@ -26,15 +26,29 @@ class CsvExporterTest {
         CsvExporter.writeFull(f, rows, List.of("主键", "金额", "备注"));
 
         List<String> lines = Files.readAllLines(f, StandardCharsets.UTF_8);
-        assertTrue(lines.get(0).replace("\ufeff", "").startsWith("键值,状态,分区"));
+        assertTrue(lines.get(0).replace("\ufeff", "").startsWith("键值,状态,差异栏位"));
         assertTrue(lines.get(0).contains("金额(A),金额(B)"));
         // 5 行数据 + 表头
         assertEquals(6, lines.size());
-        // onlyA 行 B 侧留空，onlyB 行 A 侧留空（宽度 = 最宽行 3 列）
-        assertTrue(lines.get(3).startsWith("k3,unmatched_a,data,k3,,3,,"));
-        assertTrue(lines.get(4).startsWith("k4,unmatched_b,data,,k4,,4,"));
+        // 差异栏位列：diff 行按「列号-栏位名；」拼接，equal/unmatched 行为空
+        assertTrue(lines.get(1).startsWith("k1,equal,,"));
+        assertTrue(lines.get(2).startsWith("k2,diff,2-金额；,"));
+        // onlyA 行 B 侧留空，onlyB 行 A 侧留空（宽度 = 最宽行 3 列；差异栏位为空时第三字段留空）
+        assertTrue(lines.get(3).startsWith("k3,unmatched_a,,k3,,3,,"));
+        assertTrue(lines.get(4).startsWith("k4,unmatched_b,,,k4,,4,"));
         // trailer 行也在全量导出中
-        assertTrue(lines.stream().anyMatch(l -> l.startsWith("T1,diff,trailer")));
+        assertTrue(lines.stream().anyMatch(l -> l.startsWith("T1,diff,2-金额；,")));
+    }
+
+    @Test
+    void 差异栏位摘要_多列与无名栏位回退(@TempDir Path dir) throws Exception {
+        Path f = dir.resolve("full.csv");
+        List<RowDiff> rows = List.of(RowDiff.diff("k1", Status.SECTION_DATA,
+                new String[]{"a", "b", "c"}, new String[]{"a", "B", "C"}, new int[]{1, 2}));
+        CsvExporter.writeFull(f, rows, List.of("主键", "金额"));
+        String line = Files.readAllLines(f, StandardCharsets.UTF_8).get(1);
+        // 栏位 1 有名 → 金额；栏位 2 超出映射 → 栏位3 回退
+        assertTrue(line.startsWith("k1,diff,2-金额；3-栏位3；,"), () -> line);
     }
 
     @Test

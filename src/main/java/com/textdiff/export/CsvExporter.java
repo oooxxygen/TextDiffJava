@@ -37,14 +37,37 @@ public final class CsvExporter {
 
     /** 全量 CSV 写入（rows 由调用方流式提供）。colNames 可空。 */
     public static void writeFull(Path file, List<RowDiff> rows, List<String> colNames) {
+        writeFull(file, rows, colNames, -1);
+    }
+
+    /** 全量列宽：各行 A/B 栏位数的最大值（分片切割时按整批统一，保证各分片表头一致）。 */
+    public static int fullWidth(List<RowDiff> rows) {
+        int width = 0;
+        for (RowDiff r : rows) {
+            width = Math.max(width, r.aCols == null ? 0 : r.aCols.length);
+            width = Math.max(width, r.bCols == null ? 0 : r.bCols.length);
+        }
+        return width;
+    }
+
+    /** 差异栏位摘要：状态为 diff 的记录按「列号-栏位名称；」拼接（其他状态为空串）。 */
+    public static String diffLabel(RowDiff r, List<String> colNames) {
+        if (!Status.DIFF.equals(r.status) || r.diffCols == null || r.diffCols.length == 0) return "";
+        List<String> names = colNames == null ? List.of() : colNames;
+        StringBuilder sb = new StringBuilder();
+        for (int col : r.diffCols) {
+            String name = col < names.size() && !names.get(col).isBlank() ? names.get(col) : "栏位" + (col + 1);
+            sb.append(col + 1).append('-').append(name).append('；');
+        }
+        return sb.toString();
+    }
+
+    /** 全量 CSV 写入；width < 0 时按本批行扫描（分片调用方传整批宽度保持表头一致）。 */
+    public static void writeFull(Path file, List<RowDiff> rows, List<String> colNames, int width) {
         try (BufferedWriter w = newBomWriter(file)) {
-            int width = 0;
-            for (RowDiff r : rows) {
-                width = Math.max(width, r.aCols == null ? 0 : r.aCols.length);
-                width = Math.max(width, r.bCols == null ? 0 : r.bCols.length);
-            }
+            if (width < 0) width = fullWidth(rows);
             List<String> names = colNames == null ? List.of() : colNames;
-            w.write("键值,状态,分区");
+            w.write("键值,状态,差异栏位");
             for (int i = 0; i < width; i++) {
                 String name = i < names.size() && !names.get(i).isBlank() ? names.get(i) : "栏位" + (i + 1);
                 w.write("," + escape(name + "(A)") + "," + escape(name + "(B)"));
@@ -55,7 +78,7 @@ public final class CsvExporter {
                 w.write(',');
                 w.write(escape(r.status));
                 w.write(',');
-                w.write(escape(r.section));
+                w.write(escape(diffLabel(r, names)));
                 for (int i = 0; i < width; i++) {
                     String a = r.aCols != null && i < r.aCols.length ? r.aCols[i] : "";
                     String b = r.bCols != null && i < r.bCols.length ? r.bCols[i] : "";

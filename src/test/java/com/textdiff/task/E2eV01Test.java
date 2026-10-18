@@ -76,10 +76,6 @@ class E2eV01Test {
                         StandardCharsets.UTF_8);
                 assertTrue(promptReady, "prompt.md 应自动产出（aiStatus=" + store.getJob(job.id).aiStatus
                         + ", err=" + store.getJob(job.id).error + "） " + dbg);
-                // 自动导出 CSV 产出
-                Path exportFull = dir.resolve("results").resolve(batch.id).resolve("export")
-                        .resolve((job.label == null ? job.nickname : job.label).replaceAll("[\\\\/:*?\"<>|]", "_") + "_全量.csv");
-                assertTrue(Files.exists(exportFull), "自动导出全量 CSV: " + exportFull);
                 System.out.println("[e2e] " + job.nickname + " 编码=" + meta.encodingA + "/" + meta.encodingB
                         + " totalA=" + meta.totalA + " totalB=" + meta.totalB
                         + " diff=" + meta.diff + " onlyA=" + meta.onlyA + " onlyB=" + meta.onlyB
@@ -99,6 +95,16 @@ class E2eV01Test {
                             t.taskType + " err=" + t.error);
                     assertFalse(t.outputPath.isBlank(), t.taskType + " 应记录产物路径");
                 }
+                // 两条任务都完成后核验产物（导出与 AI 并发执行，产物就绪以任务 DONE 为准）
+                String exportBase = (job.label == null ? job.nickname : job.label)
+                        .replaceAll("[\\\\/:*?\"<>|]", "_");
+                Path exportDir = dir.resolve("results").resolve(batch.id).resolve("export");
+                // 超 2 万条自动分片（_全量_001.csv…），按前缀核验
+                boolean hasFull;
+                try (var s = Files.list(exportDir)) {
+                    hasFull = s.anyMatch(p -> p.getFileName().toString().startsWith(exportBase + "_全量"));
+                }
+                assertTrue(hasFull, "自动导出全量 CSV 缺失: " + exportDir + " 内应以 " + exportBase + "_全量 开头");
             }
             }
         }

@@ -20,7 +20,9 @@ public final class TaskRecord {
     public String taskType;  // EXPORT_DIFF / AI_ANALYSIS
     public String status = PENDING;
     public String trigger = TRIGGER_AUTO;
-    public String outputPath = "";   // 生成产物路径（展示与审计）
+    public String outputPath = "";   // 生成产物路径（展示与审计；CSV 分片时为首文件）
+    /** 全部产物路径（CSV 分片切割时多文件；旧记录为空列表）。 */
+    public java.util.List<String> outputs = new java.util.ArrayList<>();
     public String error = "";
     public long createdAt;
     public long startedAt;

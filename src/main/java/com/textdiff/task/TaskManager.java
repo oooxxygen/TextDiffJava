@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -276,8 +277,14 @@ public final class TaskManager implements AutoCloseable {
             tasks.save(t);
         }
         try {
-            String output = TaskRecord.EXPORT_DIFF.equals(t.taskType) ? runExport(job) : runAi(job);
-            t.outputPath = output;
+            if (TaskRecord.EXPORT_DIFF.equals(t.taskType)) {
+                List<Path> parts = runExport(job);
+                t.outputs = parts.stream().map(p -> p.toAbsolutePath().toString())
+                        .collect(java.util.stream.Collectors.toList());
+                t.outputPath = parts.isEmpty() ? "" : parts.get(parts.size() - 1).toAbsolutePath().toString();
+            } else {
+                t.outputPath = runAi(job);
+            }
             t.status = TaskRecord.DONE;
         } catch (Exception e) {
             t.status = TaskRecord.FAILED;
@@ -295,13 +302,13 @@ public final class TaskManager implements AutoCloseable {
                 : Path.of(configured);
     }
 
-    /** 差异 CSV 导出：写导出目录（默认 results/{batchId}/export），同时保留全量 CSV 以维持既有行为。 */
-    private String runExport(JobRecord job) throws Exception {
+    /** 差异 CSV 导出：写导出目录（默认 results/{batchId}/export），同时保留全量 CSV 以维持既有行为；超 2 万条各自分片。 */
+    private List<Path> runExport(JobRecord job) throws Exception {
         Path dir = exportDir(job);
         Files.createDirectories(dir);
-        ExportAssembler.writeFullCsv(dir, job, ExportAssembler.DATA);
-        Path diff = ExportAssembler.writeDiffCsv(dir, job, ExportAssembler.DATA);
-        return diff.toAbsolutePath().toString();
+        List<Path> out = new java.util.ArrayList<>(ExportAssembler.writeFullCsv(dir, job, ExportAssembler.DATA));
+        out.addAll(ExportAssembler.writeDiffCsv(dir, job, ExportAssembler.DATA));
+        return out;
     }
 
     /**

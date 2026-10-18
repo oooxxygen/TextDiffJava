@@ -37,7 +37,7 @@ public class ExportController {
         this.fieldMaps = fieldMaps;
     }
 
-    /** mode=full|diff；zone 过滤（trailer 仅在 full 模式有字段意义）。 */
+    /** mode=full|diff；zone 过滤（trailer 仅在 full 模式有字段意义）。超 2 万条分片，多文件自动打 zip。 */
     @GetMapping("/jobs/{id}/export")
     public ResponseEntity<byte[]> exportJob(@PathVariable String id,
                                             @RequestParam(defaultValue = "all") String zone,
@@ -45,20 +45,23 @@ public class ExportController {
         JobRecord job = require(id);
         Predicate<com.textdiff.engine.RowDiff> filter = zoneFilter(zone);
         Path dir = tmpDir().resolve("job_" + id + "_" + System.nanoTime());
-        Path out = "diff".equals(mode)
+        List<Path> parts = "diff".equals(mode)
                 ? ExportAssembler.writeDiffCsv(dir, job, filter)
                 : ExportAssembler.writeFullCsv(dir, job, filter);
-        return csvDownload(out, out.getFileName().toString());
+        if (parts.size() == 1) return csvDownload(parts.get(0), parts.get(0).getFileName().toString());
+        Path zip = dir.resolve(parts.get(0).getFileName().toString().replace(".csv", "") + "等"
+                + parts.size() + "个文件.zip");
+        ExportAssembler.zip(zip, parts);
+        return zipDownload(zip);
     }
 
-    /** 单作业合并包：全量 + 差异。 */
+    /** 单作业合并包：全量 + 差异（各含分片）。 */
     @GetMapping("/jobs/{id}/export-all")
     public ResponseEntity<byte[]> exportJobAll(@PathVariable String id) {
         JobRecord job = require(id);
         Path dir = tmpDir().resolve("joball_" + id + "_" + System.nanoTime());
-        List<Path> files = List.of(
-                ExportAssembler.writeFullCsv(dir, job, ExportAssembler.DATA),
-                ExportAssembler.writeDiffCsv(dir, job, ExportAssembler.DATA));
+        List<Path> files = new ArrayList<>(ExportAssembler.writeFullCsv(dir, job, ExportAssembler.DATA));
+        files.addAll(ExportAssembler.writeDiffCsv(dir, job, ExportAssembler.DATA));
         Path zip = dir.resolve("导出_" + job.id + ".zip");
         ExportAssembler.zip(zip, files);
         return zipDownload(zip);
@@ -110,9 +113,9 @@ public class ExportController {
             if (group != null && !group.isBlank() && !group.equals(nick)
                     && !(j.configLine != null && j.configLine.startsWith(group + ":"))) continue;
             if (includeFull) {
-                files.add(ExportAssembler.writeFullCsv(dir, j, ExportAssembler.DATA));
+                files.addAll(ExportAssembler.writeFullCsv(dir, j, ExportAssembler.DATA));
             }
-            files.add(ExportAssembler.writeDiffCsv(dir, j, ExportAssembler.DATA));
+            files.addAll(ExportAssembler.writeDiffCsv(dir, j, ExportAssembler.DATA));
         }
         if (files.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "无可导出的子作业");
         Path zip = dir.resolve("批次_" + id + ".zip");

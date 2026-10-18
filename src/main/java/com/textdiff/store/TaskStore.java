@@ -154,6 +154,7 @@ public final class TaskStore implements AutoCloseable {
         c.status = t.status;
         c.trigger = t.trigger;
         c.outputPath = t.outputPath;
+        c.outputs = t.outputs == null ? new ArrayList<>() : new ArrayList<>(t.outputs);
         c.error = t.error;
         c.createdAt = t.createdAt;
         c.startedAt = t.startedAt;
