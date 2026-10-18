@@ -22,6 +22,8 @@ public final class RowStore implements AutoCloseable {
 
     public RowStore(Path tmpDir) {
         try {
+            // 落盘目录可能不存在（results/{jobId}/tmp 首次溢落）：先建目录，否则 createTempFile 直接 NoSuchFileException
+            Files.createDirectories(tmpDir);
             this.file = Files.createTempFile(tmpDir, "rowstore", ".bin");
             this.ch = FileChannel.open(file, READ, WRITE);
         } catch (IOException e) {

@@ -70,13 +70,17 @@ public class JobController {
         if (limit > 500) limit = 500;
         Path file = Path.of(job.resultDir).resolve(ResultFiles.RESULT_JSONL);
 
-        var noted = store.notedKeys(job.id);
-        Predicate<RowDiff> filter = r -> {
-            if (q != null && !q.isBlank() && !r.key.contains(q)) return false;
-            if ("has".equals(note) && !noted.contains(r.key)) return false;
-            if ("none".equals(note) && noted.contains(r.key)) return false;
-            return true;
-        };
+        // 无过滤条件走 NO_FILTER 快路径（窗口外零解析）；评议键集合仅确需过滤时读取
+        Predicate<RowDiff> filter = ResultFiles.NO_FILTER;
+        if ((q != null && !q.isBlank()) || note != null) {
+            var noted = store.notedKeys(job.id);
+            filter = r -> {
+                if (q != null && !q.isBlank() && !r.key.contains(q)) return false;
+                if ("has".equals(note) && !noted.contains(r.key)) return false;
+                if ("none".equals(note) && noted.contains(r.key)) return false;
+                return true;
+            };
+        }
         ResultFiles.Page page = ResultFiles.readPage(file, zone, offset, limit, filter);
         return Map.of("rows", ApiViews.rowViews(page.rows()), "total", page.total());
     }
@@ -143,6 +147,7 @@ public class JobController {
         job.status = JobRecord.PENDING;
         job.error = null;
         job.aiStatus = "none";
+        job.clearStats(); // 旧结果目录已删除，列表统计同步失效
         store.saveJob(job);
         ApiViews.deleteRecursively(Path.of(job.resultDir)); // 旧结果清空后重跑
         jobs.submit(job);

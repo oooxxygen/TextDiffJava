@@ -14,6 +14,9 @@ java {
 
 application {
     mainClass = "com.textdiff.Application"
+    // OOM 防护缺省（TEXT_DIFF_JAVA_OPTS/JAVA_OPTS 可覆盖）：堆上限按物理内存 50%（物理机/容器一致），
+    // 堆溢出自动转储到工作目录，便于事后分析；配合作业级 OOM 捕获，服务不再因单个大作业崩溃
+    applicationDefaultJvmArgs = listOf("-XX:MaxRAMPercentage=50.0", "-XX:+HeapDumpOnOutOfMemoryError")
 }
 
 repositories { mavenCentral() }

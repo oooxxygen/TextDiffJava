@@ -112,11 +112,14 @@ public class CustomCompareController {
         JobRecord job = require(id);
         if (limit > 500) limit = 500;
         Path file = Path.of(job.resultDir).resolve(ResultFiles.RESULT_JSONL);
-        Predicate<RowDiff> filter = r -> {
-            if (section != null && !section.isBlank() && !section.equals(r.section)) return false;
-            if (q != null && !q.isBlank() && !r.key.contains(q)) return false;
-            return true;
-        };
+        Predicate<RowDiff> filter = ResultFiles.NO_FILTER;
+        if ((section != null && !section.isBlank()) || (q != null && !q.isBlank())) {
+            filter = r -> {
+                if (section != null && !section.isBlank() && !section.equals(r.section)) return false;
+                if (q != null && !q.isBlank() && !r.key.contains(q)) return false;
+                return true;
+            };
+        }
         ResultFiles.Page page = ResultFiles.readPage(file, zone, offset, limit, filter);
         return Map.of("rows", ApiViews.rowViews(page.rows()), "total", page.total());
     }

@@ -31,13 +31,20 @@ public final class AutoKeyIndex implements KeyIndex {
         if (!spilled) {
             if (mem.containsKey(key)) memDup++;
             mem.put(key, cols);
-            long add = key.length() + 8L * cols.length;
-            for (String c : cols) add += c.length();
+            // 按 JVM 堆实际占用估而非字符数：String 对象/数组头开销 + UTF-16 2B/字符（紧凑字符串 ASCII 实际更小，此处从保守）
+            long add = 16 + 8L * cols.length; // 行数组头 + 引用槽
+            add += stringHeap(key);
+            for (String c : cols) add += stringHeap(c);
             bytes += add;
             if (bytes > maxInMemoryBytes) spill();
         } else {
             off.put(key, cols);
         }
+    }
+
+    /** 单个字符串的堆占用估计：对象头+hash+数组头 ≈40B，字符按 2B/个（UTF-16 上限）。 */
+    private static long stringHeap(String s) {
+        return 40L + 2L * s.length();
     }
 
     @Override

@@ -39,8 +39,26 @@ public final class JobRecord {
     public String jobType;
     /** 报表对比：header 模板文件路径（文件对比为 null）。 */
     public String templateFile;
+    /** 完成时快照的差异行数（-1 = 未知：未完成/重跑中/旧记录）。列表视图据此免读 meta.json。 */
+    public long diffCount = -1;
+    /** 完成时快照的统计口径（-1 = 未知），供批次页/作业列表懒加载。 */
+    public long totalA = -1;
+    public long totalB = -1;
+    public long equalCount = -1;
+    public long onlyACount = -1;
+    public long onlyBCount = -1;
 
     public JobRecord() {}
+
+    /** 重跑/重试前清空统计快照，避免运行中展示上一次的旧结果。 */
+    public void clearStats() {
+        diffCount = -1;
+        totalA = -1;
+        totalB = -1;
+        equalCount = -1;
+        onlyACount = -1;
+        onlyBCount = -1;
+    }
 
     public JobRecord(String id, String batchId, String nickname, String configLine,
                      String fileA, String fileB, String resultDir) {

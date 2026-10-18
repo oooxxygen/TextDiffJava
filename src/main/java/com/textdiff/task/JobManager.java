@@ -320,8 +320,15 @@ public final class JobManager implements AutoCloseable {
                 com.textdiff.engine.FieldTranscoder transA = resolveTranscoder(inputA.toString(), cfg.encodingA, cfg.delimiter);
                 com.textdiff.engine.FieldTranscoder transB = resolveTranscoder(inputB.toString(), cfg.encodingB, cfg.delimiter);
                 CompareOutcome outcome = Comparator.compareFiles(inputA, inputB,
-                        cfg, sink, maxInMemoryBytes, dir.resolve("tmp"), transA, transB);
+                        cfg, sink, inMemoryBudget(), dir.resolve("tmp"), transA, transB);
                 Summary s = outcome.summary();
+                // 统计快照落作业记录：列表/批次视图不再逐作业读 meta.json（前端轮询与批次页的主要磁盘开销）
+                job.diffCount = s.diff;
+                job.totalA = s.totalA;
+                job.totalB = s.totalB;
+                job.equalCount = s.equal;
+                job.onlyACount = s.onlyA;
+                job.onlyBCount = s.onlyB;
                 job.keyWarning = s.keyDupA > 0 || s.keyDupB > 0; // 需求：主键配置错误醒目提示
                 ResultFiles.writeSummary(dir, s);
                 job.aiStatus = "pending"; // M5 AI 分析器消费 pending 状态
@@ -335,13 +342,21 @@ public final class JobManager implements AutoCloseable {
             }
             job.status = JobRecord.DONE;
             job.finishedAt = System.currentTimeMillis() / 1000;
-        } catch (Exception e) {
+        } catch (Throwable t) {
+            // Throwable 而非 Exception：OutOfMemoryError 等 Error 也必须落终态，
+            // 否则作业卡在 running、重启被重新入队 → 「启动即 OOM」死循环
             PrioritizedRunnable pr = tasks.get(jobId);
             if (pr != null && pr.isCancelled()) {
                 job.status = JobRecord.STOPPED; // 中断导致的异常归为用户终止
+            } else if (t instanceof OutOfMemoryError) {
+                job.status = JobRecord.FAILED;
+                job.error = "内存不足（OutOfMemoryError）" + (t.getMessage() != null ? "：" + t.getMessage() : "")
+                        + "；建议降低对比并发度或内存阈值后重试";
+                System.err.println("[job] " + jobId + " 内存不足终止: " + t);
             } else {
                 job.status = JobRecord.FAILED;
-                job.error = e.getMessage() != null ? e.getMessage() : e.toString();
+                job.error = t.getMessage() != null ? t.getMessage() : t.toString();
+                if (!(t instanceof Exception)) System.err.println("[job] " + jobId + " 异常终止: " + t);
             }
             job.finishedAt = System.currentTimeMillis() / 1000;
         }
@@ -352,6 +367,17 @@ public final class JobManager implements AutoCloseable {
         tasks.remove(jobId);
     }
 
+    /**
+     * 单作业内存索引预算：min(配置阈值, max(16MB, 堆/(4×并行度)))。
+     * maxInMemoryBytes 是单作业口径，与并行度无关——并行 P 个作业同时驻留大索引时
+     * 实际堆占用可达 P×阈值，正是大文件批量对比 OOM 的主因；按当前并行度与最大堆动态收缩，
+     * 超出部分由 AutoKeyIndex 透明落盘（mmap 行存储，页缓存不占堆）。
+     */
+    long inMemoryBudget() {
+        int par = Math.max(1, pool.getMaximumPoolSize());
+        long adaptive = Math.max(16L * 1024 * 1024, Runtime.getRuntime().maxMemory() / (4L * par));
+        return Math.min(maxInMemoryBytes, adaptive); // 显式配置的小阈值（如强制落盘）优先于自适应下限
+    }
     /** 运行输入解析：压缩文件侧替换为解压产物路径（无解压服务时按原路径）。 */
     private Path resolveInput(JobRecord job, String path) {
         if (extractService == null || path == null) return Path.of(path);
@@ -380,6 +406,7 @@ public final class JobManager implements AutoCloseable {
         if (!JobRecord.FAILED.equals(job.status) && !JobRecord.STOPPED.equals(job.status)) return;
         job.status = JobRecord.PENDING;
         job.error = null;
+        job.clearStats();
         store.saveJob(job);
         submit(job);
     }

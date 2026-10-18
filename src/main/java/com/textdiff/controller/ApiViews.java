@@ -53,16 +53,28 @@ final class ApiViews {
         config.put("source_b", cfg.sourceB);
         m.put("config", config);
 
-        JobMeta meta = ResultFiles.readMeta(Path.of(job.resultDir));
-        if (meta != null) {
+        if (job.diffCount >= 0) {
+            // 完成快照直出：作业列表/批次页高频轮询免逐作业磁盘读
             Map<String, Object> s = new LinkedHashMap<>();
-            s.put("equal", meta.equal);
-            s.put("diff", meta.diff);
-            s.put("only_a", meta.onlyA);
-            s.put("only_b", meta.onlyB);
-            s.put("total_a", meta.totalA);
-            s.put("total_b", meta.totalB);
+            s.put("equal", job.equalCount);
+            s.put("diff", job.diffCount);
+            s.put("only_a", job.onlyACount);
+            s.put("only_b", job.onlyBCount);
+            s.put("total_a", job.totalA);
+            s.put("total_b", job.totalB);
             m.put("summary", s);
+        } else {
+            JobMeta meta = ResultFiles.readMeta(Path.of(job.resultDir)); // 旧记录/无快照来源兜底
+            if (meta != null) {
+                Map<String, Object> s = new LinkedHashMap<>();
+                s.put("equal", meta.equal);
+                s.put("diff", meta.diff);
+                s.put("only_a", meta.onlyA);
+                s.put("only_b", meta.onlyB);
+                s.put("total_a", meta.totalA);
+                s.put("total_b", meta.totalB);
+                m.put("summary", s);
+            }
         }
         return m;
     }
@@ -73,10 +85,7 @@ final class ApiViews {
         long running = jobs.stream().filter(j -> JobRecord.RUNNING.equals(j.status)
                 || JobRecord.PENDING.equals(j.status)).count();
         long failed = jobs.stream().filter(j -> JobRecord.FAILED.equals(j.status)).count();
-        long diffFiles = jobs.stream().filter(j -> {
-            JobMeta meta = ResultFiles.readMeta(Path.of(j.resultDir));
-            return meta != null && meta.diff > 0;
-        }).count();
+        long diffFiles = jobs.stream().filter(ApiViews::hasDiffs).count();
         long done = jobs.size() - running;
         if (running > 0) status = "running";
         else if (failed == jobs.size() && !jobs.isEmpty()) status = "error";
@@ -110,6 +119,13 @@ final class ApiViews {
         m.put("missing_count", batch.missingFiles == null ? 0 : batch.missingFiles.size());
         m.put("extract_failed_count", batch.extractFailed == null ? 0 : batch.extractFailed.size());
         return m;
+    }
+
+    /** 差异文件判定：优先用作业记录上的完成快照（免磁盘读）；旧记录回退读 meta.json。 */
+    private static boolean hasDiffs(JobRecord job) {
+        if (job.diffCount >= 0) return job.diffCount > 0;
+        JobMeta meta = ResultFiles.readMeta(Path.of(job.resultDir));
+        return meta != null && meta.diff > 0;
     }
 
     /** meta 端点完整响应（meta + summary + zone_counts）。 */

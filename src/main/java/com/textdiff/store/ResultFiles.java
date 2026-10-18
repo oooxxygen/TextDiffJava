@@ -88,25 +88,52 @@ public final class ResultFiles {
         return zone.equals(row.status);
     }
 
+    /** 无附加过滤的共享谓词：readPage 据此走免解析快路径。 */
+    public static final java.util.function.Predicate<RowDiff> NO_FILTER = r -> true;
+
     /** 流式分页切片：total 为过滤后的总行数（供前端分页控件）。 */
     public static Page readPage(Path resultFile, String zone, long offset, long limit) {
-        return readPage(resultFile, zone, offset, limit, r -> true);
+        return readPage(resultFile, zone, offset, limit, NO_FILTER);
     }
 
+    /**
+     * 读路径按需裁剪：
+     * ① zone=all 且无附加过滤 → 窗口外行只计数不解析（大 JSONL 分页从全文件解析降为 O(offset+limit)）；
+     * ② 带 zone 过滤 → 先做 status 针串预过滤再解析，命不中的行零解析成本。
+     */
     public static Page readPage(Path resultFile, String zone, long offset, long limit,
                                 java.util.function.Predicate<RowDiff> extra) {
         List<RowDiff> rows = new ArrayList<>();
         long total = 0;
+        boolean noFilter = extra == NO_FILTER;
+        boolean allZone = zone == null || zone.isBlank() || "all".equals(zone);
+        List<String> needles = statusNeedles(zone);
         try (Stream<String> lines = Files.lines(resultFile, StandardCharsets.UTF_8)) {
             var it = lines.iterator();
+            if (allZone && noFilter) {
+                while (it.hasNext()) {
+                    String line = it.next();
+                    if (total >= offset && rows.size() < limit) {
+                        try {
+                            rows.add(fromDto(Json.read(line, RowDto.class)));
+                        } catch (RuntimeException e) {
+                            continue; // 半行损坏容错
+                        }
+                    }
+                    total++;
+                }
+                return new Page(zone, offset, limit, total, rows);
+            }
             while (it.hasNext()) {
+                String line = it.next();
+                if (needles != null && !containsAny(line, needles)) continue;
                 RowDiff row;
                 try {
-                    row = fromDto(Json.read(it.next(), RowDto.class));
+                    row = fromDto(Json.read(line, RowDto.class));
                 } catch (RuntimeException e) {
                     continue; // 半行损坏容错
                 }
-                if (!zoneMatches(zone, row) || !extra.test(row)) continue;
+                if (!noFilter && !extra.test(row)) continue;
                 if (total >= offset && rows.size() < limit) rows.add(row);
                 total++;
             }
@@ -116,6 +143,27 @@ public final class ResultFiles {
             throw new UncheckedIOException("结果读取失败: " + resultFile, e);
         }
         return new Page(zone, offset, limit, total, rows);
+    }
+
+    private static boolean containsAny(String line, List<String> needles) {
+        for (String n : needles) {
+            if (line.contains(n)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * zone → JSONL 行内 status 字段针串（Json.write 紧凑输出；字符串值内引号必转义，针串不会误命中）。
+     * all/空 返回 null（不过滤）。
+     */
+    private static List<String> statusNeedles(String zone) {
+        if (zone == null || zone.isBlank() || "all".equals(zone)) return null;
+        return switch (zone) {
+            case "unmatched" -> List.of("\"status\":\"unmatched_a\"", "\"status\":\"unmatched_b\"");
+            case "equal" -> List.of("\"status\":\"equal\"");
+            case "diff" -> List.of("\"status\":\"diff\"");
+            default -> List.of("\"status\":\"" + zone + "\"");
+        };
     }
 
     public record Page(String zone, long offset, long limit, long total, List<RowDiff> rows) {}
