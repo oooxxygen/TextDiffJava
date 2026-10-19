@@ -69,4 +69,17 @@ class ApiViewsSnapshotTest {
         assertEquals(1L, m.get("diff_files"));
         assertEquals(2, ((Number) m.get("total_files")).intValue());
     }
+
+    @Test
+    void rowViewsBackfillsBColsOnlyForEqualRows() {
+        var equal = com.textdiff.engine.RowDiff.equal("k1", com.textdiff.engine.Status.SECTION_DATA,
+                new String[]{"a"});
+        var onlyA = com.textdiff.engine.RowDiff.onlyA("k2", com.textdiff.engine.Status.SECTION_DATA,
+                new String[]{"va"});
+        var views = ApiViews.rowViews(List.of(equal, onlyA));
+        // equal：B 隐含等于 A，回填供前端双栏展示
+        assertArrayEquals(new String[]{"a"}, (String[]) views.get(0).get("b_cols"));
+        // 仅A有：B 侧保持 null（BUG1——不得回填 A 内容冒充 B）
+        assertNull(views.get(1).get("b_cols"));
+    }
 }

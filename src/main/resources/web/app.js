@@ -2502,9 +2502,13 @@ const ReportRowRec = {
   setup(props) {
     const isOpen = ref(props.section !== 'data'); // 表头/表尾块默认展开：全部行一起展示
     const toggle = () => { isOpen.value = !isOpen.value; };
-    // 整行原貌（报表业务行 a_raw/b_raw；折行记录含 \n，单格整体渲染）优先，缺省回退栏位切分
-    const aDisp = computed(() => props.row.a_raw != null ? [props.row.a_raw] : (props.row.a_cols || []));
-    const bDisp = computed(() => props.row.b_raw != null ? [props.row.b_raw] : (props.row.b_cols || props.row.a_cols || []));
+    // 整行原貌（报表业务行 a_raw/b_raw；折行记录含 \n，单格整体渲染）优先，缺省回退栏位切分；
+    // 单侧缺失（仅对方有）不得回填对侧内容——B 侧必须显示「无此行」
+    const aDisp = computed(() => props.row.a_raw != null ? [props.row.a_raw]
+        : props.row.status === 'unmatched_b' ? [] : (props.row.a_cols || []));
+    const bDisp = computed(() => props.row.b_raw != null ? [props.row.b_raw]
+        : props.row.status === 'unmatched_a' ? []
+        : (props.row.b_cols || props.row.a_cols || []));
     const maxLen = computed(() => Math.max(aDisp.value.length, bDisp.value.length, 1));
     const isLine = computed(() => maxLen.value === 1); // 整行对照（表头/表尾物理行 + 表体整行模式）
     const isFolded = computed(() => (props.row.a_raw || props.row.b_raw || "").includes("\n"));
@@ -2544,7 +2548,7 @@ const ReportRowRec = {
   <div class="rec" :class="['s-' + row.status, isOpen ? 'open' : '']">
     <div class="rec-head" @click="toggle">
       <span class="caret">▶</span>
-      <span class="key">{{ (row.key || '').split(String.fromCharCode(31)).join(':') }}</span>
+      <span class="key">{{ (row.key || '').split(String.fromCharCode(31)).join(':') }}<template v-if="isBlock && maxLen > 1">（1~{{ maxLen }}行）</template></span>
       <span class="tag" :class="row.status">{{ statusLabel(row.status) }}</span>
       <span class="meta" v-if="row.status==='diff' && row.diff_cols && row.diff_cols.length">{{ showLcol ? '差异栏位: ' + diffLabelText : '内容存在差异' }}</span>
     </div>

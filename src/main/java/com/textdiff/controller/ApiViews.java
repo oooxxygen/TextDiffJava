@@ -176,7 +176,7 @@ final class ApiViews {
         return resp;
     }
 
-    /** 结果分页行（b_cols 缺省时 equal 行回填 a_cols；a_raw/b_raw 整行原貌供报表界面整行展示）。 */
+    /** 结果分页行（仅 equal 行回填 b_cols=a_cols——B 隐含等于 A；单侧缺失保持 null，前端显示「无此行」）。 */
     static List<Map<String, Object>> rowViews(List<com.textdiff.engine.RowDiff> rows) {
         List<Map<String, Object>> out = new ArrayList<>();
         for (var r : rows) {
@@ -185,7 +185,8 @@ final class ApiViews {
             m.put("status", r.status);
             m.put("section", r.section);
             m.put("a_cols", r.aCols);
-            m.put("b_cols", r.bCols != null ? r.bCols : r.aCols);
+            m.put("b_cols", r.bCols != null ? r.bCols
+                    : com.textdiff.engine.Status.EQUAL.equals(r.status) ? r.aCols : null);
             m.put("diff_cols", r.diffCols);
             if (r.aRaw != null) m.put("a_raw", r.aRaw);
             if (r.bRaw != null) m.put("b_raw", r.bRaw);
