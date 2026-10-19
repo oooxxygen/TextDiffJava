@@ -2004,12 +2004,30 @@ const SettingsPage = {
     }
     onMounted(loadExtract);
 
+    // JVM 运行参数（config.ini [jvm] jvm_opts）：启动脚本注入，保存后需重启服务生效
+    const jvm = reactive({ opts: "", baked: [], msg: "", ok: null });
+    async function loadJvm() {
+      try {
+        const r = await api("/api/settings/jvm");
+        jvm.opts = r.opts || ""; jvm.baked = r.baked || [];
+      } catch (e) {}
+    }
+    async function saveJvm() {
+      jvm.msg = "保存中…"; jvm.ok = null;
+      try {
+        const r = await jpost("/api/settings/jvm", { opts: jvm.opts.trim() });
+        jvm.opts = r.opts; jvm.ok = true; jvm.msg = r.note || "已保存，重启服务后生效";
+      } catch (e) { jvm.ok = false; jvm.msg = "保存失败: " + e.message; }
+    }
+    onMounted(loadJvm);
+
     return { providers, form, apiKeySet, busy, toast, test, curModels, pickProvider, save, testConn,
              rt, saveRuntime, imp, onImpFiles, importStructure,
              base, onBaseFiles, importBaseline, exportConfigs,
              cs, onCsFile, importCharset,
              dirs, loadDirs, saveDirs,
-             extract, loadExtract, saveExtract };
+             extract, loadExtract, saveExtract,
+             jvm, loadJvm, saveJvm };
   },
   template: `
   <div>
@@ -2140,6 +2158,21 @@ const SettingsPage = {
         <div class="btn-row">
           <button class="btn" @click="saveExtract">保存解压设置</button>
           <span v-if="extract.msg" :style="{ color: extract.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ extract.msg }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">☕ JVM 运行参数（config.ini [jvm]）</div>
+      <div class="card-body">
+        <p class="ai-hint" style="margin-top:0;">启动脚本在<b>进程启动时</b>读取 config.ini 的 <code>jvm_opts</code> 注入 JVM（当前工作目录优先，其次程序目录）；空 = 仅使用内置缺省（{{ jvm.baked.join(' ') }}）。环境变量 <code>TEXT_DIFF_JAVA_OPTS</code> / <code>JAVA_OPTS</code> 仍可覆盖。保存写入 config.ini 后需<b>重启服务</b>生效（可在 /api/health 的 max_memory_mb 核对实际堆）。</p>
+        <div class="field mono">
+          <label>JVM 参数（空格分隔，如 -Xmx4g -XX:+UseG1GC）</label>
+          <input v-model="jvm.opts" placeholder="如 -Xmx4g；留空 = 仅内置缺省" />
+        </div>
+        <div class="btn-row">
+          <button class="btn" @click="saveJvm">保存 JVM 参数</button>
+          <span v-if="jvm.msg" :style="{ color: jvm.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ jvm.msg }}</span>
         </div>
       </div>
     </div>

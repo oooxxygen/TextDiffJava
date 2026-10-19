@@ -13,6 +13,8 @@ public final class AppConfig {
     private volatile EngineConfig engine;
     private volatile StoreConfig store;
     private volatile AiConfig ai;
+    /** JVM 运行参数（config.ini [jvm] jvm_opts）：启动脚本读取注入，保存后重启生效。 */
+    private volatile String jvmOpts = "";
     private final Path iniPath;
 
     public AppConfig(ServerConfig server, EngineConfig engine, StoreConfig store, AiConfig ai) {
@@ -31,6 +33,15 @@ public final class AppConfig {
     public EngineConfig engine() { return engine; }
     public StoreConfig store()   { return store; }
     public AiConfig ai()         { return ai; }
+    public String jvmOpts()      { return jvmOpts; }
+
+    /** JVM 运行参数写入 config.ini [jvm] jvm_opts（启动脚本重启时读取注入；运行中 JVM 不可变更）。 */
+    public void updateJvmOpts(String opts) {
+        this.jvmOpts = opts == null ? "" : opts.strip();
+        if (iniPath != null) {
+            setIniValue(iniPath, "jvm", "jvm_opts", jvmOpts);
+        }
+    }
 
     /** AI 配置热更新：改内存值（此后 AiClient/AiAnalyzer 立即按新值调用）并写回 ini [ai] 段。 */
     public void updateAi(AiConfig next) {
@@ -92,6 +103,7 @@ public final class AppConfig {
                 pick(env.apply("TEXTDIFF_STORE_ENABLED"), sto.get("enabled"), "true"));
 
         Map<String, String> aiSec = ini.getOrDefault("ai", Map.of());
+        Map<String, String> jvmSec = ini.getOrDefault("jvm", Map.of());
         AiConfig ai = new AiConfig(
                 Boolean.parseBoolean(pick(env.apply("TEXTDIFF_AI_ENABLED"), aiSec.get("enabled"), "false")),
                 pick(env.apply("TEXTDIFF_AI_PROTOCOL"), aiSec.get("protocol"), "openai"),
@@ -107,9 +119,11 @@ public final class AppConfig {
                 Integer.parseInt(pick(env.apply("TEXTDIFF_AI_MAX_CONCURRENCY"), aiSec.get("max-concurrency"),
                         "2")));
 
-        return new AppConfig(new ServerConfig(host, port),
+        AppConfig cfg = new AppConfig(new ServerConfig(host, port),
                 new EngineConfig(maxThreads, maxInMemoryBytes, extractDir, preExtractCount),
                 new StoreConfig(storeEnabled), ai, iniPath);
+        cfg.jvmOpts = pick(null, jvmSec.get("jvm_opts"), "");
+        return cfg;
     }
 
     private static int parseIntOrDefault(String v, int def) {
@@ -213,6 +227,12 @@ public final class AppConfig {
                 [store]
                 # H2 双写镜像开关（false = 纯文件模式，查询仍可用但无数据库表）
                 enabled = true
+
+                [jvm]
+                # JVM 运行参数：启动脚本在进程启动时读取本键注入（修改保存后需重启服务生效）；
+                # 空 = 仅使用内置缺省（-XX:MaxRAMPercentage=50.0 -XX:+HeapDumpOnOutOfMemoryError）。
+                # 示例：jvm_opts = -Xmx4g
+                jvm_opts =
 
                 [ai]
                 # AI 归纳分析（协议：openai = OpenAI 兼容 /chat/completions；anthropic = Anthropic 原生 /v1/messages）

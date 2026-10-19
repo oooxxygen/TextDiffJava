@@ -19,6 +19,45 @@ application {
     applicationDefaultJvmArgs = listOf("-XX:MaxRAMPercentage=50.0", "-XX:+HeapDumpOnOutOfMemoryError")
 }
 
+// 启动脚本注入：进程启动时读取 config.ini [jvm] jvm_opts 注入 JVM 参数（CWD 优先，其次 APP_HOME；
+// 均无 = 仅内置缺省；env TEXT_DIFF_JAVA_OPTS/JAVA_OPTS 仍可覆盖）。设置页保存后重启服务生效。
+tasks.startScripts {
+    doLast {
+        val unixAnchor = "eval \"set -- \$(\n" +
+                "        printf '%s\\n' \"\$DEFAULT_JVM_OPTS \$JAVA_OPTS \$TEXT_DIFF_JAVA_OPTS\" |"
+        val unixBlock = """
+            # JVM 参数注入：读取 config.ini [jvm] jvm_opts（CWD 优先，其次 APP_HOME）
+            CONFIG_JVM_OPTS=""
+            for INI_FILE in "${'$'}PWD/config.ini" "${'$'}APP_HOME/config.ini"; do
+              if [ -f "${'$'}INI_FILE" ]; then
+                CONFIG_JVM_OPTS=${'$'}(sed -n 's/^[[:space:]]*jvm_opts[[:space:]]*=[[:space:]]*//p' "${'$'}INI_FILE" | tail -n 1 | tr -d '\r')
+                [ -n "${'$'}CONFIG_JVM_OPTS" ] && break
+              fi
+            done
+            eval "set -- ${'$'}(
+                    printf '%s\n' "${'$'}DEFAULT_JVM_OPTS ${'$'}CONFIG_JVM_OPTS ${'$'}JAVA_OPTS ${'$'}TEXT_DIFF_JAVA_OPTS" |
+        """.trimIndent()
+        if (!unixScript.readText().contains(unixAnchor)) {
+            throw GradleException("startScripts 注入锚点未匹配（unix 模板已变化），请检查模板")
+        }
+        unixScript.writeText(unixScript.readText().replace(unixAnchor, unixBlock))
+
+        val winAnchor = "\"%JAVA_EXE%\" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %TEXT_DIFF_JAVA_OPTS%  -classpath"
+        val winBlock = """
+            @rem JVM 参数注入：读取 config.ini [jvm] jvm_opts（CWD 优先，其次 APP_HOME；等号两侧可有空格）
+            set "CONFIG_JVM_OPTS="
+            if exist "config.ini" for /f "usebackq eol=# tokens=1,* delims== " %%a in (`findstr /i /b "jvm_opts" "config.ini"`) do set "CONFIG_JVM_OPTS=%%b"
+            if not defined CONFIG_JVM_OPTS if exist "%APP_HOME%\config.ini" for /f "usebackq eol=# tokens=1,* delims== " %%a in (`findstr /i /b "jvm_opts" "%APP_HOME%\config.ini"`) do set "CONFIG_JVM_OPTS=%%b"
+
+            "%JAVA_EXE%" %DEFAULT_JVM_OPTS% %CONFIG_JVM_OPTS% %JAVA_OPTS% %TEXT_DIFF_JAVA_OPTS%  -classpath
+        """.trimIndent()
+        if (!windowsScript.readText().contains(winAnchor)) {
+            throw GradleException("startScripts 注入锚点未匹配（windows 模板已变化），请检查模板")
+        }
+        windowsScript.writeText(windowsScript.readText().replace(winAnchor, winBlock))
+    }
+}
+
 repositories { mavenCentral() }
 
 dependencies {

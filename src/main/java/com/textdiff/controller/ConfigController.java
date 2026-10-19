@@ -119,6 +119,24 @@ public class ConfigController {
         return Map.of("extract_dir", e.extractDir(), "pre_extract_count", e.preExtractCount());
     }
 
+    /** JVM 运行参数读取（设置页）：config.ini [jvm] jvm_opts + 内置缺省。 */
+    @GetMapping("/settings/jvm")
+    public Map<String, Object> jvmSettings() {
+        return Map.of(
+                "opts", appConfig.jvmOpts() == null ? "" : appConfig.jvmOpts(),
+                "baked", List.of("-XX:MaxRAMPercentage=50.0", "-XX:+HeapDumpOnOutOfMemoryError"),
+                "note", "由启动脚本在进程启动时读取 config.ini 注入；保存后需重启服务生效");
+    }
+
+    /** JVM 运行参数保存：写入 config.ini [jvm] jvm_opts（运行中 JVM 不可变更，重启后生效）。 */
+    @PostMapping("/settings/jvm")
+    public Map<String, Object> saveJvmSettings(@RequestBody Map<String, Object> body) {
+        String opts = str(body.get("opts"));
+        appConfig.updateJvmOpts(opts == null ? "" : opts);
+        return Map.of("ok", true, "opts", appConfig.jvmOpts(),
+                "note", "已写入 config.ini，重启服务后生效");
+    }
+
     /** 预解压设置保存：改内存 + 写回 config.ini [engine]，保存后立即热生效。 */
     @PostMapping("/settings/extract")
     public Map<String, Object> saveExtractSettings(@RequestBody Map<String, Object> body) {
