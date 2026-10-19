@@ -133,6 +133,8 @@ class IncrementalJobFlowTest {
                 assertTrue(jobs.get(i).fileA.endsWith(previewFile),
                         "顺序不一致: " + i + " " + previewFile + " vs " + jobs.get(i).fileA);
             }
+            // 等待作业全部收尾再关闭：避免 close 与后台写入线程的文件竞争（Windows 上必现）
+            assertTrue(mgr.awaitIdle(30, TimeUnit.SECONDS));
         }
     }
 }
