@@ -243,21 +243,13 @@ public final class ExtractService implements AutoCloseable {
         }
     }
 
-    /** 解压失败：作业 FAILED（附具体文件名），计入批次 extract_failed 清单，触发补位。 */
+    /** 解压失败：作业 FAILED（附具体文件名），计入批次 extract_failed 清单，触发补位。
+     *  先写批次清单再落作业终态：观察者（轮询/测试）看到作业 FAILED 时清单必然已就绪。 */
     private void failGroup(Group g, Exception e) {
         JobRecord job = g.job();
         String src = !g.sourcesA().isEmpty() ? base(job.fileA)
                 : !g.sourcesB().isEmpty() ? base(job.fileB) : g.logicalName();
         String reason = e.getMessage() == null ? e.toString() : e.getMessage();
-        synchronized (store) {
-            JobRecord fresh = store.getJob(job.id);
-            if (fresh != null && JobRecord.PENDING.equals(fresh.status)) {
-                fresh.status = JobRecord.FAILED;
-                fresh.error = "解压失败: " + src + " (" + reason + ")";
-                fresh.finishedAt = System.currentTimeMillis() / 1000;
-                store.saveJob(fresh);
-            }
-        }
         if (job.batchId != null) {
             synchronized (batchLock) {
                 BatchRecord latest = store.getBatch(job.batchId);
@@ -267,6 +259,15 @@ public final class ExtractService implements AutoCloseable {
                     if (!latest.extractFailed.contains(entry)) latest.extractFailed.add(entry);
                     store.saveBatch(latest);
                 }
+            }
+        }
+        synchronized (store) {
+            JobRecord fresh = store.getJob(job.id);
+            if (fresh != null && JobRecord.PENDING.equals(fresh.status)) {
+                fresh.status = JobRecord.FAILED;
+                fresh.error = "解压失败: " + src + " (" + reason + ")";
+                fresh.finishedAt = System.currentTimeMillis() / 1000;
+                store.saveJob(fresh);
             }
         }
         refill();

@@ -103,7 +103,12 @@ class BatchGzipExtractTest {
             assertTrue(settled || JobRecord.FAILED.equals(job.status));
             assertEquals(JobRecord.FAILED, job.status);
             assertTrue(job.error.startsWith("解压失败: "), job.error);
+            // 清单与作业终态分两次落盘：轮询兜底等待批次清单可见
             BatchRecord fresh = store.getBatch(batch.id);
+            for (int i = 0; i < 100 && (fresh.extractFailed == null || fresh.extractFailed.isEmpty()); i++) {
+                Thread.sleep(50);
+                fresh = store.getBatch(batch.id);
+            }
             assertNotNull(fresh.extractFailed);
             assertEquals(1, fresh.extractFailed.size());
             assertTrue(fresh.extractFailed.get(0).startsWith("bad.ew1.gz.202601011"));
