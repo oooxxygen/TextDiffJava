@@ -263,6 +263,35 @@ class ReportControlFormatTest {
         assertEquals(1, r.summary().onlyB);
     }
 
+    @Test
+    void B侧未配对段键加B后缀_避免与A侧同键() {
+        // B 的 51367 出现两次：A 的 51367(段3) 配 B 的第一个 51367，
+        // B 第二个 51367 未配对——两侧各自编号，旧逻辑会同为「51367·3」
+        List<String> a = concatSections("51365", "51366", "51367");
+        List<String> b = concatSections("51367", "51365", "51367");
+        ParsedReport pa = ReportParser.parseControlFormat(a);
+        ParsedReport pb = ReportParser.parseControlFormat(b);
+        ReportComparator.Result r = ReportComparator.compare(pa, pb, List.of());
+        java.util.Set<String> keys = new java.util.HashSet<>();
+        for (RowDiff row : r.headerRows()) assertTrue(keys.add(row.key), "表头块键重复: " + row.key);
+        assertTrue(keys.contains("51367·3"), "A 侧配对段键: " + keys);
+        assertTrue(keys.contains("51367·3B"), "B 侧未配对段键应带 B 后缀: " + keys);
+    }
+
+    private static List<String> concatSections(String... orgIds) {
+        List<String> out = new java.util.ArrayList<>();
+        for (String org : orgIds) {
+            out.add("1@OD@|@T@|ORG-ID:" + org + "|RPT-ID:X1000|");
+            out.add("1   ( -X )");
+            out.add("  BRCH : Demo Branch         Page :     1");
+            out.add("  A/C          AMT");
+            out.add("  00100000001  USD   100.00");
+            out.add("");
+            out.add("   CUR PG QTY:              1");
+        }
+        return out;
+    }
+
     // ---- 真实样本（存在时） ----
 
     @Test

@@ -150,7 +150,11 @@ public final class ReportComparator {
             }
         }
         for (int j = 0; j < bb.size(); j++) {
-            if (!usedB[j]) out.add(RowDiff.onlyB(ReportParser.sigShort(kb.get(j)) + "·" + (j + 1), section, bb.get(j)));
+            if (!usedB[j]) {
+                // B 侧未配对块以自身序号 + B 后缀命名：两侧各自编号，不加后缀会与 A 侧行同键混淆
+                // （如 A 配对块「51120·3」与 B 多出的第 3 块原会同为「51120·3」）
+                out.add(RowDiff.onlyB(ReportParser.sigShort(kb.get(j)) + "·" + (j + 1) + "B", section, bb.get(j)));
+            }
         }
         return out;
     }
