@@ -43,6 +43,7 @@ final class ApiViews {
         m.put("starred", job.starred);
         m.put("key_warning", job.keyWarning);
         m.put("job_type", job.jobType == null || job.jobType.isEmpty() ? "file" : job.jobType);
+        m.put("incr_state", job.incrState == null || job.incrState.isEmpty() ? null : job.incrState);
 
         CompareConfig cfg = Rules.parseLegacy(job.configLine,
                 ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
@@ -156,6 +157,8 @@ final class ApiViews {
         m.put("used_disk_fallback", false);
         m.put("key_warning", job.keyWarning);
         m.put("ai_status", job.aiStatus);
+        m.put("incr_state", job.incrState == null || job.incrState.isEmpty() ? null : job.incrState);
+        m.put("incr", meta != null ? meta.incr : null);
         m.put("config", config);
         resp.put("meta", m);
 

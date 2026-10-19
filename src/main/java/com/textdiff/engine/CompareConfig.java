@@ -26,6 +26,8 @@ public final class CompareConfig {
     public int priSeq = 5;
     /** PRISEQ 是否显式配置（仅显式时写回配置行并在界面展示）。 */
     public boolean priSeqSet = false;
+    /** 增量过滤栏位（0-based，按配置顺序）：非空时作业按提交条件值过滤行后重组源文本再对比。 */
+    public List<Integer> incrFields = new ArrayList<>();
 
     /** 比对时需要跳过的列集合（omit ∪ ignore）。 */
     public Set<Integer> skipSet() {

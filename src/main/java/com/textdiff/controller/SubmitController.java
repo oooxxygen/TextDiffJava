@@ -52,13 +52,14 @@ public class SubmitController {
         return Map.of("files", out);
     }
 
-    /** 单对/多对直连模式：每对 {a,b} 一个作业，共享同一配置行。 */
+    /** 单对/多对直连模式：每对 {a,b} 一个作业，共享同一配置行；incr_conds 与 pairs 对齐（incr_cond 广播到全部）。 */
     @PostMapping("/compare")
     public Map<String, Object> compare(@RequestBody ApiPayloads.ComparePayload p) throws IOException {
         if (p.pairs() == null || p.pairs().isEmpty()) {
             throw new IllegalArgumentException("缺少文件对 pairs");
         }
         String configLine = ApiPayloads.buildLegacyLine(p);
+        List<List<String>> conds = condsFor(p.pairs().size(), p.incr_conds(), p.incr_cond());
         List<String[]> rows = new ArrayList<>();
         for (ApiPayloads.ComparePayload.Pair pair : p.pairs()) {
             if (pair.a() == null || pair.b() == null) {
@@ -68,18 +69,68 @@ public class SubmitController {
             rows.add(new String[]{configLine, pair.a(), pair.b(), nick});
         }
         BatchRecord batch = jobs.createBatchFromPairs(
-                p.label() == null ? "直连对比" : p.label(), rows, p.kind());
+                p.label() == null ? "直连对比" : p.label(), rows, p.kind(), conds);
         List<String> ids = jobs.listJobs(batch.id).stream().map(j -> j.id).toList();
         return Map.of("batch_id", batch.id, "job_ids", ids);
     }
 
-    /** 批次模式：目录对 + 配置（use_all / config_file / 内联三选一）。 */
+    /** 条件列表规范化：目标数量对齐；incr_conds 缺失时用 incr_cond 广播。全部为空返回 null（不过滤）。 */
+    private static List<List<String>> condsFor(int n, List<List<String>> incrConds, List<String> incrCond) {
+        List<List<String>> src = incrConds;
+        if ((src == null || src.isEmpty()) && incrCond != null && !incrCond.isEmpty()) {
+            src = new ArrayList<>();
+            for (int i = 0; i < n; i++) src.add(incrCond);
+        }
+        if (src == null) return null;
+        boolean any = false;
+        List<List<String>> out = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            List<String> c = i < src.size() ? src.get(i) : null;
+            out.add(c);
+            if (c != null && c.stream().anyMatch(v -> v != null && !v.isBlank())) any = true;
+        }
+        return any ? out : null;
+    }
+
+    /** 提交前 dry-run 配对预览：请求体同 /api/batch-compare，返回文本项列表（不建批次不派作业）。 */
+    @PostMapping("/batch-preview")
+    public Map<String, Object> batchPreview(@RequestBody Map<String, Object> body) throws IOException {
+        String dirA = str(body.get("dir_a"));
+        String dirB = str(body.get("dir_b"));
+        if (dirA == null || dirB == null) throw new IllegalArgumentException("缺少 dir_a / dir_b");
+        List<String> lines = resolveConfigLines(body);
+        return Map.of("pairs", jobs.previewPairs(Path.of(dirA), Path.of(dirB), lines));
+    }
+
+    /** 批次模式：目录对 + 配置（use_all / config_file / 内联三选一）；incr_conds 与配对顺序对齐。 */
     @PostMapping("/batch-compare")
     public Map<String, Object> batchCompare(@RequestBody Map<String, Object> body) throws IOException {
         String dirA = str(body.get("dir_a"));
         String dirB = str(body.get("dir_b"));
         if (dirA == null || dirB == null) throw new IllegalArgumentException("缺少 dir_a / dir_b");
+        List<String> lines = resolveConfigLines(body);
+        if (lines.isEmpty()) throw new IllegalArgumentException("无生效配置行");
 
+        List<List<String>> conds = null;
+        Object rawConds = body.get("incr_conds");
+        if (rawConds instanceof List<?> l) {
+            List<List<String>> parsed = new ArrayList<>();
+            for (Object o : l) {
+                List<String> row = new ArrayList<>();
+                if (o instanceof List<?> rl) {
+                    for (Object v : rl) row.add(v == null ? "" : v.toString());
+                }
+                parsed.add(row);
+            }
+            conds = condsFor(parsed.size(), parsed, null);
+        }
+
+        BatchRecord batch = jobs.createBatch(Path.of(dirA), Path.of(dirB), lines, str(body.get("kind")), conds);
+        return Map.of("batch_id", batch.id);
+    }
+
+    /** 批次配置行解析（use_all / config_file / 内联三选一），预览与正式提交共用。 */
+    private List<String> resolveConfigLines(Map<String, Object> body) throws IOException {
         List<String> lines = new ArrayList<>();
         Boolean useAll = bool(body.get("use_all"));
         String configFile = str(body.get("config_file"));
@@ -97,9 +148,11 @@ public class SubmitController {
             String keySeq = str(body.get("key_seq"));
             String omitSeq = str(body.get("omit_seq"));
             String priSeq = str(body.get("pri_seq"));
+            String addmod = str(body.get("addmod"));
             if (keySeq != null && !keySeq.isBlank()) sb.append(":KEYSEQ=").append(keySeq.strip());
             if (omitSeq != null && !omitSeq.isBlank()) sb.append(":OMITSEQ=").append(omitSeq.strip());
             if (priSeq != null && !priSeq.isBlank()) sb.append(":PRISEQ=").append(priSeq.strip());
+            if (addmod != null && !addmod.isBlank()) sb.append(":ADDMOD=").append(addmod.strip());
             String delim = str(body.get("delimiter"));
             if (delim != null) sb.append(":DELIM=").append(delim);
             sb.append(":ENCA=").append(strOr(body.get("encoding_a"), "auto"));
@@ -108,10 +161,7 @@ public class SubmitController {
             sb.append(":SRCB=").append(strOr(body.get("source_b"), "B"));
             lines.add(sb.toString());
         }
-        if (lines.isEmpty()) throw new IllegalArgumentException("无生效配置行");
-
-        BatchRecord batch = jobs.createBatch(Path.of(dirA), Path.of(dirB), lines, str(body.get("kind")));
-        return Map.of("batch_id", batch.id);
+        return lines;
     }
 
     static List<String> readConfigLines(Path file) throws IOException {

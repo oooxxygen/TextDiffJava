@@ -14,6 +14,13 @@ public final class Summary {
     /** 重复键样例（两侧合并，封顶 {@link #DUP_SAMPLE_CAP} 条），供前端告警与 AI 分析。 */
     public List<String> dupKeySamples = new ArrayList<>();
     public static final int DUP_SAMPLE_CAP = 20;
+    /** 重复键 TOP10（分侧，键值 + 重复次数），结果页主键告警排查用。 */
+    public List<KeyCount> dupTopA = new ArrayList<>();
+    public List<KeyCount> dupTopB = new ArrayList<>();
+    public static final int DUP_TOP_CAP = 10;
+
+    /** 重复键条目：键值 + 该键第 2 次及以后出现的次数。 */
+    public record KeyCount(String key, long count) {}
     /** 差异列频次：{列号(0-based) -> 作为差异列出现的 diff 行数}。 */
     public Map<Integer, Long> diffColFreq = new LinkedHashMap<>();
     /** trailer 关键字段一致性: {key -> TrailerField}。 */

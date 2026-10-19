@@ -86,7 +86,9 @@ public class ConfigController {
         sb.append(":TRAILER=").append(body.get("trailer_prefix") == null ? "" : body.get("trailer_prefix"));
         String priSeq = str(body.get("pri_seq"));
         if (priSeq != null && !priSeq.isBlank()) sb.append(":PRISEQ=").append(priSeq.strip());
-        // 现有同名配置保留其 ignore/replace/cols 扩展字段；PRISEQ 请求未带时沿用现值
+        String addmod = str(body.get("addmod"));
+        if (addmod != null && !addmod.isBlank()) sb.append(":ADDMOD=").append(addmod.strip());
+        // 现有同名配置保留其 ignore/replace/cols 扩展字段；PRISEQ/ADDMOD 请求未带时沿用现值
         CompareConfig existing = findConfig(nickname);
         CompareConfig parsed = Rules.parseLegacy(sb.toString(),
                 ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
@@ -97,6 +99,9 @@ public class ConfigController {
             if ((priSeq == null || priSeq.isBlank()) && existing.priSeqSet) {
                 parsed.priSeq = existing.priSeq;
                 parsed.priSeqSet = true;
+            }
+            if ((addmod == null || addmod.isBlank()) && !existing.incrFields.isEmpty()) {
+                parsed.incrFields = existing.incrFields;
             }
         }
         String line = Rules.toLegacyLine(parsed, true);

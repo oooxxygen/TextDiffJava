@@ -24,7 +24,7 @@ public final class Rules {
 
     private static final String[] EXT_KEYS = {
             "KEYSEQ", "OMITSEQ", "IGNORESEQ", "DELIM", "ENCA", "ENCB",
-            "SRCA", "SRCB", "TRAILER", "REPLACE", "COLS", "MTIME", "PRISEQ"
+            "SRCA", "SRCB", "TRAILER", "REPLACE", "COLS", "MTIME", "PRISEQ", "ADDMOD"
     };
     private static final Pattern TOKEN_SPLIT =
             Pattern.compile(":(?=(?:" + String.join("|", EXT_KEYS) + ")=)");
@@ -44,8 +44,29 @@ public final class Rules {
         return new ArrayList<>(out);
     }
 
-    /** 解析单行配置为 CompareConfig（兼容最小基线与扩展全字段两种文本）。 */
-    public static CompareConfig parseLegacy(String text, String delimiter, String trailerPrefix) {
+    /** "2,5" -> [1,4]（1-based 转 0-based，保持配置顺序、去重）。增量过滤栏位 ADDMOD=。 */
+    public static List<Integer> parseAddmod(String value) {
+        if (value == null || value.isBlank()) throw new IllegalArgumentException("ADDMOD 不能为空: " + value);
+        List<Integer> out = new ArrayList<>();
+        for (String tok : value.split(",")) {
+            tok = tok.strip();
+            if (tok.isEmpty()) continue;
+            int n = Integer.parseInt(tok);
+            if (n < 1) throw new IllegalArgumentException("ADDMOD 栏位号必须 >= 1: " + tok);
+            if (!out.contains(n - 1)) out.add(n - 1);
+        }
+        if (out.isEmpty()) throw new IllegalArgumentException("ADDMOD 不能为空: " + value);
+        return out;
+    }
+
+    /** [1,4] -> "2,5"（0-based 转 1-based 逗号串）。 */
+    public static String addmod1based(List<Integer> fields) {
+        List<String> out = new ArrayList<>();
+        for (int f : fields) out.add(String.valueOf(f + 1));
+        return String.join(",", out);
+    }
+
+    /** 解析单行配置为 CompareConfig（兼容最小基线与扩展全字段两种文本）。 */    public static CompareConfig parseLegacy(String text, String delimiter, String trailerPrefix) {
         text = text.strip();
         if (text.startsWith("=>")) text = text.substring(2).strip();
 
@@ -83,6 +104,7 @@ public final class Rules {
                     cfg.priSeq = n;
                     cfg.priSeqSet = true;
                 }
+                case "ADDMOD" -> cfg.incrFields = parseAddmod(value.strip());
                 default -> { /* MTIME 等忽略 */ }
             }
         }
@@ -107,6 +129,7 @@ public final class Rules {
             if (!cfg.replaceRules.isEmpty()) parts.add("REPLACE=" + encodeReplace(cfg.replaceRules));
             if (!cfg.columnNames.isEmpty()) parts.add("COLS=" + encodeStringList(cfg.columnNames));
             if (cfg.priSeqSet) parts.add("PRISEQ=" + cfg.priSeq); // 仅显式配置写回（缺省 5 不落行）
+            if (!cfg.incrFields.isEmpty()) parts.add("ADDMOD=" + addmod1based(cfg.incrFields));
         }
         return String.join(":", parts);
     }

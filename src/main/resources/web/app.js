@@ -648,6 +648,7 @@ const ConfigPanel = {
       form.key_seq = seqToStr(c.key_columns);
       form.omit_seq = seqToStr(c.omit_columns);
       form.pri_seq = c.pri_seq || "";
+      form.addmod = c.addmod || "";
       form.replace_rules_text = rrToText(c.replace_rules);
       columnNames.value = c.column_names || [];
     }
@@ -668,6 +669,7 @@ const ConfigPanel = {
         source_a: form.source_a || null, source_b: form.source_b || null,
         key_seq: form.key_seq || null, omit_seq: form.omit_seq || null,
         pri_seq: form.pri_seq || null,
+        addmod: form.addmod || null,
         // 透传列名，确保重跑结果与正常发起一致地显示列名
         column_names: columnNames.value && columnNames.value.length ? columnNames.value : null,
       };
@@ -771,6 +773,8 @@ const ConfigPanel = {
             <option value="">默认（5）</option>
             <option v-for="n in [1,2,3,4,5]" :key="n" :value="String(n)">{{ n }}</option>
           </select></div>
+        <div class="field mono"><label>增量过滤 ADDMOD（1-based 栏位，逗号分隔）</label>
+          <input v-model="form.addmod" :readonly="!editing" placeholder="如 2,5；留空 = 全量对比" /></div>
       </div>
       <div class="field mono" style="margin-top:12px;">
         <label>按列正则替换（JSON，列 1-based）</label>
@@ -856,9 +860,18 @@ const ResultView = {
       } catch (e) { notify("评议保存失败: " + e.message, "error"); }
     }
 
+    // ---- 主键重复 TOP10（排查面板）与增量过滤统计 ----
+    const dupTopA = computed(() => (summary.value || {}).dup_top_a || []);
+    const dupTopB = computed(() => (summary.value || {}).dup_top_b || []);
+    const incrText = computed(() => {
+      const inc = meta.value && meta.value.incr;
+      if (!inc) return "";
+      const vals = (inc.values || []).filter(v => v && v.trim()).join(" & ");
+      return "栏位 " + (inc.fields || []).join(",") + (vals ? " = " + vals : "");
+    });
+
     const trailerChips = computed(() => {
-      const tf = (summary.value && summary.value.trailer_fields) || {};
-      return Object.keys(tf).map(k => ({ key: k, ...tf[k] }));
+      const tf = (summary.value && summary.value.trailer_fields) || {};      return Object.keys(tf).map(k => ({ key: k, ...tf[k] }));
     });
 
     // 差异列差异度：列出全部有差异的列，按频次降序（freq 键经 JSON 后为字符串），附列名
@@ -912,6 +925,7 @@ const ResultView = {
 
     return { meta, summary, zoneCounts, error, skipSet, columnNames, trailerChips,
              diffConcentration, concList, concShown, loadMoreConc,
+             dupTopA, dupTopB, incrText,
              ai, aiHtml, runAnalyze, exportUrl, onRerun, fmtTime, fmtDur, editLabel, backText,
              sourceA, sourceB, goBack: () => emit("back"),
              notes, zoneNoteCounts, notesNonce, globalQ, globalApplied, globalNonce,
@@ -930,6 +944,8 @@ const ResultView = {
           <span class="group-badge" v-if="meta.label" :title="meta.label">🏷 {{ meta.label }}</span>
           <button class="mini-btn" @click="editLabel">{{ meta.label ? '改标签' : '加标签' }}</button>
           <span class="badge-status" :class="meta.status">{{ meta.status }}</span>
+          <span v-if="meta.incr_state" class="badge-incr" :class="{ 'incr-empty': meta.incr_state === '增量-空文本' }"
+                title="增量过滤（ADDMOD）已生效：仅对比条件命中的行">⤴ {{ meta.incr_state }}</span>
           <span v-if="meta.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
         </template>
         <template #actions>
@@ -937,6 +953,22 @@ const ResultView = {
              title="将三个数据分区（差异/未匹配/完全匹配）合并导出为单个 Excel（含概览/评议note，单元格全文本）">⬇ 全部导出 Excel</a>
         </template>
       </PageHeader>
+      <!-- 主键重复 TOP10 排查面板：A/B 侧各列前 10 个重复键值与次数 -->
+      <div class="card dup-card" v-if="meta.key_warning && (dupTopA.length || dupTopB.length)">
+        <div class="card-head">⚠ 重复键 TOP10（主键唯一性检测 · 供排查主键配置）</div>
+        <div class="card-body dup-panel">
+          <div class="dup-col">
+            <div class="dup-title">{{ sourceA }} 侧重复键</div>
+            <div class="dup-item" v-for="d in dupTopA" :key="'a' + d.key"><code>{{ d.key }}</code><span class="cnt">{{ d.count }} 次</span></div>
+            <div class="empty" v-if="!dupTopA.length">无</div>
+          </div>
+          <div class="dup-col">
+            <div class="dup-title">{{ sourceB }} 侧重复键</div>
+            <div class="dup-item" v-for="d in dupTopB" :key="'b' + d.key"><code>{{ d.key }}</code><span class="cnt">{{ d.count }} 次</span></div>
+            <div class="empty" v-if="!dupTopB.length">无</div>
+          </div>
+        </div>
+      </div>
       <!-- 运行中 -->
       <div class="card" v-if="meta.status === 'running' || meta.status === 'pending'">
         <div class="card-body">
@@ -979,6 +1011,7 @@ const ResultView = {
               </button>
             </div>
           </div>
+          <div class="incr-line" v-if="meta.incr">⤴ 增量过滤（{{ incrText }}）：{{ sourceA }} {{ meta.incr.a_before }}→{{ meta.incr.a_after }} 行 · {{ sourceB }} {{ meta.incr.b_before }}→{{ meta.incr.b_after }} 行</div>
           <div style="margin-top:12px; font-size:12px; color:var(--text-soft);">
             触发时间 {{ fmtTime(meta.created_at) }} · 完成时间 {{ fmtTime(meta.finished_at) }}<span v-if="meta.started_at && meta.finished_at"> · ⏱ 耗时 {{ fmtDur(meta.finished_at - meta.started_at) }}</span><span v-if="meta.locked"> · 🔒 已锁定</span><br/>
             编码 {{ sourceA }}={{ meta.detected_encoding_a }} · {{ sourceB }}={{ meta.detected_encoding_b }}
@@ -1040,8 +1073,81 @@ const ResultView = {
 };
 
 /* ---------- 提交表单 ---------- */
+/* 增量条件模态框（ADDMOD）：逐文本填过滤条件值，50 条/页，单行可应用到全部（按栏位号匹配复制）。 */
+const IncrCondModal = {
+  props: ["rows"], // [{nickname, file_name, addmod:[2,5]}]
+  emits: ["confirm", "cancel"],
+  setup(props, { emit }) {
+    const conds = ref(props.rows.map(() => [])); // 每行与该行 addmod 顺序对齐的值数组
+    const page = ref(1);
+    const pageSize = 50;
+    const totalPages = computed(() => Math.max(1, Math.ceil(props.rows.length / pageSize)));
+    const pageRows = computed(() => props.rows
+        .map((r, i) => ({ ...r, idx: i }))
+        .slice((page.value - 1) * pageSize, page.value * pageSize));
+    const enabledCount = computed(() => conds.value.filter(c => (c || []).some(v => v && v.trim())).length);
+    const val = (ri, fi) => ((conds.value[ri] || [])[fi]) || "";
+    const setVal = (ri, fi, v) => {
+      if (!conds.value[ri]) conds.value[ri] = [];
+      conds.value[ri][fi] = v;
+    };
+    // 应用到全部：按栏位号匹配复制当前行已填的各列值
+    function applyAll(ri) {
+      const src = props.rows[ri] || {};
+      props.rows.forEach((r, i) => {
+        if (i === ri) return;
+        if (!conds.value[i]) conds.value[i] = [];
+        (src.addmod || []).forEach((f, fi) => {
+          const tfi = (r.addmod || []).indexOf(f);
+          if (tfi >= 0) conds.value[i][tfi] = (conds.value[ri] || [])[fi] || "";
+        });
+      });
+    }
+    function confirm() {
+      emit("confirm", props.rows.map((r, i) => (r.addmod || []).map((f, fi) => val(i, fi).trim())));
+    }
+    return { conds, page, pageSize, totalPages, pageRows, enabledCount, val, setVal, applyAll, confirm };
+  },
+  template: `
+  <div class="modal-mask" @click.self="$emit('cancel')">
+    <div class="modal incr-modal" role="dialog" aria-modal="true">
+      <div class="modal-head">增量过滤条件（ADDMOD）
+        <button class="modal-x" @click="$emit('cancel')" title="取消" aria-label="关闭">✕</button></div>
+      <div class="modal-body">
+        <p class="incr-tip">各栏位条件 <b>同时满足</b> 才保留该行（栏位内逗号分隔多值任一命中）；留空 = 该文本不过滤、按全量对比。本批共 {{ rows.length }} 个文本，启用 {{ enabledCount }} 个。</p>
+        <table class="incr-table">
+          <thead><tr><th style="width:38%;">文本项</th><th>过滤条件值（按栏位）</th><th style="width:86px;"></th></tr></thead>
+          <tbody>
+            <tr v-for="r in pageRows" :key="r.idx">
+              <td class="incr-file"><span class="nick">{{ r.nickname }}</span><code>{{ r.file_name }}</code></td>
+              <td>
+                <span class="incr-cell" v-for="(f, fi) in (r.addmod || [])" :key="f">
+                  <label>栏位{{ f }}</label>
+                  <input :value="val(r.idx, fi)" @input="setVal(r.idx, fi, $event.target.value)"
+                         placeholder="值1,值2" />
+                </span>
+                <span v-if="!(r.addmod || []).length" class="incr-none">（该规则未配置 ADDMOD，全量对比）</span>
+              </td>
+              <td><button class="mini-btn" @click="applyAll(r.idx)" title="把本行已填的各栏位值复制到全部文本">应用到全部</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="zone-pager" v-if="totalPages > 1">
+          <button class="mini-btn" :disabled="page <= 1" @click="page--">‹ 上一页</button>
+          <span>第 {{ page }} / {{ totalPages }} 页（每页 {{ pageSize }} 条）</span>
+          <button class="mini-btn" :disabled="page >= totalPages" @click="page++">下一页 ›</button>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" @click="$emit('cancel')">取消</button>
+        <button class="btn primary" @click="confirm">确认提交（增量 {{ enabledCount }} / {{ rows.length }}）</button>
+      </div>
+    </div>
+  </div>`,
+};
+
 const SubmitForm = {
-  components: { SeqField },
+  components: { SeqField, IncrCondModal },
   props: ["encodings", "ctis"],
   emits: ["submitted", "batched"],
   setup(props, { emit }) {
@@ -1053,7 +1159,7 @@ const SubmitForm = {
       nickname: "", delimiter: " | ", trailer_prefix: "|||||",
       encoding_a: "auto", encoding_b: "auto",
       source_a: "A", source_b: "B",
-      key_seq: "", omit_seq: "", pri_seq: "",
+      key_seq: "", omit_seq: "", pri_seq: "", addmod: "",
       replace_rules_text: "",
       batch_config_file: "__all__",
       column_names: [],
@@ -1061,6 +1167,13 @@ const SubmitForm = {
     });
     const uploadsA = ref([]); const uploadsB = ref([]);
     const busy = ref(false); const err = ref(""); const toast = ref("");
+    // 增量条件模态框状态（open 时由 IncrCondModal 渲染，confirm/cancel 经 resolve 回到提交流程）
+    const incrModal = reactive({ open: false, rows: [], resolve: null });
+    function openIncrModal(rows) {
+      return new Promise(resolve => { incrModal.rows = rows; incrModal.open = true; incrModal.resolve = resolve; });
+    }
+    function onIncrConfirm(conds) { incrModal.open = false; if (incrModal.resolve) incrModal.resolve(conds); incrModal.resolve = null; }
+    function onIncrCancel() { incrModal.open = false; if (incrModal.resolve) incrModal.resolve(null); incrModal.resolve = null; }
     // 配置选择/搜索
     const cfgQuery = ref(""); const cfgResults = ref([]); const cfgFiles = ref([]);
     const saved = reactive({ open: false, nickname: "", files: [], viewing: "", content: "" });
@@ -1077,6 +1190,7 @@ const SubmitForm = {
       form.key_seq = seqToStr(c.key_columns);
       form.omit_seq = seqToStr(c.omit_columns);
       form.pri_seq = c.pri_seq || "";
+      form.addmod = c.addmod || "";
       if (c.delimiter) form.delimiter = c.delimiter;
       form.column_names = c.column_names || [];   // 携带列名映射
       form.config_text = "";
@@ -1097,6 +1211,7 @@ const SubmitForm = {
           delimiter: form.delimiter, encoding_a: form.encoding_a, encoding_b: form.encoding_b,
           trailer_prefix: form.trailer_prefix,
           key_seq: form.key_seq, omit_seq: form.omit_seq || null, pri_seq: form.pri_seq || null,
+          addmod: form.addmod || null,
         };
         if (form.replace_rules_text.trim()) body.replace_rules = JSON.parse(form.replace_rules_text);
         const r = await jpost("/api/configs", body);
@@ -1144,6 +1259,7 @@ const SubmitForm = {
         source_a: form.source_a || null, source_b: form.source_b || null,
         key_seq: form.key_seq || null, omit_seq: form.omit_seq || null,
         pri_seq: form.pri_seq || null,
+        addmod: form.addmod || null,
         column_names: (form.column_names && form.column_names.length) ? form.column_names : null,
         label: form.label || null,
         kind: props.ctis ? "ctis" : null,
@@ -1178,12 +1294,34 @@ const SubmitForm = {
             p.nickname = form.nickname || null; p.file_glob = form.file_glob || "*";
             p.key_seq = form.key_seq || null; p.omit_seq = form.omit_seq || null;
             p.pri_seq = form.pri_seq || null;
+            p.addmod = form.addmod || null;
             if (!form.key_seq) throw new Error("请填写主键序列（或选择「全部配置」/一个配置文件）");
+          }
+          // 增量对比（ADDMOD）：先 dry-run 配对预览，任一文本配置了 ADDMOD 才弹条件模态框
+          const pv = await jpost("/api/batch-preview", p);
+          if ((pv.pairs || []).some(x => (x.addmod || []).length)) {
+            const conds = await openIncrModal(pv.pairs);
+            if (conds === null) { busy.value = false; return; } // 用户取消
+            p.incr_conds = conds;
           }
           const r = await jpost("/api/batch-compare", p);
           emit("batched", r.batch_id);
         } else {
-          const r = await jpost("/api/compare", buildPayload());
+          const p = buildPayload();
+          // 增量对比（ADDMOD）：内联规则声明了 ADDMOD 即弹条件模态框（每文件对一行）
+          if (form.addmod && form.addmod.trim()) {
+            const fields = form.addmod.split(",").map(s => parseInt(s.trim(), 10)).filter(n => n >= 1);
+            const base = (form.path_a || (uploadsA.value[0] && uploadsA.value[0].path) || "").split(/[\\/]/).pop();
+            const rows = p.pairs.map(pr => ({
+              nickname: form.nickname || "JOB",
+              file_name: (pr.a || "").split(/[\\/]/).pop() || base,
+              addmod: fields,
+            }));
+            const conds = await openIncrModal(rows);
+            if (conds === null) { busy.value = false; return; }
+            p.incr_conds = conds;
+          }
+          const r = await jpost("/api/compare", p);
           emit("submitted", r.job_ids);
         }
       } catch (e) { err.value = e.message; }
@@ -1191,6 +1329,7 @@ const SubmitForm = {
     }
 
     return { form, uploadsA, uploadsB, busy, err, toast, parseConfig, uploadFiles, submit,
+             incrModal, onIncrConfirm, onIncrCancel,
              cfgQuery, cfgResults, cfgFiles, saved, searchConfigs, pickConfig, saveConfig, viewSavedFile };
   },
   template: `
@@ -1279,6 +1418,8 @@ const SubmitForm = {
               <option value="">默认（5）</option>
               <option v-for="n in [1,2,3,4,5]" :key="n" :value="String(n)">{{ n }}</option>
             </select></div>
+          <div class="field mono"><label>增量过滤 ADDMOD（1-based 栏位，逗号分隔）</label>
+            <input v-model="form.addmod" placeholder="如 2,5；留空 = 全量对比" /></div>
         </div>
         <div class="field mono" style="margin-top:14px;">
           <label>按列正则替换（可选，JSON：{"6": [["\\\\s",""]]}，列为 1-based）</label>
@@ -1301,6 +1442,10 @@ const SubmitForm = {
       </div>
     </div></div>
     <div class="toast" v-if="toast">{{ toast }}</div>
+
+    <!-- 增量条件模态框（ADDMOD 提交前确认） -->
+    <IncrCondModal v-if="incrModal.open" :rows="incrModal.rows"
+                   @confirm="onIncrConfirm" @cancel="onIncrCancel" />
 
     <!-- 保存成功弹框：列出已写入文件，可点击查看 -->
     <div class="modal-mask" v-if="saved.open" @click.self="saved.open=false">
@@ -1513,7 +1658,7 @@ const JobList = {
           <input class="row-check" type="checkbox" :checked="isJobSel(j.job_id)" @click.stop="toggleJob(j.job_id)" />
           <span class="jid">{{ j.job_id }}</span>
           <span class="group-badge" v-if="(j.config||{}).group">{{ j.config.group }}</span>
-          <span class="badge-status" :class="j.status">{{ j.status }}</span><span v-if="j.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
+          <span class="badge-status" :class="j.status">{{ j.status }}</span><span v-if="j.incr_state" class="badge-incr" :class="{ 'incr-empty': j.incr_state === '增量-空文本' }" title="增量过滤（ADDMOD）已生效">⤴ {{ j.incr_state }}</span><span v-if="j.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
           <span class="files">{{ j.file_a }} ↔ {{ j.file_b }}</span>
           <span class="group-badge" v-if="j.label" :title="j.label">🏷 {{ j.label }}</span>
           <span class="meta-time">{{ fmtTime(j.created_at) }}</span>
@@ -1684,7 +1829,7 @@ const BatchView = {
           <span class="nick-badge" v-if="nickOf(c)" :title="'配置昵称 ' + nickOf(c)">{{ nickOf(c) }}</span>
           <span class="jid">{{ baseName(c.file_a) }}</span>
           <span class="group-badge" v-if="(c.config||{}).group">{{ c.config.group }}</span>
-          <span class="badge-status" :class="c.status">{{ c.status }}</span><span v-if="c.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
+          <span class="badge-status" :class="c.status">{{ c.status }}</span><span v-if="c.incr_state" class="badge-incr" :class="{ 'incr-empty': c.incr_state === '增量-空文本' }" title="增量过滤（ADDMOD）已生效">⤴ {{ c.incr_state }}</span><span v-if="c.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
           <span v-if="c.summary" class="badge-grade" :class="gradeOf(c.summary.total_a, c.summary.total_b).cls" :title="'状态情况：数量差 ' + gradeOf(c.summary.total_a, c.summary.total_b).diff + '（偏离 ' + gradeOf(c.summary.total_a, c.summary.total_b).pct + '%）'">{{ gradeOf(c.summary.total_a, c.summary.total_b).label }}</span>
           <span class="count" v-if="c.summary">匹配 {{ c.summary.equal }} · 差异 <b style="color:var(--diff-bar)">{{ c.summary.diff }}</b> · 缺失 {{ c.summary.only_a + c.summary.only_b }}（{{ srcA(c.config) }}有{{ srcB(c.config) }}无 {{ c.summary.only_a }} / {{ srcB(c.config) }}有{{ srcA(c.config) }}无 {{ c.summary.only_b }}）</span>
           <span class="lock-ico" v-if="c.locked" title="已锁定">🔒</span>

@@ -678,3 +678,30 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .conc-num { width: 96px; }
   .zone-toolbar .zone-search { width: 120px; }
 }
+
+/* ---- 增量过滤（ADDMOD）---- */
+.badge-incr { background: #fff7ed; color: #c2410c; border: 1px solid #fdba74; border-radius: 10px;
+  padding: 1px 8px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.badge-incr.incr-empty { background: #f1f5f9; color: #64748b; border-color: #cbd5e1; }
+.incr-modal { width: min(920px, 94vw); }
+.incr-tip { margin: 0 0 10px; font-size: 13px; color: var(--text-soft); }
+.incr-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.incr-table th, .incr-table td { border-bottom: 1px solid var(--border); padding: 7px 8px; text-align: left; vertical-align: middle; }
+.incr-table th { color: var(--text-soft); font-weight: 600; background: var(--surface-2, #f8fafc); }
+.incr-file .nick { display: inline-block; margin-right: 8px; color: var(--text-soft); }
+.incr-cell { display: inline-flex; align-items: center; gap: 4px; margin-right: 14px; }
+.incr-cell label { font-size: 12px; color: var(--text-soft); }
+.incr-cell input { width: 150px; }
+.incr-none { color: var(--text-soft); font-size: 12px; }
+.incr-line { margin-top: 12px; font-size: 13px; color: #c2410c; background: #fff7ed;
+  border: 1px solid #fdba74; border-radius: 6px; padding: 6px 10px; display: inline-block; }
+
+/* ---- 主键重复 TOP10 排查面板 ---- */
+.dup-card { border-color: #fca5a5; }
+.dup-panel { display: flex; gap: 24px; flex-wrap: wrap; }
+.dup-col { flex: 1 1 280px; min-width: 240px; }
+.dup-title { font-weight: 600; margin-bottom: 6px; }
+.dup-item { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0;
+  border-bottom: 1px dashed var(--border); font-size: 13px; }
+.dup-item code { overflow-wrap: anywhere; }
+.dup-item .cnt { color: #dc2626; white-space: nowrap; }

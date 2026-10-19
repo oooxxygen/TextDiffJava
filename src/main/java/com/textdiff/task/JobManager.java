@@ -109,16 +109,57 @@ public final class JobManager implements AutoCloseable {
 
     /** 目录模式批次：每行配置一条规则，glob 配对 dirA/dirB 同名文件 → 多作业。返回批次。 */
     public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines) throws IOException {
-        return createBatch(dirA, dirB, configLines, null);
+        return createBatch(dirA, dirB, configLines, null, null);
+    }
+
+    public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines, String kind) throws IOException {
+        return createBatch(dirA, dirB, configLines, kind, null);
+    }
+
+    /** 提交前 dry-run 配对预览：与 {@link #createBatch} 完全相同的配对顺序，不建批次不派作业。
+     *  返回项：nickname / file_name / file_a / file_b / addmod（1-based 栏位列表，未配置为空表）。 */
+    public List<Map<String, Object>> previewPairs(Path dirA, Path dirB, List<String> configLines) throws IOException {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (String line : configLines) {
+            if (line.strip().isEmpty() || line.strip().startsWith("#")) continue;
+            CompareConfig cfg = Rules.parseLegacy(line, DEFAULT_DELIM, DEFAULT_TRAILER);
+            List<Integer> addmod = cfg.incrFields.stream().map(f -> f + 1).toList();
+            for (String[] pair : Rules.pairFiles(dirA, dirB, cfg.fileGlob)) {
+                out.add(pairView(cfg, Path.of(pair[0]).getFileName().toString(), pair[0], pair[1], addmod));
+            }
+            var gzA = gzipByLogical(dirA, cfg.fileGlob);
+            var gzB = gzipByLogical(dirB, cfg.fileGlob);
+            for (Map.Entry<String, List<Path>> entry : gzA.entrySet()) {
+                List<Path> bs = gzB.get(entry.getKey());
+                if (bs == null) continue;
+                List<Path> as = entry.getValue();
+                out.add(pairView(cfg, entry.getKey(), as.get(as.size() - 1).toString(),
+                        bs.get(bs.size() - 1).toString(), addmod));
+            }
+        }
+        return out;
+    }
+
+    private static Map<String, Object> pairView(CompareConfig cfg, String fileName,
+                                                String fileA, String fileB, List<Integer> addmod) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("nickname", cfg.nickname);
+        m.put("file_name", fileName);
+        m.put("file_a", fileA);
+        m.put("file_b", fileB);
+        m.put("addmod", addmod);
+        return m;
     }
 
     /**
-     * 目录模式批次（压缩感知）。kind 非空（如 "ctis"）时作为批次/作业类型标记，路由与展示用。
+     * 目录模式批次（压缩感知 + 增量条件）。kind 非空（如 "ctis"）时作为批次/作业类型标记，路由与展示用。
+     * incrConds 与配对顺序一一对应（同 {@link #previewPairs} 顺序），逐文本增量条件值落入作业记录；
      * *.gz（含 .YYYYMMDD+1位标识 9 位数字后缀）按逻辑名参与 glob 匹配：匹配到的先解压后对比
      * （预解压池调度，同名多版本按文件名升序解压覆盖、最新生效）；未匹配的逻辑名计入 noRuleFiles；
      * 一条配置在两侧目录（普通文件 + 压缩逻辑名）都未配对出文件 → missingFiles（昵称 · 通配名）。
      */
-    public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines, String kind) throws IOException {
+    public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines, String kind,
+                                   List<List<String>> incrConds) throws IOException {
         String batchId = newId();
         BatchRecord batch = new BatchRecord(batchId,
                 dirA.toAbsolutePath().normalize() + " vs " + dirB.toAbsolutePath().normalize(),
@@ -130,6 +171,7 @@ public final class JobManager implements AutoCloseable {
         List<JobRecord> jobs = new ArrayList<>();
         java.util.Set<String> matched = new java.util.HashSet<>();
         List<String> missingFiles = new ArrayList<>();
+        int pairIdx = 0;
         for (String line : configLines) {
             if (line.strip().isEmpty() || line.strip().startsWith("#")) continue;
             CompareConfig cfg = Rules.parseLegacy(line, DEFAULT_DELIM, DEFAULT_TRAILER);
@@ -145,6 +187,7 @@ public final class JobManager implements AutoCloseable {
                         cfg.nickname + " · " + fileName, configLine, pair[0], pair[1],
                         resultsRoot.resolve(jobId).toAbsolutePath().toString());
                 if (kind != null && !kind.isBlank()) job.jobType = kind;
+                attachIncrCond(job, incrConds, pairIdx++);
                 jobs.add(job);
             }
             // 压缩文件配对：逻辑名匹配 glob；同逻辑名普通文件已存在时压缩版本忽略（普通优先）
@@ -166,6 +209,7 @@ public final class JobManager implements AutoCloseable {
                         cfg.nickname + " · " + entry.getKey(), configLine, repA, repB,
                         resultsRoot.resolve(jobId).toAbsolutePath().toString());
                 if (kind != null && !kind.isBlank()) job.jobType = kind;
+                attachIncrCond(job, incrConds, pairIdx++);
                 jobs.add(job);
             }
             if (pairsForCfg == 0) missingFiles.add(cfg.nickname + " · " + cfg.fileGlob);
@@ -179,6 +223,16 @@ public final class JobManager implements AutoCloseable {
             submit(job);
         }
         return batch;
+    }
+
+    /** 附加该文本的增量条件值（非空才落记录；对应规则未配 ADDMOD 时存储但过滤自然不启用）。 */
+    private static void attachIncrCond(JobRecord job, List<List<String>> incrConds, int pairIdx) {
+        if (incrConds == null || pairIdx >= incrConds.size()) return;
+        List<String> cond = incrConds.get(pairIdx);
+        if (cond == null || cond.isEmpty()) return;
+        if (cond.stream().anyMatch(c -> c != null && !c.isBlank())) {
+            job.incrCond = Json.write(cond);
+        }
     }
 
     /** 目录内 *.gz 按逻辑名分组（文件名升序），仅保留逻辑名匹配 glob 且无同名普通文件的组。 */
@@ -205,21 +259,24 @@ public final class JobManager implements AutoCloseable {
 
     /** 上传模式批次：调用方已确定文件对（M3 multipart 落盘后调用）。 */
     public BatchRecord createBatchFromPairs(String label, List<String[]> pairs) throws IOException {
-        return createBatchFromPairs(label, pairs, null);
+        return createBatchFromPairs(label, pairs, null, null);
     }
 
-    /** 直连模式批次（kind 非空时作为批次/作业类型标记，如 "ctis"）。 */
-    public BatchRecord createBatchFromPairs(String label, List<String[]> pairs, String kind) throws IOException {
+    /** 直连模式批次（kind 非空时作为批次/作业类型标记，如 "ctis"；incrConds 与 pairs 对齐）。 */
+    public BatchRecord createBatchFromPairs(String label, List<String[]> pairs, String kind,
+                                            List<List<String>> incrConds) throws IOException {
         String batchId = newId();
         BatchRecord batch = new BatchRecord(batchId, label, null, null, "upload", pairs.size());
         if (kind != null && !kind.isBlank()) batch.batchType = kind;
         store.saveBatch(batch);
+        int pairIdx = 0;
         for (String[] p : pairs) {
             // p = {configLine, fileA, fileB, nickname}
             String jobId = newId();
             JobRecord job = new JobRecord(jobId, batchId, p[3], p[0], p[1], p[2],
                     resultsRoot.resolve(jobId).toAbsolutePath().toString());
             if (kind != null && !kind.isBlank()) job.jobType = kind;
+            attachIncrCond(job, incrConds, pairIdx++);
             store.saveJob(job);
             submit(job);
         }
@@ -319,26 +376,43 @@ public final class JobManager implements AutoCloseable {
                 Path inputB = resolveInput(job, job.fileB);
                 com.textdiff.engine.FieldTranscoder transA = resolveTranscoder(inputA.toString(), cfg.encodingA, cfg.delimiter);
                 com.textdiff.engine.FieldTranscoder transB = resolveTranscoder(inputB.toString(), cfg.encodingB, cfg.delimiter);
-                CompareOutcome outcome = Comparator.compareFiles(inputA, inputB,
-                        cfg, sink, inMemoryBudget(), dir.resolve("tmp"), transA, transB);
-                Summary s = outcome.summary();
-                // 统计快照落作业记录：列表/批次视图不再逐作业读 meta.json（前端轮询与批次页的主要磁盘开销）
-                job.diffCount = s.diff;
-                job.totalA = s.totalA;
-                job.totalB = s.totalB;
-                job.equalCount = s.equal;
-                job.onlyACount = s.onlyA;
-                job.onlyBCount = s.onlyB;
-                job.keyWarning = s.keyDupA > 0 || s.keyDupB > 0; // 需求：主键配置错误醒目提示
-                ResultFiles.writeSummary(dir, s);
-                job.aiStatus = "pending"; // M5 AI 分析器消费 pending 状态
-                JobMeta meta = ResultFiles.buildMeta(job,
-                        outcome.detectedEncodingA(), outcome.detectedEncodingB(), s);
-                meta.zoneEqual = sink.zoneEqual;
-                meta.zoneDiff = sink.zoneDiff;
-                meta.zoneUnmatched = sink.zoneUnmatched;
-                meta.zoneTrailer = sink.zoneTrailer;
-                ResultFiles.writeMeta(dir, meta);
+                // 增量过滤（ADDMOD）：解压后、正式对比前，按提交条件值重组源文本（转码器仍绑定原始路径解析）
+                List<String> incrConds = parseIncrCond(job);
+                com.textdiff.engine.IncrFilter.Result incr = null;
+                if (com.textdiff.engine.IncrFilter.enabled(cfg, incrConds)) {
+                    incr = com.textdiff.engine.IncrFilter.apply(inputA, inputB, cfg, incrConds, dir.resolve("tmp"));
+                    job.incrState = incr.aAfter() == 0 && incr.bAfter() == 0 ? "增量-空文本" : "增量";
+                }
+                try {
+                    CompareOutcome outcome = Comparator.compareFiles(
+                            incr != null ? incr.filteredA() : inputA,
+                            incr != null ? incr.filteredB() : inputB,
+                            cfg, sink, inMemoryBudget(), dir.resolve("tmp"), transA, transB);
+                    Summary s = outcome.summary();
+                    // 统计快照落作业记录：列表/批次视图不再逐作业读 meta.json（前端轮询与批次页的主要磁盘开销）
+                    job.diffCount = s.diff;
+                    job.totalA = s.totalA;
+                    job.totalB = s.totalB;
+                    job.equalCount = s.equal;
+                    job.onlyACount = s.onlyA;
+                    job.onlyBCount = s.onlyB;
+                    job.keyWarning = s.keyDupA > 0 || s.keyDupB > 0; // 需求：主键配置错误醒目提示
+                    ResultFiles.writeSummary(dir, s);
+                    job.aiStatus = "pending"; // M5 AI 分析器消费 pending 状态
+                    JobMeta meta = ResultFiles.buildMeta(job,
+                            outcome.detectedEncodingA(), outcome.detectedEncodingB(), s);
+                    meta.zoneEqual = sink.zoneEqual;
+                    meta.zoneDiff = sink.zoneDiff;
+                    meta.zoneUnmatched = sink.zoneUnmatched;
+                    meta.zoneTrailer = sink.zoneTrailer;
+                    if (incr != null) {
+                        meta.incr = new JobMeta.Incr(cfg.incrFields.stream().map(f -> f + 1).toList(),
+                                incrConds, incr.aBefore(), incr.aAfter(), incr.bBefore(), incr.bAfter());
+                    }
+                    ResultFiles.writeMeta(dir, meta);
+                } finally {
+                    com.textdiff.engine.IncrFilter.cleanup(incr); // 过滤产物即用即删
+                }
             }
             job.status = JobRecord.DONE;
             job.finishedAt = System.currentTimeMillis() / 1000;
@@ -382,6 +456,16 @@ public final class JobManager implements AutoCloseable {
     private Path resolveInput(JobRecord job, String path) {
         if (extractService == null || path == null) return Path.of(path);
         return extractService.resolveInput(job, path);
+    }
+
+    /** 作业持久化的增量条件值（JSON 数组）；未设置返回 null。 */
+    private static List<String> parseIncrCond(JobRecord job) {
+        try {
+            if (job.incrCond == null || job.incrCond.isBlank()) return null;
+            return Json.read(job.incrCond, List.class);
+        } catch (RuntimeException e) {
+            return null; // 条件损坏按未启用处理，不阻断对比
+        }
     }
 
     /** 终止作业：running 尽力中断，pending 直接置 stopped。返回是否产生了状态变更。 */

@@ -31,6 +31,19 @@ public final class Comparator {
         }
     }
 
+    /** 重复键 TOP 统计：仅记录先出现的 10 个键，其后继续累计这些键的次数。 */
+    private static void trackDup(LinkedHashMap<String, Long> dup, String key) {
+        if (dup.size() < Summary.DUP_TOP_CAP || dup.containsKey(key)) {
+            dup.merge(key, 1L, Long::sum);
+        }
+    }
+
+    private static List<Summary.KeyCount> toDupTop(LinkedHashMap<String, Long> dup) {
+        List<Summary.KeyCount> out = new ArrayList<>();
+        for (Map.Entry<String, Long> e : dup.entrySet()) out.add(new Summary.KeyCount(e.getKey(), e.getValue()));
+        return out;
+    }
+
     /** 比对两条记录各列，返回差异列索引（0-based）。一律比原值；omit/ignore 列跳过；长度不齐按空串补。 */
     public static int[] compareCols(String[] aCols, String[] bCols, Rules.RuleEngine engine) {
         int la = aCols.length, lb = bCols.length;
@@ -123,6 +136,8 @@ public final class Comparator {
 
         try (KeyIndex index = new AutoKeyIndex(tmpDir, maxInMemoryBytes);
              KeyIndex bKeys = new AutoKeyIndex(tmpDir, maxInMemoryBytes)) {
+            LinkedHashMap<String, Long> dupA = new LinkedHashMap<>();
+            LinkedHashMap<String, Long> dupB = new LinkedHashMap<>();
             // 阶段 1：建 A 索引；put 前探查以捕获重复键（主键唯一性检测，需求：键应唯一定位一条记录）
             try (Stream<String> la = Encoding.iterLines(pathA, encA, delim)) {
                 for (String[] cols : Parser.parseData(la, delim, tp, trailerA)) {
@@ -132,6 +147,7 @@ public final class Comparator {
                     if (index.get(key) != null) {
                         summary.keyDupA++;
                         addDupSample(summary, key);
+                        trackDup(dupA, key);
                     }
                     index.put(key, cols);
                 }
@@ -146,6 +162,7 @@ public final class Comparator {
                     if (bKeys.get(key) != null) {
                         summary.keyDupB++;
                         addDupSample(summary, key);
+                        trackDup(dupB, key);
                     } else {
                         bKeys.put(key, EMPTY_COLS);
                     }
@@ -175,6 +192,8 @@ public final class Comparator {
                 summary.onlyA++;
             }
             spilled = index.spilled();
+            summary.dupTopA = toDupTop(dupA);
+            summary.dupTopB = toDupTop(dupB);
         }
 
         // 阶段 4：trailer 对比

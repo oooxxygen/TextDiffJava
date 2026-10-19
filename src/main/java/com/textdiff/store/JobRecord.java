@@ -47,10 +47,14 @@ public final class JobRecord {
     public long equalCount = -1;
     public long onlyACount = -1;
     public long onlyBCount = -1;
+    /** 增量过滤条件值（JSON 字符串数组，顺序对应规则 ADDMOD 栏位）；null/空 = 未启用增量。重跑/重试沿用。 */
+    public String incrCond;
+    /** 增量状态标注：null/"" = 未启用；"增量" = 过滤生效；"增量-空文本" = 过滤后两侧均 0 行。 */
+    public String incrState;
 
     public JobRecord() {}
 
-    /** 重跑/重试前清空统计快照，避免运行中展示上一次的旧结果。 */
+    /** 重跑/重试前清空统计快照，避免运行中展示上一次的旧结果。增量状态一并失效（重跑后按条件重算）。 */
     public void clearStats() {
         diffCount = -1;
         totalA = -1;
@@ -58,6 +62,7 @@ public final class JobRecord {
         equalCount = -1;
         onlyACount = -1;
         onlyBCount = -1;
+        incrState = null;
     }
 
     public JobRecord(String id, String batchId, String nickname, String configLine,

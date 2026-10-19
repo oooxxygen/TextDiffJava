@@ -229,6 +229,12 @@ public final class ResultFiles {
             m.keyDupA = s.keyDupA;
             m.keyDupB = s.keyDupB;
             m.dupKeySamples = s.dupKeySamples;
+            if (s.dupTopA != null) {
+                m.dupTopA = s.dupTopA.stream().map(k -> new JobMeta.DupKey(k.key(), k.count())).toList();
+            }
+            if (s.dupTopB != null) {
+                m.dupTopB = s.dupTopB.stream().map(k -> new JobMeta.DupKey(k.key(), k.count())).toList();
+            }
             m.diffColFreq = s.diffColFreq;
             m.recnumCheckA = s.recnumCheckA;
             m.recnumCheckB = s.recnumCheckB;
