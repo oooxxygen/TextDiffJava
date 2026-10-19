@@ -23,40 +23,62 @@ application {
 
 // 启动脚本注入：进程启动时读取 config.ini [jvm] jvm_opts 注入 JVM 参数（CWD 优先，其次 APP_HOME；
 // 均无 = 仅内置缺省；env TEXT_DIFF_JAVA_OPTS/JAVA_OPTS 仍可覆盖）。设置页保存后重启服务生效。
+// 采用行定位而非整段锚点：裸 startScripts（bootJar）与 runtimeZip（beryx 插件自备模板）两种
+// 模板的 exec/eval 行形态不同，逐行定位 DEFAULT_JVM_OPTS 引用点对两者都成立。
 tasks.startScripts {
     doLast {
-        val unixAnchor = "eval \"set -- \$(\n" +
-                "        printf '%s\\n' \"\$DEFAULT_JVM_OPTS \$JAVA_OPTS \$TEXT_DIFF_JAVA_OPTS\" |"
-        val unixBlock = """
-            # JVM 参数注入：读取 config.ini [jvm] jvm_opts（CWD 优先，其次 APP_HOME）
-            CONFIG_JVM_OPTS=""
-            for INI_FILE in "${'$'}PWD/config.ini" "${'$'}APP_HOME/config.ini"; do
-              if [ -f "${'$'}INI_FILE" ]; then
-                CONFIG_JVM_OPTS=${'$'}(sed -n 's/^[[:space:]]*jvm_opts[[:space:]]*=[[:space:]]*//p' "${'$'}INI_FILE" | tail -n 1 | tr -d '\r')
-                [ -n "${'$'}CONFIG_JVM_OPTS" ] && break
-              fi
-            done
-            eval "set -- ${'$'}(
-                    printf '%s\n' "${'$'}DEFAULT_JVM_OPTS ${'$'}CONFIG_JVM_OPTS ${'$'}JAVA_OPTS ${'$'}TEXT_DIFF_JAVA_OPTS" |
-        """.trimIndent()
-        if (!unixScript.readText().contains(unixAnchor)) {
-            throw GradleException("startScripts 注入锚点未匹配（unix 模板已变化），请检查模板")
+        fun fail(kind: String, text: String) {
+            println("==== startScripts $kind 模板全文（注入定位失败诊断） ====")
+            println(text)
+            println("==== 模板全文结束 ====")
+            throw GradleException("startScripts 注入定位失败（$kind 模板已变化）")
         }
-        unixScript.writeText(unixScript.readText().replace(unixAnchor, unixBlock))
 
-        val winAnchor = "\"%JAVA_EXE%\" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %TEXT_DIFF_JAVA_OPTS%  -classpath"
-        val winBlock = """
-            @rem JVM 参数注入：读取 config.ini [jvm] jvm_opts（CWD 优先，其次 APP_HOME；等号两侧可有空格）
-            set "CONFIG_JVM_OPTS="
-            if exist "config.ini" for /f "usebackq eol=# tokens=1,* delims== " %%a in (`findstr /i /b "jvm_opts" "config.ini"`) do set "CONFIG_JVM_OPTS=%%b"
-            if not defined CONFIG_JVM_OPTS if exist "%APP_HOME%\config.ini" for /f "usebackq eol=# tokens=1,* delims== " %%a in (`findstr /i /b "jvm_opts" "%APP_HOME%\config.ini"`) do set "CONFIG_JVM_OPTS=%%b"
-
-            "%JAVA_EXE%" %DEFAULT_JVM_OPTS% %CONFIG_JVM_OPTS% %JAVA_OPTS% %TEXT_DIFF_JAVA_OPTS%  -classpath
-        """.trimIndent()
-        if (!windowsScript.readText().contains(winAnchor)) {
-            throw GradleException("startScripts 注入锚点未匹配（windows 模板已变化），请检查模板")
+        // ---- unix ----
+        run {
+            val text = unixScript.readText()
+            if (text.contains("CONFIG_JVM_OPTS=")) return@run // 已注入（幂等）
+            // 两种模板统一行定位：Gradle 默认模板 = printf '%s\n' "$DEFAULT_JVM_OPTS ...（eval 多行块内）；
+            // beryx runtimeZip 模板 = eval set -- $DEFAULT_JVM_OPTS $CDS_JVM_OPTS ...
+            val lines = text.lines().toMutableList()
+            val idx = lines.indexOfFirst {
+                it.contains("\$DEFAULT_JVM_OPTS") && !it.contains("DEFAULT_JVM_OPTS=")
+                        && (it.contains("printf") || it.contains("eval set --"))
+            }
+            if (idx < 0) fail("unix", text)
+            lines[idx] = lines[idx].replace("\$DEFAULT_JVM_OPTS", "\$DEFAULT_JVM_OPTS \$CONFIG_JVM_OPTS")
+            val block = """
+                |CONFIG_JVM_OPTS=""
+                |for INI_FILE in "${'$'}PWD/config.ini "${'$'}APP_HOME/config.ini"; do
+                |  if [ -f "${'$'}INI_FILE" ]; then
+                |    CONFIG_JVM_OPTS=${'$'}(sed -n 's/^[[:space:]]*jvm_opts[[:space:]]*=[[:space:]]*//p' "${'$'}INI_FILE" | tail -n 1 | tr -d '\r')
+                |    [ -n "${'$'}CONFIG_JVM_OPTS" ] && break
+                |  fi
+                |done
+            """.trimMargin()
+            lines.addAll(idx, block.lines().filter { it.isNotEmpty() })
+            unixScript.writeText(lines.joinToString("\n") + (if (text.endsWith("\n")) "\n" else ""))
         }
-        windowsScript.writeText(windowsScript.readText().replace(winAnchor, winBlock))
+
+        // ---- windows bat ----
+        run {
+            val text = windowsScript.readText()
+            if (text.contains("CONFIG_JVM_OPTS=")) return@run // 已注入（幂等）
+            val lines = text.lines().toMutableList()
+            val idx = lines.indexOfFirst {
+                it.contains("%JAVA_EXE%") && it.contains("%DEFAULT_JVM_OPTS%")
+            }
+            if (idx < 0) fail("windows", text)
+            lines[idx] = lines[idx].replace("%DEFAULT_JVM_OPTS%", "%DEFAULT_JVM_OPTS% %CONFIG_JVM_OPTS%")
+            val block = """
+                |@rem JVM 参数注入：读取 config.ini [jvm] jvm_opts（CWD 优先，其次 APP_HOME；等号两侧可有空格）
+                |set "CONFIG_JVM_OPTS="
+                |if exist "config.ini" for /f "usebackq eol=# tokens=1,* delims== " %%a in (`findstr /i /b "jvm_opts" "config.ini"`) do set "CONFIG_JVM_OPTS=%%b"
+                |if not defined CONFIG_JVM_OPTS if exist "%APP_HOME%\config.ini" for /f "usebackq eol=# tokens=1,* delims== " %%a in (`findstr /i /b "jvm_opts" "%APP_HOME%\config.ini"`) do set "CONFIG_JVM_OPTS=%%b"
+            """.trimMargin()
+            lines.addAll(idx, block.lines().filter { it.isNotEmpty() })
+            windowsScript.writeText(lines.joinToString("\r\n") + (if (text.endsWith("\r\n")) "\r\n" else ""))
+        }
     }
 }
 
