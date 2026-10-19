@@ -2500,7 +2500,7 @@ const REPORT_STATUS = { pending: "待开始", running: "进行中", done: "已�
 const ReportRowRec = {
   props: ["row", "sourceA", "sourceB", "section", "fieldNames"],
   setup(props) {
-    const isOpen = ref(props.section !== 'data'); // 表头/表尾块默认展开：全部行一起展示
+    const isOpen = ref(false); // 条目一律默认收起，点击展开（含表头/表尾块）
     const toggle = () => { isOpen.value = !isOpen.value; };
     // 整行原貌（报表业务行 a_raw/b_raw；折行记录含 \n，单格整体渲染）优先，缺省回退栏位切分；
     // 单侧缺失（仅对方有）不得回填对侧内容——B 侧必须显示「无此行」
@@ -2531,18 +2531,9 @@ const ReportRowRec = {
       const a = props.sourceA || "A", b = props.sourceB || "B";
       return { equal: "完全匹配", diff: "部分匹配", unmatched_a: "仅" + a + "有", unmatched_b: "仅" + b + "有" }[s] || s;
     }
-    // 表头/表尾块：整块单柄横向滚动（格内容不再各自出滚动条）；同分区内多块滚动位置联动
+    // 表头/表尾块：整块单柄横向滚动（格内容不再各自出滚动条）；各条目独立滚动，不做跨条目联动
     const isBlock = computed(() => props.section === 'header' || props.section === 'footer');
-    function onHScroll(e) {
-      const el = e.target;
-      if (!el.classList || !el.classList.contains("hscroll")) return;
-      const zb = el.closest(".zone-body");
-      if (!zb) return;
-      zb.querySelectorAll(".rec-body.hscroll").forEach(o => {
-        if (o !== el && o.scrollLeft !== el.scrollLeft) o.scrollLeft = el.scrollLeft;
-      });
-    }
-    return { isOpen, toggle, maxLen, isLine, isFolded, isBlock, showLcol, diffSet, segs, statusLabel, aDisp, bDisp, colName, colLabel, diffLabelText, onHScroll };
+    return { isOpen, toggle, maxLen, isLine, isFolded, isBlock, showLcol, diffSet, segs, statusLabel, aDisp, bDisp, colName, colLabel, diffLabelText };
   },
   template: `
   <div class="rec" :class="['s-' + row.status, isOpen ? 'open' : '']">
@@ -2552,7 +2543,7 @@ const ReportRowRec = {
       <span class="tag" :class="row.status">{{ statusLabel(row.status) }}</span>
       <span class="meta" v-if="row.status==='diff' && row.diff_cols && row.diff_cols.length">{{ showLcol ? '差异栏位: ' + diffLabelText : '内容存在差异' }}</span>
     </div>
-    <div class="rec-body" :class="{ hscroll: isBlock }" v-if="isOpen" @scroll.self="onHScroll">
+    <div class="rec-body" :class="{ hscroll: isBlock }" v-if="isOpen">
       <div class="recgrid" :class="[{ 'with-lcol': showLcol }, { hblock: isBlock }]">
         <template v-if="isLine">
           <div class="ghdr lcol-head" v-if="showLcol">差异栏位</div>
@@ -2573,12 +2564,10 @@ const ReportRowRec = {
           <div class="ghdr">{{ sourceB || 'B' }}<span class="absent-note" v-if="!bDisp.length"> · 无此行</span></div>
           <template v-for="i in maxLen" :key="i">
             <div class="gcell" :class="{ diff: diffSet.has(i-1) }">
-              <span class="ci">{{ i }}</span>
-              <span class="cv"><span v-if="aDisp[i-1] === undefined" class="absent-note">（无此行）</span><span v-else v-for="(s,si) in segs('a', i-1)" :key="si" :class="s.cls">{{ s.text }}</span></span>
+              <template v-if="aDisp.length"><span class="ci">{{ i }}</span><span class="cv"><span v-if="aDisp[i-1] === undefined" class="absent-note">（无此行）</span><span v-else v-for="(s,si) in segs('a', i-1)" :key="si" :class="s.cls">{{ s.text }}</span></span></template>
             </div>
             <div class="gcell" :class="{ diff: diffSet.has(i-1) }">
-              <span class="ci">{{ i }}</span>
-              <span class="cv"><span v-if="bDisp[i-1] === undefined" class="absent-note">（无此行）</span><span v-else v-for="(s,si) in segs('b', i-1)" :key="si" :class="s.cls">{{ s.text }}</span></span>
+              <template v-if="bDisp.length"><span class="ci">{{ i }}</span><span class="cv"><span v-if="bDisp[i-1] === undefined" class="absent-note">（无此行）</span><span v-else v-for="(s,si) in segs('b', i-1)" :key="si" :class="s.cls">{{ s.text }}</span></span></template>
             </div>
           </template>
         </template>
