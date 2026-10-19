@@ -19,8 +19,6 @@ import java.util.stream.Stream;
 public final class Comparator {
     private Comparator() {}
 
-    private static final String[] EMPTY_COLS = new String[0];
-
     static final List<String> KEY_TRAILER_FIELDS = List.of(
             "RecNum", "SysID", "TabName", "Version", "GenTime",
             "CycFlag", "DataStartDate", "DataEndDate");
@@ -134,13 +132,16 @@ public final class Comparator {
         Parser.TrailerData trailerB = new Parser.TrailerData();
         boolean spilled;
 
-        try (KeyIndex index = new AutoKeyIndex(tmpDir, maxInMemoryBytes);
-             KeyIndex bKeys = new AutoKeyIndex(tmpDir, maxInMemoryBytes)) {
+        // 单一合并索引：A 侧行 + B 键标志位（此前 A/B 双表在超大键量下直接内存翻倍，是 OOM 主因之一）
+        try (KeyIndex index = new AutoKeyIndex(tmpDir, maxInMemoryBytes)) {
             LinkedHashMap<String, Long> dupA = new LinkedHashMap<>();
             LinkedHashMap<String, Long> dupB = new LinkedHashMap<>();
             // 阶段 1：建 A 索引；put 前探查以捕获重复键（主键唯一性检测，需求：键应唯一定位一条记录）
-            try (Stream<String> la = Encoding.iterLines(pathA, encA, delim)) {
-                for (String[] cols : Parser.parseData(la, delim, tp, trailerA)) {
+            // 惰性行流：行不整表驻留（parseData 的 List 版本曾是大文件 OOM 总根因）
+            try (Stream<String> la = Encoding.iterLines(pathA, encA, delim);
+                 Stream<String[]> rowsA = Parser.dataRows(la, delim, tp, trailerA)) {
+                for (java.util.Iterator<String[]> it = rowsA.iterator(); it.hasNext(); ) {
+                    String[] cols = it.next();
                     if (transA != null) cols = transA.apply(cols);
                     String key = keyOf(engine, cols);
                     if (key == null) { summary.malformedA++; continue; }
@@ -154,17 +155,18 @@ public final class Comparator {
             }
 
             // 阶段 2：流式比对 B；bKeys 仅存键集，检测 B 侧重复键
-            try (Stream<String> lb = Encoding.iterLines(pathB, encB, delim)) {
-                for (String[] cols : Parser.parseData(lb, delim, tp, trailerB)) {
+            try (Stream<String> lb = Encoding.iterLines(pathB, encB, delim);
+                 Stream<String[]> rowsB = Parser.dataRows(lb, delim, tp, trailerB)) {
+                for (java.util.Iterator<String[]> it = rowsB.iterator(); it.hasNext(); ) {
+                    String[] cols = it.next();
                     if (transB != null) cols = transB.apply(cols);
                     String key = keyOf(engine, cols);
                     if (key == null) { summary.malformedB++; continue; }
-                    if (bKeys.get(key) != null) {
+                    boolean bDup = index.markB(key);
+                    if (bDup) {
                         summary.keyDupB++;
                         addDupSample(summary, key);
                         trackDup(dupB, key);
-                    } else {
-                        bKeys.put(key, EMPTY_COLS);
                     }
                     String[] aCols = index.get(key);
                     if (aCols == null) {

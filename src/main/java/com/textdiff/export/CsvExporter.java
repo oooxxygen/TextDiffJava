@@ -66,60 +66,78 @@ public final class CsvExporter {
     public static void writeFull(Path file, List<RowDiff> rows, List<String> colNames, int width) {
         try (BufferedWriter w = newBomWriter(file)) {
             if (width < 0) width = fullWidth(rows);
-            List<String> names = colNames == null ? List.of() : colNames;
-            w.write("键值,状态,差异栏位");
-            for (int i = 0; i < width; i++) {
-                String name = i < names.size() && !names.get(i).isBlank() ? names.get(i) : "栏位" + (i + 1);
-                w.write("," + escape(name + "(A)") + "," + escape(name + "(B)"));
-            }
-            w.write("\r\n");
-            for (RowDiff r : rows) {
-                w.write(escape(displayKey(r.key)));
-                w.write(',');
-                w.write(escape(r.status));
-                w.write(',');
-                w.write(escape(diffLabel(r, names)));
-                for (int i = 0; i < width; i++) {
-                    String a = r.aCols != null && i < r.aCols.length ? r.aCols[i] : "";
-                    String b = r.bCols != null && i < r.bCols.length ? r.bCols[i] : "";
-                    w.write(',');
-                    w.write(escape(excelSafe(a)));
-                    w.write(',');
-                    w.write(escape(excelSafe(b)));
-                }
-                w.write("\r\n");
-            }
+            writeFullHeader(w, colNames, width);
+            for (RowDiff r : rows) writeFullRow(w, r, colNames, width);
         } catch (IOException e) {
             throw new UncheckedIOException("全量 CSV 导出失败: " + file + " (" + e + ")", e);
         }
     }
 
+    /** 全量 CSV 表头（流式导出按整批宽度统一各分片表头）。 */
+    public static void writeFullHeader(BufferedWriter w, List<String> colNames, int width) throws IOException {
+        List<String> names = colNames == null ? List.of() : colNames;
+        w.write("键值,状态,差异栏位");
+        for (int i = 0; i < width; i++) {
+            String name = i < names.size() && !names.get(i).isBlank() ? names.get(i) : "栏位" + (i + 1);
+            w.write("," + escape(name + "(A)") + "," + escape(name + "(B)"));
+        }
+        w.write("\r\n");
+    }
+
+    /** 全量 CSV 单行（流式导出逐行调用，不驻留列表）。 */
+    public static void writeFullRow(BufferedWriter w, RowDiff r, List<String> colNames, int width) throws IOException {
+        List<String> names = colNames == null ? List.of() : colNames;
+        w.write(escape(displayKey(r.key)));
+        w.write(',');
+        w.write(escape(r.status));
+        w.write(',');
+        w.write(escape(diffLabel(r, names)));
+        for (int i = 0; i < width; i++) {
+            String a = r.aCols != null && i < r.aCols.length ? r.aCols[i] : "";
+            String b = r.bCols != null && i < r.bCols.length ? r.bCols[i] : "";
+            w.write(',');
+            w.write(escape(excelSafe(a)));
+            w.write(',');
+            w.write(escape(excelSafe(b)));
+        }
+        w.write("\r\n");
+    }
+
     /** 差异 CSV：仅 diff 记录，一条字段差异一行（键值/栏位号/栏位名/A 值/B 值）。 */
     public static void writeDiffFields(Path file, List<RowDiff> rows, List<String> colNames) {
         try (BufferedWriter w = newBomWriter(file)) {
-            w.write("键值,栏位号,栏位名,A值,B值\r\n");
-            for (RowDiff r : rows) {
-                if (!Status.DIFF.equals(r.status)) continue;
-                for (int col : r.diffCols) {
-                    String name = colNames != null && col < colNames.size() && !colNames.get(col).isBlank()
-                            ? colNames.get(col) : "栏位" + (col + 1);
-                    String a = r.aCols != null && col < r.aCols.length ? r.aCols[col] : "";
-                    String b = r.bCols != null && col < r.bCols.length ? r.bCols[col] : "";
-                    w.write(escape(displayKey(r.key)));
-                    w.write(',');
-                    w.write(String.valueOf(col + 1));
-                    w.write(',');
-                    w.write(escape(name));
-                    w.write(',');
-                    w.write(escape(excelSafe(a)));
-                    w.write(',');
-                    w.write(escape(excelSafe(b)));
-                    w.write("\r\n");
-                }
-            }
+            writeDiffHeader(w);
+            for (RowDiff r : rows) writeDiffRow(w, r, colNames);
         } catch (IOException e) {
             throw new UncheckedIOException("差异 CSV 导出失败: " + file + " (" + e + ")", e);
         }
+    }
+
+    /** 差异 CSV 表头。 */
+    public static void writeDiffHeader(BufferedWriter w) throws IOException {
+        w.write("键值,栏位号,栏位名,A值,B值\r\n");
+    }
+
+    /** 差异 CSV 单行：非 diff 记录不产出；返回是否写出了内容（空批判断用）。 */
+    public static boolean writeDiffRow(BufferedWriter w, RowDiff r, List<String> colNames) throws IOException {
+        if (!Status.DIFF.equals(r.status) || r.diffCols == null || r.diffCols.length == 0) return false;
+        List<String> names = colNames == null ? List.of() : colNames;
+        for (int col : r.diffCols) {
+            String name = col < names.size() && !names.get(col).isBlank() ? names.get(col) : "栏位" + (col + 1);
+            String a = r.aCols != null && col < r.aCols.length ? r.aCols[col] : "";
+            String b = r.bCols != null && col < r.bCols.length ? r.bCols[col] : "";
+            w.write(escape(displayKey(r.key)));
+            w.write(',');
+            w.write(String.valueOf(col + 1));
+            w.write(',');
+            w.write(escape(name));
+            w.write(',');
+            w.write(escape(excelSafe(a)));
+            w.write(',');
+            w.write(escape(excelSafe(b)));
+            w.write("\r\n");
+        }
+        return true;
     }
 
     public static String escape(String v) {
@@ -130,7 +148,8 @@ public final class CsvExporter {
         return v;
     }
 
-    private static BufferedWriter newBomWriter(Path file) throws IOException {
+    /** UTF-8 BOM 写入器（导出装配流式分片共用）。 */
+    static BufferedWriter newBomWriter(Path file) throws IOException {
         Files.createDirectories(file.getParent());
         var out = Files.newBufferedWriter(file, StandardCharsets.UTF_8);
         out.write('\ufeff');

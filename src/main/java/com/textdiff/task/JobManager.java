@@ -45,6 +45,8 @@ public final class JobManager implements AutoCloseable {
     private final long maxInMemoryBytes;
     private final java.util.concurrent.ThreadPoolExecutor pool;
     private final ScheduledExecutorService commandPoller;
+    /** 批次建档单线程执行器：createBatchAsync 的配对/建档在后台串行完成，提交请求立即返回。 */
+    private final java.util.concurrent.ExecutorService preparePool;
     private final ConcurrentMap<String, PrioritizedRunnable> tasks = new ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicLong submitSeq = new java.util.concurrent.atomic.AtomicLong();
     /** 压缩文件预解压服务（装配时注入；null = 不启用，运行时兜底同步解压）。 */
@@ -84,6 +86,11 @@ public final class JobManager implements AutoCloseable {
                     t.setDaemon(true);
                     return t;
                 });
+        this.preparePool = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "batch-prepare");
+            t.setDaemon(true);
+            return t;
+        });
         this.commandPoller = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "command-poller");
             t.setDaemon(true);
@@ -91,7 +98,23 @@ public final class JobManager implements AutoCloseable {
         });
         this.commandPoller.scheduleWithFixedDelay(this::drainCommands,
                 COMMAND_POLL_SECONDS, COMMAND_POLL_SECONDS, TimeUnit.SECONDS);
-        requeueStuckJobs();
+    }
+
+    /**
+     * 启动恢复：把中断残留的 running/pending 作业重新入队。必须在装配完成（extractService/reportRunner/
+     * customRunner 已挂载）后调用——构造器内恢复曾导致压缩作业在解压服务挂载前被直接对比 .gz 原文件。
+     */
+    public void start() {
+        int resumed = 0;
+        for (JobRecord job : store.listJobs(null)) {
+            if (JobRecord.RUNNING.equals(job.status) || JobRecord.PENDING.equals(job.status)) {
+                job.status = JobRecord.PENDING;
+                store.saveJob(job);
+                submit(job); // 报表作业经 submit 路由到 reportRunner
+                resumed++;
+            }
+        }
+        if (resumed > 0) System.out.println("[job] 重启恢复：重新入队 " + resumed + " 个中断作业");
     }
 
     /** 对比并发度热更新：主对比线程池运行时重调大小（设置页保存即生效）。缩容先降 core，扩容先升 max。 */
@@ -116,20 +139,24 @@ public final class JobManager implements AutoCloseable {
         return createBatch(dirA, dirB, configLines, kind, null);
     }
 
-    /** 提交前 dry-run 配对预览：与 {@link #createBatch} 完全相同的配对顺序，不建批次不派作业。
-     *  返回项：nickname / file_name / file_a / file_b / addmod（1-based 栏位列表，未配置为空表）。 */
+    /** 提交前 dry-run 配对预览：与 {@link #materializeBatch} 完全相同的配对顺序，不建批次不派作业。
+     *  返回项：nickname / file_name / file_a / file_b / addmod（1-based 栏位列表，未配置为空表）。
+     *  每目录仅列举一次（万级文件 × 多配置行时列举是主要耗时），配对全程内存过滤。 */
     public List<Map<String, Object>> previewPairs(Path dirA, Path dirB, List<String> configLines) throws IOException {
+        DirList a = DirList.of(dirA);
+        DirList b = DirList.of(dirB);
         List<Map<String, Object>> out = new ArrayList<>();
         for (String line : configLines) {
             if (line.strip().isEmpty() || line.strip().startsWith("#")) continue;
             CompareConfig cfg = Rules.parseLegacy(line, DEFAULT_DELIM, DEFAULT_TRAILER);
+            java.nio.file.PathMatcher matcher = globMatcher(cfg.fileGlob);
             List<Integer> addmod = cfg.incrFields.stream().map(f -> f + 1).toList();
-            for (String[] pair : Rules.pairFiles(dirA, dirB, cfg.fileGlob)) {
+            for (String[] pair : pairFiles(a, b, matcher)) {
                 out.add(pairView(cfg, Path.of(pair[0]).getFileName().toString(), pair[0], pair[1], addmod));
             }
-            var gzA = gzipByLogical(dirA, cfg.fileGlob);
-            var gzB = gzipByLogical(dirB, cfg.fileGlob);
-            for (Map.Entry<String, List<Path>> entry : gzA.entrySet()) {
+            var gzA = gzipByLogical(a, matcher);
+            var gzB = gzipByLogical(b, matcher);
+            for (Map.Entry<String, List<Path>> entry : gzA.entrySet()) { // 逻辑名升序，与正式建档一致
                 List<Path> bs = gzB.get(entry.getKey());
                 if (bs == null) continue;
                 List<Path> as = entry.getValue();
@@ -152,14 +179,38 @@ public final class JobManager implements AutoCloseable {
     }
 
     /**
-     * 目录模式批次（压缩感知 + 增量条件）。kind 非空（如 "ctis"）时作为批次/作业类型标记，路由与展示用。
-     * incrConds 与配对顺序一一对应（同 {@link #previewPairs} 顺序），逐文本增量条件值落入作业记录；
-     * *.gz（含 .YYYYMMDD+1位标识 9 位数字后缀）按逻辑名参与 glob 匹配：匹配到的先解压后对比
-     * （预解压池调度，同名多版本按文件名升序解压覆盖、最新生效）；未匹配的逻辑名计入 noRuleFiles；
-     * 一条配置在两侧目录（普通文件 + 压缩逻辑名）都未配对出文件 → missingFiles（昵称 · 通配名）。
+     * 目录模式批次（压缩感知 + 增量条件），<b>异步建档</b>：先落批次记录（prepare_state=preparing）
+     * 立即返回，配对与作业落盘在后台单线程执行——万级文本提交不再卡住 HTTP 请求；批次页轮询
+     * 可看到 jobCount/children 动态增长，建档完成后 noRuleFiles/missingFiles 随终态落盘。
+     * incrConds 与配对顺序一一对应（同 {@link #previewPairs} 顺序）。
      */
+    public BatchRecord createBatchAsync(Path dirA, Path dirB, List<String> configLines, String kind,
+                                        List<List<String>> incrConds) throws IOException {
+        BatchRecord batch = newBatch(dirA, dirB, configLines, kind);
+        batch.prepareState = BatchRecord.PREPARING;
+        store.saveBatch(batch);
+        preparePool.submit(() -> {
+            try {
+                materializeBatch(batch, dirA, dirB, configLines, kind, incrConds);
+            } catch (Exception e) {
+                System.err.println("[batch] " + batch.id + " 建档失败: " + e);
+                batch.prepareState = BatchRecord.PREPARE_FAILED;
+                batch.prepareError = e.getMessage() != null ? e.getMessage() : e.toString();
+                store.saveBatch(batch);
+            }
+        });
+        return batch;
+    }
+
+    /** 目录模式批次（同步建档）：语义同 {@link #createBatchAsync}，供 H2 命令信箱与测试使用。 */
     public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines, String kind,
                                    List<List<String>> incrConds) throws IOException {
+        BatchRecord batch = newBatch(dirA, dirB, configLines, kind);
+        materializeBatch(batch, dirA, dirB, configLines, kind, incrConds);
+        return batch;
+    }
+
+    private BatchRecord newBatch(Path dirA, Path dirB, List<String> configLines, String kind) {
         String batchId = newId();
         BatchRecord batch = new BatchRecord(batchId,
                 dirA.toAbsolutePath().normalize() + " vs " + dirB.toAbsolutePath().normalize(),
@@ -167,8 +218,16 @@ public final class JobManager implements AutoCloseable {
                 dirB.toAbsolutePath().normalize().toString(),
                 configLines.size() + " 行配置", 0);
         if (kind != null && !kind.isBlank()) batch.batchType = kind;
+        return batch;
+    }
 
-        List<JobRecord> jobs = new ArrayList<>();
+    /** 配对建档主体：previewPairs 与此共用全部配对逻辑（DirList 单次列举 + 预编译 glob + 逻辑名升序）。
+     *  逐配对立即落盘并派发，每 100 对刷新一次批次 jobCount——批次页轮询可见任务数动态增长。 */
+    private void materializeBatch(BatchRecord batch, Path dirA, Path dirB, List<String> configLines,
+                                  String kind, List<List<String>> incrConds) throws IOException {
+        DirList listA = DirList.of(dirA);
+        DirList listB = DirList.of(dirB);
+        int jobCount = 0;
         java.util.Set<String> matched = new java.util.HashSet<>();
         List<String> missingFiles = new ArrayList<>();
         int pairIdx = 0;
@@ -176,24 +235,24 @@ public final class JobManager implements AutoCloseable {
             if (line.strip().isEmpty() || line.strip().startsWith("#")) continue;
             CompareConfig cfg = Rules.parseLegacy(line, DEFAULT_DELIM, DEFAULT_TRAILER);
             String configLine = Rules.toLegacyLine(cfg, true); // 规范化全量行：结果页展示与重跑依据
+            java.nio.file.PathMatcher matcher = globMatcher(cfg.fileGlob);
             int pairsForCfg = 0;
             // 普通文件配对（现状逻辑）
-            for (String[] pair : Rules.pairFiles(dirA, dirB, cfg.fileGlob)) {
+            for (String[] pair : pairFiles(listA, listB, matcher)) {
                 String fileName = Path.of(pair[0]).getFileName().toString();
                 matched.add(fileName);
                 pairsForCfg++;
-                String jobId = newId();
-                JobRecord job = new JobRecord(jobId, batchId,
-                        cfg.nickname + " · " + fileName, configLine, pair[0], pair[1],
-                        resultsRoot.resolve(jobId).toAbsolutePath().toString());
-                if (kind != null && !kind.isBlank()) job.jobType = kind;
+                JobRecord job = newJob(batch, cfg, configLine, kind,
+                        cfg.nickname + " · " + fileName, pair[0], pair[1]);
                 attachIncrCond(job, incrConds, pairIdx++);
-                jobs.add(job);
+                store.saveJob(job);
+                submit(job);
+                if (++jobCount % 100 == 0) saveProgress(batch, jobCount);
             }
             // 压缩文件配对：逻辑名匹配 glob；同逻辑名普通文件已存在时压缩版本忽略（普通优先）
-            var gzA = gzipByLogical(dirA, cfg.fileGlob);
-            var gzB = gzipByLogical(dirB, cfg.fileGlob);
-            for (Map.Entry<String, List<Path>> entry : gzA.entrySet()) {
+            var gzA = gzipByLogical(listA, matcher);
+            var gzB = gzipByLogical(listB, matcher);
+            for (Map.Entry<String, List<Path>> entry : gzA.entrySet()) { // 逻辑名升序，与预览一致
                 List<Path> bs = gzB.get(entry.getKey());
                 if (bs == null) continue;
                 List<Path> as = entry.getValue();
@@ -204,25 +263,40 @@ public final class JobManager implements AutoCloseable {
                 // 代表路径取文件名最大（最新日期）版本；解压时全版本按升序覆盖，最终即最新
                 String repA = as.get(as.size() - 1).toString();
                 String repB = bs.get(bs.size() - 1).toString();
-                String jobId = newId();
-                JobRecord job = new JobRecord(jobId, batchId,
-                        cfg.nickname + " · " + entry.getKey(), configLine, repA, repB,
-                        resultsRoot.resolve(jobId).toAbsolutePath().toString());
-                if (kind != null && !kind.isBlank()) job.jobType = kind;
+                JobRecord job = newJob(batch, cfg, configLine, kind,
+                        cfg.nickname + " · " + entry.getKey(), repA, repB);
                 attachIncrCond(job, incrConds, pairIdx++);
-                jobs.add(job);
+                store.saveJob(job);
+                submit(job);
+                if (++jobCount % 100 == 0) saveProgress(batch, jobCount);
             }
             if (pairsForCfg == 0) missingFiles.add(cfg.nickname + " · " + cfg.fileGlob);
         }
-        batch.noRuleFiles = unmatchedFiles(dirA, matched);
+        batch.noRuleFiles = unmatchedFiles(listA, matched);
         batch.missingFiles = missingFiles;
-        batch.jobCount = jobs.size();
+        batch.jobCount = jobCount;
+        batch.prepareState = BatchRecord.READY;
         store.saveBatch(batch);
-        for (JobRecord job : jobs) {
-            store.saveJob(job);
-            submit(job);
+        System.out.println("[batch] " + batch.id + " 建档完成：" + jobCount + " 个作业");
+    }
+
+    /** 建档进度落盘（批次页动态刷新）；批次已被删除时静默停止派发。 */
+    private void saveProgress(BatchRecord batch, int jobCount) {
+        batch.jobCount = jobCount;
+        try {
+            store.saveBatch(batch);
+        } catch (RuntimeException e) {
+            // 进度快照失败不阻断建档，终态仍会尝试落盘
         }
-        return batch;
+    }
+
+    private JobRecord newJob(BatchRecord batch, CompareConfig cfg, String configLine, String kind,
+                             String nickname, String fileA, String fileB) {
+        String jobId = newId();
+        JobRecord job = new JobRecord(jobId, batch.id, nickname, configLine, fileA, fileB,
+                resultsRoot.resolve(jobId).toAbsolutePath().toString());
+        if (kind != null && !kind.isBlank()) job.jobType = kind;
+        return job;
     }
 
     /** 附加该文本的增量条件值（非空才落记录；对应规则未配 ADDMOD 时存储但过滤自然不启用）。 */
@@ -235,26 +309,66 @@ public final class JobManager implements AutoCloseable {
         }
     }
 
-    /** 目录内 *.gz 按逻辑名分组（文件名升序），仅保留逻辑名匹配 glob 且无同名普通文件的组。 */
-    private static java.util.LinkedHashMap<String, List<Path>> gzipByLogical(Path dir, String glob)
-            throws IOException {
-        java.util.LinkedHashMap<String, List<Path>> out = new java.util.LinkedHashMap<>();
-        if (!Files.isDirectory(dir)) return out;
-        try (var ds = Files.newDirectoryStream(dir)) {
-            for (Path p : ds) {
-                if (!Files.isRegularFile(p)) continue;
-                String n = p.getFileName().toString();
-                if (!ExtractService.isGzipName(n)) continue;
-                String logical = ExtractService.logicalName(n);
-                if (!Rules.matchGlob(logical, glob)) continue;
-                if (Files.exists(dir.resolve(logical))) continue; // 普通文件存在 → 压缩版本忽略
-                out.computeIfAbsent(logical, k -> new ArrayList<>()).add(p);
+    /** 目录一次性列举（仅普通文件，文件名升序）。万级文件 × 多配置行的配对/建档以此消除重复目录遍历。 */
+    private record DirList(java.util.List<Path> files) {
+        static DirList of(Path dir) throws IOException {
+            java.util.List<Path> out = new ArrayList<>();
+            if (!Files.isDirectory(dir)) return new DirList(out);
+            try (var ds = Files.newDirectoryStream(dir)) {
+                for (Path p : ds) {
+                    if (Files.isRegularFile(p)) out.add(p);
+                }
             }
+            out.sort(java.util.Comparator.comparing(x -> x.getFileName().toString()));
+            return new DirList(out);
         }
-        for (List<Path> l : out.values()) {
-            l.sort(java.util.Comparator.comparing(x -> x.getFileName().toString()));
+    }
+
+    private static java.nio.file.PathMatcher globMatcher(String glob) {
+        return java.nio.file.FileSystems.getDefault().getPathMatcher("glob:" + glob);
+    }
+
+    /** 普通文件配对（预编译 matcher + 既有 DirList）：同名交集，文件名升序。与 Rules.pairFiles 语义一致。 */
+    private static List<String[]> pairFiles(DirList a, DirList b, java.nio.file.PathMatcher matcher) {
+        Map<String, Path> am = new java.util.LinkedHashMap<>();
+        for (Path p : a.files()) {
+            if (matcher.matches(p.getFileName())) am.put(p.getFileName().toString(), p);
         }
-        return out;
+        Map<String, Path> bm = new java.util.LinkedHashMap<>();
+        for (Path p : b.files()) {
+            if (matcher.matches(p.getFileName())) bm.put(p.getFileName().toString(), p);
+        }
+        List<String> names = new ArrayList<>(am.keySet());
+        names.retainAll(bm.keySet());
+        java.util.Collections.sort(names);
+        List<String[]> pairs = new ArrayList<>();
+        for (String n : names) pairs.add(new String[]{am.get(n).toString(), bm.get(n).toString()});
+        return pairs;
+    }
+
+    /**
+     * 目录内 *.gz 按逻辑名分组（文件名升序），仅保留逻辑名匹配 matcher 且无同名普通文件的组；
+     * 组按逻辑名升序（与配对预览顺序一致，增量条件按序对齐的前提）。
+     */
+    private static java.util.LinkedHashMap<String, List<Path>> gzipByLogical(DirList dir,
+                                                                             java.nio.file.PathMatcher matcher) {
+        java.util.Map<String, List<Path>> out = new java.util.TreeMap<>();
+        for (Path p : dir.files()) {
+            String n = p.getFileName().toString();
+            if (!ExtractService.isGzipName(n)) continue;
+            String logical = ExtractService.logicalName(n);
+            if (!matcher.matches(Path.of(logical))) continue;
+            out.computeIfAbsent(logical, k -> new ArrayList<>()).add(p); // DirList 已按文件名升序
+        }
+        java.util.LinkedHashMap<String, List<Path>> ordered = new java.util.LinkedHashMap<>();
+        if (out.isEmpty()) return ordered;
+        java.util.Set<String> plainNames = new java.util.HashSet<>();
+        for (Path p : dir.files()) plainNames.add(p.getFileName().toString());
+        for (Map.Entry<String, List<Path>> e : out.entrySet()) {
+            if (plainNames.contains(e.getKey())) continue; // 普通文件存在 → 压缩版本忽略（普通优先）
+            ordered.put(e.getKey(), e.getValue());
+        }
+        return ordered;
     }
 
     /** 上传模式批次：调用方已确定文件对（M3 multipart 落盘后调用）。 */
@@ -424,8 +538,11 @@ public final class JobManager implements AutoCloseable {
                 job.status = JobRecord.STOPPED; // 中断导致的异常归为用户终止
             } else if (t instanceof OutOfMemoryError) {
                 job.status = JobRecord.FAILED;
-                job.error = "内存不足（OutOfMemoryError）" + (t.getMessage() != null ? "：" + t.getMessage() : "")
-                        + "；建议降低对比并发度或内存阈值后重试";
+                boolean direct = t.getMessage() != null && t.getMessage().contains("direct buffer");
+                job.error = "内存不足（OutOfMemoryError" + (direct ? "：直接内存" : "") + "）"
+                        + (t.getMessage() != null ? "：" + t.getMessage() : "")
+                        + "；建议降低对比并发度或内存阈值后重试"
+                        + (direct ? "，或增大 JVM 直接内存上限（MaxDirectMemorySize）" : "");
                 System.err.println("[job] " + jobId + " 内存不足终止: " + t);
             } else {
                 job.status = JobRecord.FAILED;
@@ -443,9 +560,9 @@ public final class JobManager implements AutoCloseable {
 
     /**
      * 单作业内存索引预算：min(配置阈值, max(16MB, 堆/(4×并行度)))。
-     * maxInMemoryBytes 是单作业口径，与并行度无关——并行 P 个作业同时驻留大索引时
-     * 实际堆占用可达 P×阈值，正是大文件批量对比 OOM 的主因；按当前并行度与最大堆动态收缩，
-     * 超出部分由 AutoKeyIndex 透明落盘（mmap 行存储，页缓存不占堆）。
+     * 合并单表索引后每作业只持一个 AutoKeyIndex（A 侧行 + B 键标志），预算即作业合计驻留；
+     * 超出部分由 AutoKeyIndex 透明落盘（行存储 + 堆外表，页缓存/直接内存不占堆）。
+     * 注意：堆外表走直接内存（默认上限随 -XX:MaxDirectMemorySize，启动参数已设 2g）。
      */
     long inMemoryBudget() {
         int par = Math.max(1, pool.getMaximumPoolSize());
@@ -516,16 +633,6 @@ public final class JobManager implements AutoCloseable {
             meta.aiStatus = job.aiStatus;
         }
         return meta;
-    }
-
-    private void requeueStuckJobs() {
-        for (JobRecord job : store.listJobs(null)) {
-            if (JobRecord.RUNNING.equals(job.status) || JobRecord.PENDING.equals(job.status)) {
-                job.status = JobRecord.PENDING;
-                store.saveJob(job);
-                submit(job); // 报表作业经 submit 路由到 reportRunner
-            }
-        }
     }
 
     // ---- H2 命令信箱消费：外部（IDE/SQL）运行期插入 commands 行，此处轮询执行并回写结果 ----
@@ -609,15 +716,11 @@ public final class JobManager implements AutoCloseable {
     }
 
     /** dirA 中未被任何配置 glob 命中的普通文件（需求：无规则文件提示）。 */
-    private static List<String> unmatchedFiles(Path dirA, java.util.Set<String> matched) {
+    private static List<String> unmatchedFiles(DirList dirA, java.util.Set<String> matched) {
         List<String> out = new ArrayList<>();
-        try (var s = java.nio.file.Files.list(dirA)) {
-            for (Path p : s.filter(java.nio.file.Files::isRegularFile).sorted().toList()) {
-                String name = p.getFileName().toString();
-                if (!matched.contains(name)) out.add(name);
-            }
-        } catch (IOException e) {
-            // 目录不可读时不阻断提交
+        for (Path p : dirA.files()) {
+            String name = p.getFileName().toString();
+            if (!matched.contains(name)) out.add(name);
         }
         return out;
     }
@@ -645,6 +748,7 @@ public final class JobManager implements AutoCloseable {
     @Override
     public void close() {
         commandPoller.shutdownNow();
+        preparePool.shutdownNow();
         pool.shutdownNow();
     }
 }

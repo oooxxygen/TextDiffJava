@@ -7,6 +7,8 @@ import java.util.*;
 
 /** 堆外 KeyIndex：RowStore（mmap 行存储） + OffHeapHashTable（堆外表）。命中行瞬态 materialize。 */
 public final class OffHeapKeyIndex implements KeyIndex {
+    private static final String[] EMPTY_COLS = new String[0];
+
     private final RowStore store;
     private final OffHeapHashTable table;
     private long dup = 0;
@@ -24,8 +26,17 @@ public final class OffHeapKeyIndex implements KeyIndex {
 
     @Override
     public String[] get(String key) {
-        long p = table.get(key);
+        long p = table.getRow(key);
         return p < 0 ? null : store.readCols(p);
+    }
+
+    @Override
+    public boolean markB(String key) {
+        if (table.contains(key)) return table.markBExisting(key);
+        // B 独有键：RowStore 落 key-only 条目（所有槽都带可回读 key，匹配永远精确）
+        long ptr = store.append(key, EMPTY_COLS);
+        table.putBOnly(key, ptr);
+        return false;
     }
 
     @Override
@@ -35,9 +46,27 @@ public final class OffHeapKeyIndex implements KeyIndex {
 
     @Override
     public Iterable<Map.Entry<String, String[]>> unseen() {
-        List<Map.Entry<String, String[]>> out = new ArrayList<>();
-        table.scanUnseen(ptr -> out.add(Map.entry(store.readKey(ptr), store.readCols(ptr))));
-        return out;
+        // 惰性逐条物化：仅A有的大量行不再一次性驻留堆上（消费方逐行写结果）
+        return () -> new java.util.Iterator<>() {
+            private final int[] cursor = {0};
+            private Map.Entry<String, String[]> ready;
+
+            private void advance() {
+                while (ready == null) {
+                    long p = table.nextUnseenPtr(cursor);
+                    if (p < 0) return;
+                    ready = Map.entry(store.readKey(p), store.readCols(p));
+                }
+            }
+
+            @Override public boolean hasNext() { advance(); return ready != null; }
+            @Override public Map.Entry<String, String[]> next() {
+                advance();
+                var e = ready;
+                ready = null;
+                return e;
+            }
+        };
     }
 
     @Override

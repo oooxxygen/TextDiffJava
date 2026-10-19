@@ -63,26 +63,50 @@ public final class Parser {
     public static List<String[]> parseData(Stream<String> lines, String delimiter,
                                            String trailerPrefix, TrailerData trailer) {
         List<String[]> data = new ArrayList<>();
-        boolean[] inTrailer = {false};
-        lines.forEach(line -> {
-            if (!inTrailer[0] && trailerPrefix != null && !trailerPrefix.isEmpty()
-                    && line.startsWith(trailerPrefix)) {
-                inTrailer[0] = true;
-            }
-            if (inTrailer[0]) {
-                consumeTrailerLine(line, trailerPrefix, trailer);
-                return;
-            }
-            if (line.isEmpty()) {
-                trailer.emptyCount++;
-                return;
-            }
-            String[] cols = splitColumns(line, delimiter);
-            trailer.colCountDist.merge(cols.length, 1L, Long::sum);
-            trailer.dataCount++;
-            data.add(cols);
-        });
+        dataRows(lines, delimiter, trailerPrefix, trailer).forEach(data::add);
         return data;
+    }
+
+    /**
+     * 惰性数据行流：逐行切分、trailer 行写入 {@code trailer}、空行跳过计数——<b>不在堆上物化整表</b>。
+     * （parseData 的整表 List 版本曾是 OOM 总根因：185MB/600 万行文件在该步骤即驻留 GB 级堆。）
+     * 行流读到 trailer 前缀即终止数据行；此时把余下行全部排空进 trailer（尾部行数少）。
+     * 关闭返回的 Stream 会级联关闭底层行流；调用方放弃中途迭代时 trailer 可能不完整（对比引擎总是读完全部数据行）。
+     */
+    public static Stream<String[]> dataRows(Stream<String> lines, String delimiter,
+                                            String trailerPrefix, TrailerData trailer) {
+        java.util.Iterator<String> src = lines.iterator();
+        var spl = new java.util.Spliterators.AbstractSpliterator<String[]>(Long.MAX_VALUE,
+                java.util.Spliterator.ORDERED | java.util.Spliterator.NONNULL) {
+            private boolean trailerStarted = false;
+
+            @Override
+            public boolean tryAdvance(java.util.function.Consumer<? super String[]> action) {
+                if (trailerStarted) return false;
+                while (src.hasNext()) {
+                    String line = src.next();
+                    if (trailerPrefix != null && !trailerPrefix.isEmpty() && line.startsWith(trailerPrefix)) {
+                        trailerStarted = true;
+                        consumeTrailerLine(line, trailerPrefix, trailer);
+                        while (src.hasNext()) { // 排空余下行进 trailer（文件尾部）
+                            consumeTrailerLine(src.next(), trailerPrefix, trailer);
+                        }
+                        return false;
+                    }
+                    if (line.isEmpty()) {
+                        trailer.emptyCount++;
+                        continue;
+                    }
+                    String[] cols = splitColumns(line, delimiter);
+                    trailer.colCountDist.merge(cols.length, 1L, Long::sum);
+                    trailer.dataCount++;
+                    action.accept(cols);
+                    return true;
+                }
+                return false;
+            }
+        };
+        return java.util.stream.StreamSupport.stream(spl, false).onClose(lines::close);
     }
 
     /** trailer.RecNum 是否与解析出的数据行数一致；无 RecNum 返回 null。 */

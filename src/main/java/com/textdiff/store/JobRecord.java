@@ -77,7 +77,29 @@ public final class JobRecord {
         this.createdAt = System.currentTimeMillis() / 1000;
     }
 
+    /** 逐字段拷贝（store 内部记录防外泄改写）。高频轮询路径禁用 JSON 往返——5000 作业 × 每次轮询的序列化开销正是 OOM 诱因之一。 */
     public JobRecord copy() {
-        return Json.read(Json.write(this), JobRecord.class);
+        JobRecord c = new JobRecord(id, batchId, nickname, configLine, fileA, fileB, resultDir);
+        c.status = status;
+        c.error = error;
+        c.keyWarning = keyWarning;
+        c.aiStatus = aiStatus;
+        c.createdAt = createdAt;
+        c.startedAt = startedAt;
+        c.finishedAt = finishedAt;
+        c.label = label;
+        c.locked = locked;
+        c.starred = starred;
+        c.jobType = jobType;
+        c.templateFile = templateFile;
+        c.diffCount = diffCount;
+        c.totalA = totalA;
+        c.totalB = totalB;
+        c.equalCount = equalCount;
+        c.onlyACount = onlyACount;
+        c.onlyBCount = onlyBCount;
+        c.incrCond = incrCond;
+        c.incrState = incrState;
+        return c;
     }
 }

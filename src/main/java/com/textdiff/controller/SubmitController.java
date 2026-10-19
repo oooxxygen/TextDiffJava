@@ -125,7 +125,9 @@ public class SubmitController {
             conds = condsFor(parsed.size(), parsed, null);
         }
 
-        BatchRecord batch = jobs.createBatch(Path.of(dirA), Path.of(dirB), lines, str(body.get("kind")), conds);
+        // 异步建档：立即返回批次，配对与作业落盘在后台进行（万级文本提交不再阻塞 HTTP 请求），
+        // 批次页/任务页轮询可见 prepare_state=preparing → ready 与作业数动态增长
+        BatchRecord batch = jobs.createBatchAsync(Path.of(dirA), Path.of(dirB), lines, str(body.get("kind")), conds);
         return Map.of("batch_id", batch.id);
     }
 

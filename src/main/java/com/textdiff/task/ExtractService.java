@@ -157,6 +157,20 @@ public final class ExtractService implements AutoCloseable {
         deleteRecursively(extractRoot().resolve(batchId));
     }
 
+    /** 启动清空解压根目录：解压产物是纯派生数据，进程被杀后的残留既占磁盘也可能诱发后续不稳定；
+     *  恢复的压缩作业会按需重新解压（requeue → enqueue → doExtract），删除无副作用。 */
+    public void purgeExtractRoot() {
+        try {
+            if (!Files.isDirectory(extractRoot())) return;
+            try (var s = Files.list(extractRoot())) {
+                for (Path p : s.toList()) deleteRecursively(p);
+            }
+            System.out.println("[extract] 启动清理解压残留目录: " + extractRoot());
+        } catch (IOException e) {
+            System.err.println("[extract] 清理解压残留失败（不阻断启动）: " + e.getMessage());
+        }
+    }
+
     // ---- internals ----
 
     private Group groupOf(JobRecord job) {

@@ -7,6 +7,7 @@ import java.util.*;
 
 /**
  * 自动落盘 KeyIndex：内存为主，累计字节超阈值时透明迁移到堆外（OffHeapKeyIndex）。
+ * A 索引与 B 键集合合并记账（markB 的键也计入 bytes——B 独有键同样驻留，此前漏算曾是 OOM 诱因之一）。
  * 对等 Python keyindex.AutoKeyIndex（dict→SQLite），仅落盘介质换成 mmap 行存储 + 堆外表。
  */
 public final class AutoKeyIndex implements KeyIndex {
@@ -14,7 +15,8 @@ public final class AutoKeyIndex implements KeyIndex {
     private final long maxInMemoryBytes;
 
     private LinkedHashMap<String, String[]> mem = new LinkedHashMap<>();
-    private HashSet<String> seen = new HashSet<>();
+    private HashSet<String> seenA = new HashSet<>();
+    private HashSet<String> seenB = new HashSet<>();
     private long memDup = 0;
     private long bytes = 0;
 
@@ -31,8 +33,9 @@ public final class AutoKeyIndex implements KeyIndex {
         if (!spilled) {
             if (mem.containsKey(key)) memDup++;
             mem.put(key, cols);
-            // 按 JVM 堆实际占用估而非字符数：String 对象/数组头开销 + UTF-16 2B/字符（紧凑字符串 ASCII 实际更小，此处从保守）
-            long add = 16 + 8L * cols.length; // 行数组头 + 引用槽
+            // 按 JVM 堆实际占用估而非字符数：行数组头 + 引用槽 + LinkedHashMap 节点与 rehash 冗余 +
+            // 字符串对象头 + 字符 2B/个（紧凑字符串 ASCII 实际更小，从保守；GB18030/中文解码后即 2B/字符）
+            long add = 64 + 8L * cols.length; // 行数组 + 桶/节点均摊开销（低估曾是批量 OOM 主因之一）
             add += stringHeap(key);
             for (String c : cols) add += stringHeap(c);
             bytes += add;
@@ -40,6 +43,16 @@ public final class AutoKeyIndex implements KeyIndex {
         } else {
             off.put(key, cols);
         }
+    }
+
+    @Override
+    public boolean markB(String key) {
+        if (spilled) return off.markB(key);
+        if (seenB.contains(key)) return true;
+        seenB.add(key);
+        bytes += 48 + stringHeap(key); // seenB 节点 + 键串驻留（B 独有键在此）
+        if (bytes > maxInMemoryBytes) spill();
+        return false;
     }
 
     /** 单个字符串的堆占用估计：对象头+hash+数组头 ≈40B，字符按 2B/个（UTF-16 上限）。 */
@@ -57,18 +70,16 @@ public final class AutoKeyIndex implements KeyIndex {
         if (spilled) {
             off.markSeen(key);
         } else if (mem.containsKey(key)) {
-            seen.add(key);
+            seenA.add(key);
+            bytes += 48; // seenA HashSet 节点均摊开销（比对阶段全部命中键都会进 seenA）
         }
     }
 
     @Override
     public Iterable<Map.Entry<String, String[]>> unseen() {
         if (spilled) return off.unseen();
-        List<Map.Entry<String, String[]>> out = new ArrayList<>();
-        for (Map.Entry<String, String[]> e : mem.entrySet()) {
-            if (!seen.contains(e.getKey())) out.add(Map.entry(e.getKey(), e.getValue()));
-        }
-        return out;
+        // 惰性过滤迭代：不再为仅A有行物化整份 entry 列表（百万级行时本身又是数百 MB 堆）
+        return () -> mem.entrySet().stream().filter(e -> !seenA.contains(e.getKey())).iterator();
     }
 
     @Override
@@ -89,16 +100,19 @@ public final class AutoKeyIndex implements KeyIndex {
     private void spill() {
         off = new OffHeapKeyIndex(tmpDir);
         for (Map.Entry<String, String[]> e : mem.entrySet()) off.put(e.getKey(), e.getValue());
-        for (String k : seen) off.markSeen(k);
+        for (String k : seenA) off.markSeen(k);
+        for (String k : seenB) off.markB(k);
         spilled = true;
         mem = null;
-        seen = null;
+        seenA = null;
+        seenB = null;
     }
 
     @Override
     public void close() {
         if (off != null) off.close();
         if (mem != null) mem.clear();
-        if (seen != null) seen.clear();
+        if (seenA != null) seenA.clear();
+        if (seenB != null) seenB.clear();
     }
 }

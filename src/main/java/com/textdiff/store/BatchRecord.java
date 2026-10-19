@@ -23,6 +23,14 @@ public final class BatchRecord {
     public String batchType;
     /** 报表对比：模板目录（文件对比为 null）。 */
     public String templateDir;
+    /** 配对/建档进度：null/"ready" = 已就绪（旧记录视为就绪）；"preparing" = 后台配对建档中；"failed" = 建档失败。 */
+    public String prepareState;
+    /** 建档失败原因（prepareState=failed 时）。 */
+    public String prepareError;
+
+    public static final String PREPARING = "preparing";
+    public static final String READY = "ready";
+    public static final String PREPARE_FAILED = "failed";
 
     public BatchRecord() {}
 
@@ -36,7 +44,17 @@ public final class BatchRecord {
         this.createdAt = System.currentTimeMillis() / 1000;
     }
 
+    /** 逐字段拷贝（列表浅拷贝到新 ArrayList，防外部改写共享清单）。 */
     public BatchRecord copy() {
-        return Json.read(Json.write(this), BatchRecord.class);
+        BatchRecord c = new BatchRecord(id, label, dirA, dirB, configSource, jobCount);
+        c.locked = locked;
+        c.noRuleFiles = noRuleFiles == null ? null : new java.util.ArrayList<>(noRuleFiles);
+        c.missingFiles = missingFiles == null ? null : new java.util.ArrayList<>(missingFiles);
+        c.extractFailed = extractFailed == null ? null : new java.util.ArrayList<>(extractFailed);
+        c.batchType = batchType;
+        c.templateDir = templateDir;
+        c.prepareState = prepareState;
+        c.prepareError = prepareError;
+        return c;
     }
 }

@@ -21,6 +21,7 @@ class JobManagerMemoryBudgetTest {
     @Test
     void budgetAdaptsToHeapAndParallelism() {
         try (JobManager jm = newManager(4, Long.MAX_VALUE)) {
+            // 合并单表索引后每作业只持一个 AutoKeyIndex，预算即作业合计驻留
             long expected = Math.max(16L * 1024 * 1024,
                     Runtime.getRuntime().maxMemory() / (4L * 4));
             assertEquals(expected, jm.inMemoryBudget());
@@ -46,7 +47,12 @@ class JobManagerMemoryBudgetTest {
             long before = jm.inMemoryBudget();
             jm.resizeEnginePool(8);
             long after = jm.inMemoryBudget();
-            assertTrue(after < before, "并行度 4→8 预算应收缩: " + before + " → " + after);
+            // 测试堆较小时 4→8 并行的预算可能都落在 16MB 下限——此时断言两者都触底即可
+            if (Runtime.getRuntime().maxMemory() / (8L * 4) <= 16L * 1024 * 1024) {
+                assertEquals(16L * 1024 * 1024, after, "小堆下应触底 16MB 下限");
+            } else {
+                assertTrue(after < before, "并行度 4→8 预算应收缩: " + before + " → " + after);
+            }
         }
     }
 }

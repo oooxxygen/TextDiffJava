@@ -26,8 +26,9 @@ final class ApiViews {
         return JobRecord.FAILED.equals(job.status) ? "error" : job.status;
     }
 
-    /** 作业概要视图（joblist children / standalone 共用）。 */
-    static Map<String, Object> jobBrief(JobRecord job, JobStore store) {
+    /** 作业概要视图（joblist children / standalone 共用）。deep=false 时跳过 meta.json 兜底读
+     *  （全局列表高频轮询路径：5000 旧记录 × 每次轮询的逐作业磁盘读曾是主要 IO 开销）。 */
+    static Map<String, Object> jobBrief(JobRecord job, JobStore store, boolean deep) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("job_id", job.id);
         m.put("batch_id", job.batchId);
@@ -64,7 +65,7 @@ final class ApiViews {
             s.put("total_a", job.totalA);
             s.put("total_b", job.totalB);
             m.put("summary", s);
-        } else {
+        } else if (deep) {
             JobMeta meta = ResultFiles.readMeta(Path.of(job.resultDir)); // 旧记录/无快照来源兜底
             if (meta != null) {
                 Map<String, Object> s = new LinkedHashMap<>();
@@ -80,15 +81,22 @@ final class ApiViews {
         return m;
     }
 
-    /** 批次聚合状态与统计。 */
-    static Map<String, Object> batchStats(BatchRecord batch, List<JobRecord> jobs) {
+    static Map<String, Object> jobBrief(JobRecord job, JobStore store) {
+        return jobBrief(job, store, true);
+    }
+
+    /** 批次聚合状态与统计。slim=true（全局列表轮询）不带全量清单——5000 文件的 no_rule_files
+     *  每次轮询都随响应序列化曾是响应体与 GC 的主要负担，清单只在批次详情页（slim=false）下发。 */
+    static Map<String, Object> batchStats(BatchRecord batch, List<JobRecord> jobs, boolean slim) {
         String status = "done";
         long running = jobs.stream().filter(j -> JobRecord.RUNNING.equals(j.status)
                 || JobRecord.PENDING.equals(j.status)).count();
         long failed = jobs.stream().filter(j -> JobRecord.FAILED.equals(j.status)).count();
-        long diffFiles = jobs.stream().filter(ApiViews::hasDiffs).count();
+        long diffFiles = jobs.stream().filter(j -> hasDiffs(j, !slim)).count();
         long done = jobs.size() - running;
-        if (running > 0) status = "running";
+        if (BatchRecord.PREPARING.equals(batch.prepareState)) status = BatchRecord.PREPARING;
+        else if (BatchRecord.PREPARE_FAILED.equals(batch.prepareState)) status = "error";
+        else if (running > 0) status = "running";
         else if (failed == jobs.size() && !jobs.isEmpty()) status = "error";
 
         Map<String, Object> m = new LinkedHashMap<>();
@@ -102,9 +110,11 @@ final class ApiViews {
         b.put("locked", batch.locked);
         b.put("batch_type", batch.batchType == null || batch.batchType.isEmpty() ? "file" : batch.batchType);
         b.put("template_dir", batch.templateDir);
-        b.put("no_rule_files", batch.noRuleFiles == null ? List.of() : batch.noRuleFiles);
-        b.put("missing_files", batch.missingFiles == null ? List.of() : batch.missingFiles);
-        b.put("extract_failed", batch.extractFailed == null ? List.of() : batch.extractFailed);
+        b.put("prepare_state", batch.prepareState == null ? BatchRecord.READY : batch.prepareState);
+        if (batch.prepareError != null) b.put("prepare_error", batch.prepareError);
+        b.put("no_rule_files", slim ? List.of() : batch.noRuleFiles == null ? List.of() : batch.noRuleFiles);
+        b.put("missing_files", slim ? List.of() : batch.missingFiles == null ? List.of() : batch.missingFiles);
+        b.put("extract_failed", slim ? List.of() : batch.extractFailed == null ? List.of() : batch.extractFailed);
         // 批次执行耗时区间：最早开始的作业 → 最晚完成的作业（无一完成时回退最早创建）
         long minStart = jobs.stream().mapToLong(j -> j.startedAt).filter(v -> v > 0).min().orElse(0);
         if (minStart == 0) minStart = jobs.stream().mapToLong(j -> j.createdAt).min().orElse(0);
@@ -122,9 +132,14 @@ final class ApiViews {
         return m;
     }
 
-    /** 差异文件判定：优先用作业记录上的完成快照（免磁盘读）；旧记录回退读 meta.json。 */
-    private static boolean hasDiffs(JobRecord job) {
+    static Map<String, Object> batchStats(BatchRecord batch, List<JobRecord> jobs) {
+        return batchStats(batch, jobs, false);
+    }
+
+    /** 差异文件判定：优先用作业记录上的完成快照（免磁盘读）；deep 时旧记录回退读 meta.json。 */
+    private static boolean hasDiffs(JobRecord job, boolean deep) {
         if (job.diffCount >= 0) return job.diffCount > 0;
+        if (!deep) return false; // 全局轮询路径不做逐作业磁盘读
         JobMeta meta = ResultFiles.readMeta(Path.of(job.resultDir));
         return meta != null && meta.diff > 0;
     }

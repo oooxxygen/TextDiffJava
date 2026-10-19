@@ -175,7 +175,7 @@ label.field { font-size: 12px; color: var(--text-soft); font-weight: 600; }
 /* ---------- 状态徽标 ---------- */
 .badge-status { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
 .badge-status.done { background: var(--eq-bg); color: var(--eq-bar); }
-.badge-status.running, .badge-status.pending { background: #fff4e0; color: #b76e00; }
+.badge-status.running, .badge-status.pending, .badge-status.preparing { background: #fff4e0; color: #b76e00; }
 .badge-status.failed { background: var(--diff-bg); color: var(--diff-bar); }
 .badge-status.error { background: var(--diff-bg); color: var(--diff-bar); }
 

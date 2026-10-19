@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.textdiff"
-version = "0.9.3"
+version = "0.9.4"
 
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(21) }
@@ -16,7 +16,9 @@ application {
     mainClass = "com.textdiff.Application"
     // OOM 防护缺省（TEXT_DIFF_JAVA_OPTS/JAVA_OPTS 可覆盖）：堆上限按物理内存 50%（物理机/容器一致），
     // 堆溢出自动转储到工作目录，便于事后分析；配合作业级 OOM 捕获，服务不再因单个大作业崩溃
-    applicationDefaultJvmArgs = listOf("-XX:MaxRAMPercentage=50.0", "-XX:+HeapDumpOnOutOfMemoryError")
+    // MaxDirectMemorySize：堆外哈希表（大键量对比的索引表）默认上限随堆比例过小，显式 2g 兜底
+    applicationDefaultJvmArgs = listOf("-XX:MaxRAMPercentage=50.0", "-XX:MaxDirectMemorySize=2g",
+            "-XX:+HeapDumpOnOutOfMemoryError")
 }
 
 // 启动脚本注入：进程启动时读取 config.ini [jvm] jvm_opts 注入 JVM 参数（CWD 优先，其次 APP_HOME；

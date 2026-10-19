@@ -1774,8 +1774,14 @@ const BatchView = {
     <div class="card">
       <div class="card-head">📦 批次概况</div>
       <div class="card-body">
+        <div v-if="ov.batch.prepare_state === 'preparing'" class="no-rule preparing" style="margin-top:0;">
+          ⏳ 正在配对建档，作业将陆续加入并自动开始对比（本页持续刷新）
+        </div>
+        <div v-else-if="ov.batch.prepare_state === 'failed'" class="no-rule" style="margin-top:0;">
+          ❌ 建档失败：{{ ov.batch.prepare_error || '未知原因' }}
+        </div>
         <div class="summary-metrics">
-          <div class="metric total"><div class="num">{{ ov.total_files }}</div><div class="lbl">对比文件数</div></div>
+          <div class="metric total"><div class="num">{{ ov.total_files }}</div><div class="lbl">对比文件数{{ ov.batch.prepare_state === 'preparing' ? '（建档中）' : '' }}</div></div>
           <div class="metric diff"><div class="num">{{ ov.diff_files }}</div><div class="lbl">存在差异的文件</div></div>
           <div class="metric"><div class="num">{{ ov.done }}</div><div class="lbl">已完成</div></div>
           <div class="metric only"><div class="num">{{ ov.no_rule_count }}</div><div class="lbl">无规则未对比</div></div>
@@ -2201,6 +2207,13 @@ const TaskManagerPage = {
         const [jl, tl] = await Promise.all([api("/api/joblist"), api("/api/tasks")]);
         batches.value = jl.batches; standalone.value = jl.standalone;
         tasks.value = tl.tasks || [];
+        // 展开中的未完成批次持续刷新子作业（建档准备中作业陆续加入）
+        for (const id of openBatches) {
+          const b = batches.value.find(x => x.batch.batch_id === id);
+          if (b && b.status !== "done") {
+            try { const r = await api("/api/batches/" + id); batchChildren[id] = r.children || []; } catch (e) {}
+          }
+        }
       } catch (e) {}
       if (!stopped) timer = setTimeout(load, 2500);
     }
@@ -2317,7 +2330,7 @@ const TaskManagerPage = {
         <span class="files">{{ b.batch.dir_a }} ↔ {{ b.batch.dir_b }}</span>
         <span class="group-badge" v-if="b.batch.label">🏷 {{ b.batch.label }}</span>
         <span class="meta-time">{{ fmtTime(b.batch.created_at) }}</span>
-        <span class="count">共 {{ b.total_files }} 文件</span>
+        <span class="count">共 {{ b.total_files }} 文件{{ b.batch.prepare_state === 'preparing' ? '（⏳ 建档中）' : '' }}</span>
         <span class="dur" :class="{ running: b.status==='running' }" v-if="durBatch(b)" title="批次执行耗时（首作业开始 → 末作业完成）">⏱ {{ durBatch(b) }}</span>
         <span class="row-actions" @click.stop>
           <button class="mini-btn" @click="openBatch(b.batch.batch_id)">批次详情</button>

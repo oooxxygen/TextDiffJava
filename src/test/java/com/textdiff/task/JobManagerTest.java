@@ -129,6 +129,7 @@ class JobManagerTest {
         }
         try (DualJobStore store = new DualJobStore(dir.resolve("store"), false);
              JobManager mgr = new JobManager(store, dir.resolve("results"), EngineConfig.defaults())) {
+            mgr.start(); // 启动恢复（显式调用：装配完成后执行，语义同 WebBeansConfig.startupRecovery）
             assertTrue(mgr.awaitIdle(30, TimeUnit.SECONDS));
             assertEquals(JobRecord.DONE, mgr.getJob("jstuck").status);
             assertEquals(1, ResultFiles.readPage(Path.of(mgr.getJob("jstuck").resultDir)

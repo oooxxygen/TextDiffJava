@@ -38,16 +38,19 @@ public class JobController {
 
     @GetMapping("/joblist")
     public Map<String, Object> joblist() {
+        // 单次全量扫描按批次分组（此前每批次全表扫描一次：批次数 × 作业数的深拷贝正是 OOM 高危路径）
+        Map<String, List<JobRecord>> byBatch = new LinkedHashMap<>();
+        List<JobRecord> standaloneRecs = new ArrayList<>();
+        for (JobRecord j : store.listJobs(null)) {
+            if (j.batchId == null) standaloneRecs.add(j);
+            else byBatch.computeIfAbsent(j.batchId, k -> new ArrayList<>()).add(j);
+        }
         List<Map<String, Object>> batches = new ArrayList<>();
         for (var b : store.listBatches()) {
-            List<JobRecord> bj = store.listJobs(b.id);
-            Map<String, Object> view = ApiViews.batchStats(b, bj);
-            batches.add(view);
+            batches.add(ApiViews.batchStats(b, byBatch.getOrDefault(b.id, List.of()), true));
         }
         List<Map<String, Object>> standalone = new ArrayList<>();
-        for (var j : store.listJobs(null)) {
-            if (j.batchId == null) standalone.add(ApiViews.jobBrief(j, store));
-        }
+        for (JobRecord j : standaloneRecs) standalone.add(ApiViews.jobBrief(j, store, false));
         return Map.of("batches", batches, "standalone", standalone, "split_jobs", List.of());
     }
 

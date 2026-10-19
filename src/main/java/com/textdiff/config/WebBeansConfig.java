@@ -58,6 +58,20 @@ public class WebBeansConfig {
         return svc;
     }
 
+    /**
+     * 启动收尾（全部 bean 装配完成后）：清空上次进程残留的解压产物，再恢复中断作业。
+     * 恢复必须在 extractService/reportRunner 挂载之后——此前在 JobManager 构造器内恢复，
+     * 压缩作业会在解压服务就绪前被直接当作文本对比 .gz 原文件。
+     */
+    @Bean
+    org.springframework.boot.ApplicationRunner startupRecovery(
+            JobManager jobManager, com.textdiff.task.ExtractService extractService) {
+        return args -> {
+            extractService.purgeExtractRoot();
+            jobManager.start();
+        };
+    }
+
     /** 任务管理：登记/执行作业完成后的默认生成任务（差异 CSV 导出 + AI 分析）。 */
     @Bean(destroyMethod = "close")
     public com.textdiff.store.TaskStore taskStore(AppPaths paths, AppConfig cfg) {

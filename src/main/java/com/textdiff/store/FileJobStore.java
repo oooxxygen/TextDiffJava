@@ -6,6 +6,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -173,17 +174,27 @@ public final class FileJobStore implements JobStore {
         }
     }
 
-    /** 删除后整体重写（记录量=任务元数据规模，量小可整写）。 */
+    /** 删除后整体重写（记录量=任务元数据规模，量小可整写）。先写临时文件再原子改名：进程被杀在半途不会损坏原文件。 */
     private void compact(String fileName, List<?> records) {
         Path file = dir.resolve(fileName);
-        try (BufferedWriter w = Files.newBufferedWriter(file, StandardCharsets.UTF_8,
+        Path tmp = dir.resolve(fileName + ".compacting");
+        try (BufferedWriter w = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
             for (Object r : records) {
                 w.write(Json.write(r));
                 w.newLine();
             }
         } catch (IOException e) {
-            throw new UncheckedIOException("FileJobStore 重写失败: " + file, e);
+            throw new UncheckedIOException("FileJobStore 重写失败: " + tmp, e);
+        }
+        try {
+            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException atomicUnsupported) {
+            try {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e) {
+                throw new UncheckedIOException("FileJobStore 原子替换失败: " + file, e);
+            }
         }
     }
 }
