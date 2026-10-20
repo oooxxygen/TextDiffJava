@@ -165,6 +165,45 @@ public final class FieldMapStore implements AutoCloseable {
         return null;
     }
 
+    /**
+     * 宽匹配版：在 {@link #reportIdForFile} 基础上追加 #占位符 转 * 的通配回退
+     * （{@code 01A#BANKNO0D.PNT.ug.#ACDATE1} → {@code 01A*0D.PNT.ug.*}，与报表模式 reportIdForReportFile 同语义）。
+     * CTIS 等下传文本的 report_file_name 常用 #占位符 表达变量段（机构号/日期），普通比对路径的
+     * 列名注入与动态栏位解析以此命中 report_id。
+     */
+    public synchronized String reportIdForFileWide(String fileName) {
+        String hit = reportIdForFile(fileName);
+        if (hit != null) return hit;
+        String name = Path.of(fileName).getFileName().toString();
+        String stem = stripExt(name);
+        for (FieldMaps.ReportType t : types.values()) {
+            String glob = toGlob(t.reportFileName());
+            if (glob != null && (globMatches(glob, name) || globMatches(glob, stem))) return t.reportId();
+        }
+        return null;
+    }
+
+    /** #占位符（#[A-Za-z0-9_]+）转通配 *；空白返回 null。 */
+    static String toGlob(String pattern) {
+        return pattern == null || pattern.isBlank() ? null : pattern.replaceAll("#[A-Za-z0-9_]+", "*");
+    }
+
+    /**
+     * 单一模式对文件的完整匹配链（精确 → 茎精确 → 通配 → #占位符通配，含 name 与 stem 两侧）。
+     * 供 CTIS 动态栏位反向匹配：从动态配置适用清单出发验证文件归属，避免其他报表的贪婪
+     * glob（如 01A***0* 对无扩展名文件 stem 的误命中）抢先错配。
+     */
+    public static boolean fileMatchesPattern(String fileName, String pattern) {
+        if (pattern == null || pattern.isBlank()) return false;
+        String name = Path.of(fileName).getFileName().toString();
+        String stem = stripExt(name);
+        if (pattern.equalsIgnoreCase(name)) return true;
+        if (stripExt(pattern).equalsIgnoreCase(stem)) return true;
+        if (globMatches(pattern, name) || globMatches(stripExt(pattern), stem)) return true;
+        String glob = toGlob(pattern);
+        return glob != null && (globMatches(glob, name) || globMatches(glob, stem));
+    }
+
     /** 通配匹配：* / *** 任意串，? 单字符；其余字符按字面（大小写不敏感）。 */
     public static boolean globMatches(String pattern, String name) {
         if (pattern == null || pattern.isBlank()) return false;

@@ -52,14 +52,48 @@ public final class CsvExporter {
 
     /** 差异栏位摘要：状态为 diff 的记录按「列号-栏位名称；」拼接（其他状态为空串）。 */
     public static String diffLabel(RowDiff r, List<String> colNames) {
+        return diffLabel(r, colNames, null);
+    }
+
+    /** 差异栏位摘要（CTIS 版）：虚拟子列直接用完整列名（107-1B（数据项名称））。 */
+    public static String diffLabel(RowDiff r, List<String> colNames,
+                                   List<com.textdiff.store.JobMeta.DynCol> dyn) {
         if (!Status.DIFF.equals(r.status) || r.diffCols == null || r.diffCols.length == 0) return "";
         List<String> names = colNames == null ? List.of() : colNames;
         StringBuilder sb = new StringBuilder();
         for (int col : r.diffCols) {
+            if (col >= VBASE) {
+                com.textdiff.store.JobMeta.DynCol d = dynOf(dyn, col);
+                sb.append(d == null ? String.valueOf(col) : d.name).append('；');
+                continue;
+            }
             String name = col < names.size() && !names.get(col).isBlank() ? names.get(col) : "栏位" + (col + 1);
             sb.append(col + 1).append('-').append(name).append('；');
         }
         return sb.toString();
+    }
+
+    /** CTIS 虚拟子列索引基址（与引擎约定一致）。 */
+    static final int VBASE = com.textdiff.engine.DynExpand.VBASE;
+
+    static com.textdiff.store.JobMeta.DynCol dynOf(List<com.textdiff.store.JobMeta.DynCol> dyn, int col) {
+        if (dyn == null) return null;
+        for (com.textdiff.store.JobMeta.DynCol d : dyn) {
+            if (d.index == col) return d;
+        }
+        return null;
+    }
+
+    /** 行级 CTIS 子值（虚拟索引定位；无该子项/该侧缺失返回 ""）。 */
+    static String dynVal(RowDiff r, int idx, boolean sideA) {
+        if (r.dyn == null) return "";
+        for (com.textdiff.engine.DynExpand.Val v : r.dyn) {
+            if (v.idx == idx) {
+                String s = sideA ? v.a : v.b;
+                return s == null ? "" : s;
+            }
+        }
+        return "";
     }
 
     /** 全量 CSV 写入；width < 0 时按本批行扫描（分片调用方传整批宽度保持表头一致）。 */
@@ -75,23 +109,40 @@ public final class CsvExporter {
 
     /** 全量 CSV 表头（流式导出按整批宽度统一各分片表头）。 */
     public static void writeFullHeader(BufferedWriter w, List<String> colNames, int width) throws IOException {
+        writeFullHeader(w, colNames, width, null);
+    }
+
+    /** 全量 CSV 表头（CTIS 版）：真实列后追加虚拟子列（完整列名(A)/(B)）。 */
+    public static void writeFullHeader(BufferedWriter w, List<String> colNames, int width,
+                                       List<com.textdiff.store.JobMeta.DynCol> dyn) throws IOException {
         List<String> names = colNames == null ? List.of() : colNames;
         w.write("键值,状态,差异栏位");
         for (int i = 0; i < width; i++) {
             String name = i < names.size() && !names.get(i).isBlank() ? names.get(i) : "栏位" + (i + 1);
             w.write("," + escape(name + "(A)") + "," + escape(name + "(B)"));
         }
+        if (dyn != null) {
+            for (com.textdiff.store.JobMeta.DynCol d : dyn) {
+                w.write("," + escape(d.name + "(A)") + "," + escape(d.name + "(B)"));
+            }
+        }
         w.write("\r\n");
     }
 
     /** 全量 CSV 单行（流式导出逐行调用，不驻留列表）。 */
     public static void writeFullRow(BufferedWriter w, RowDiff r, List<String> colNames, int width) throws IOException {
+        writeFullRow(w, r, colNames, width, null);
+    }
+
+    /** 全量 CSV 单行（CTIS 版）：虚拟子列值取自行级 dyn 子值。 */
+    public static void writeFullRow(BufferedWriter w, RowDiff r, List<String> colNames, int width,
+                                    List<com.textdiff.store.JobMeta.DynCol> dyn) throws IOException {
         List<String> names = colNames == null ? List.of() : colNames;
         w.write(escape(displayKey(r.key)));
         w.write(',');
         w.write(escape(r.status));
         w.write(',');
-        w.write(escape(diffLabel(r, names)));
+        w.write(escape(diffLabel(r, names, dyn)));
         for (int i = 0; i < width; i++) {
             String a = r.aCols != null && i < r.aCols.length ? r.aCols[i] : "";
             String b = r.bCols != null && i < r.bCols.length ? r.bCols[i] : "";
@@ -99,6 +150,14 @@ public final class CsvExporter {
             w.write(escape(excelSafe(a)));
             w.write(',');
             w.write(escape(excelSafe(b)));
+        }
+        if (dyn != null) {
+            for (com.textdiff.store.JobMeta.DynCol d : dyn) {
+                w.write(',');
+                w.write(escape(excelSafe(dynVal(r, d.index, true))));
+                w.write(',');
+                w.write(escape(excelSafe(dynVal(r, d.index, false))));
+            }
         }
         w.write("\r\n");
     }
@@ -120,15 +179,34 @@ public final class CsvExporter {
 
     /** 差异 CSV 单行：非 diff 记录不产出；返回是否写出了内容（空批判断用）。 */
     public static boolean writeDiffRow(BufferedWriter w, RowDiff r, List<String> colNames) throws IOException {
+        return writeDiffRow(w, r, colNames, null);
+    }
+
+    /** 差异 CSV 单行（CTIS 版）：虚拟子列 栏位号=短标签（107-1B）、栏位名=完整列名、值取自行级 dyn。 */
+    public static boolean writeDiffRow(BufferedWriter w, RowDiff r, List<String> colNames,
+                                       List<com.textdiff.store.JobMeta.DynCol> dyn) throws IOException {
         if (!Status.DIFF.equals(r.status) || r.diffCols == null || r.diffCols.length == 0) return false;
         List<String> names = colNames == null ? List.of() : colNames;
         for (int col : r.diffCols) {
-            String name = col < names.size() && !names.get(col).isBlank() ? names.get(col) : "栏位" + (col + 1);
-            String a = r.aCols != null && col < r.aCols.length ? r.aCols[col] : "";
-            String b = r.bCols != null && col < r.bCols.length ? r.bCols[col] : "";
+            String no;
+            String name;
+            String a;
+            String b;
+            if (col >= VBASE) {
+                com.textdiff.store.JobMeta.DynCol d = dynOf(dyn, col);
+                no = d == null ? String.valueOf(col) : d.label();
+                name = d == null ? "虚拟列" : d.name;
+                a = dynVal(r, col, true);
+                b = dynVal(r, col, false);
+            } else {
+                no = String.valueOf(col + 1);
+                name = col < names.size() && !names.get(col).isBlank() ? names.get(col) : "栏位" + (col + 1);
+                a = r.aCols != null && col < r.aCols.length ? r.aCols[col] : "";
+                b = r.bCols != null && col < r.bCols.length ? r.bCols[col] : "";
+            }
             w.write(escape(displayKey(r.key)));
             w.write(',');
-            w.write(String.valueOf(col + 1));
+            w.write(escape(no));
             w.write(',');
             w.write(escape(name));
             w.write(',');

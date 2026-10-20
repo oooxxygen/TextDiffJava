@@ -61,24 +61,34 @@ public final class JobManager implements AutoCloseable {
     public volatile java.util.function.Consumer<String> customRunner;
     /** 特殊编码字段映射（可空：测试/未导入场景）。作业运行时按文件名解析混合编码栏位转码。 */
     private final com.textdiff.store.CharsetMapStore charsetMaps;
+    /** CTIS 动态栏位配置（可空：测试/未导入场景）。作业运行时按文件名解析虚拟子列展开规格。 */
+    private final com.textdiff.store.CtisDynFieldStore ctisDyn;
 
     public JobManager(JobStore store, Path resultsRoot, EngineConfig engine) {
-        this(store, resultsRoot, engine, null, null);
+        this(store, resultsRoot, engine, null, null, null);
     }
 
     public JobManager(JobStore store, Path resultsRoot, EngineConfig engine,
                       com.textdiff.store.FieldMapStore fieldMaps) {
-        this(store, resultsRoot, engine, fieldMaps, null);
+        this(store, resultsRoot, engine, fieldMaps, null, null);
     }
 
     public JobManager(JobStore store, Path resultsRoot, EngineConfig engine,
                       com.textdiff.store.FieldMapStore fieldMaps,
                       com.textdiff.store.CharsetMapStore charsetMaps) {
+        this(store, resultsRoot, engine, fieldMaps, charsetMaps, null);
+    }
+
+    public JobManager(JobStore store, Path resultsRoot, EngineConfig engine,
+                      com.textdiff.store.FieldMapStore fieldMaps,
+                      com.textdiff.store.CharsetMapStore charsetMaps,
+                      com.textdiff.store.CtisDynFieldStore ctisDyn) {
         this.store = store;
         this.resultsRoot = resultsRoot;
         this.maxInMemoryBytes = engine.maxInMemoryBytes();
         this.fieldMaps = fieldMaps;
         this.charsetMaps = charsetMaps;
+        this.ctisDyn = ctisDyn;
         this.pool = new java.util.concurrent.ThreadPoolExecutor(engine.maxThreads(), engine.maxThreads(),
                 60L, TimeUnit.SECONDS, new java.util.concurrent.PriorityBlockingQueue<>(),
                 r -> {
@@ -473,9 +483,12 @@ public final class JobManager implements AutoCloseable {
         Path dir = Path.of(job.resultDir);
         try {
             CompareConfig cfg = Rules.parseLegacy(job.configLine, DEFAULT_DELIM, DEFAULT_TRAILER);
-            // 字段名映射注入：配置未显式携带 COLS 时按文件名查源系统字段配置（需求：列名显示在对比界面与导出）
+            // 字段名映射注入：配置未显式携带 COLS 时按文件名查源系统字段配置（需求：列名显示在对比界面与导出）。
+            // CTIS 动态配置命中的报表优先（反向匹配，规避贪婪 glob 错配），其余走宽匹配（含 #占位符 模式）。
+            String ctisReportId = ctisDynReportId(job.fileA);
             if (cfg.columnNames.isEmpty() && fieldMaps != null) {
-                String reportId = fieldMaps.reportIdForFile(job.fileA);
+                String reportId = ctisReportId != null ? ctisReportId
+                        : fieldMaps.reportIdForFileWide(job.fileA);
                 if (reportId != null) {
                     List<String> names = fieldMaps.fieldNamesFor(reportId);
                     if (!names.isEmpty()) {
@@ -490,6 +503,13 @@ public final class JobManager implements AutoCloseable {
                 Path inputB = resolveInput(job, job.fileB);
                 com.textdiff.engine.FieldTranscoder transA = resolveTranscoder(inputA.toString(), cfg.encodingA, cfg.delimiter);
                 com.textdiff.engine.FieldTranscoder transB = resolveTranscoder(inputB.toString(), cfg.encodingB, cfg.delimiter);
+                // CTIS 动态栏位：parm_report_type=CTS 且适用清单命中 → 父栏位对比时按 '~~' 编号展开虚拟子列
+                List<String> dynWarnings = new ArrayList<>();
+                List<com.textdiff.engine.DynExpand.Spec> dynSpecs =
+                        resolveDynSpecs(job.fileA, ctisReportId, cfg, dynWarnings);
+                if (!dynWarnings.isEmpty()) {
+                    System.err.println("[job] " + jobId + " CTIS 动态栏位告警: " + dynWarnings);
+                }
                 // 增量过滤（ADDMOD）：解压后、正式对比前，按提交条件值重组源文本（转码器仍绑定原始路径解析）
                 List<String> incrConds = parseIncrCond(job);
                 com.textdiff.engine.IncrFilter.Result incr = null;
@@ -501,7 +521,7 @@ public final class JobManager implements AutoCloseable {
                     CompareOutcome outcome = Comparator.compareFiles(
                             incr != null ? incr.filteredA() : inputA,
                             incr != null ? incr.filteredB() : inputB,
-                            cfg, sink, inMemoryBudget(), dir.resolve("tmp"), transA, transB);
+                            cfg, sink, inMemoryBudget(), dir.resolve("tmp"), transA, transB, dynSpecs);
                     Summary s = outcome.summary();
                     // 统计快照落作业记录：列表/批次视图不再逐作业读 meta.json（前端轮询与批次页的主要磁盘开销）
                     job.diffCount = s.diff;
@@ -523,6 +543,7 @@ public final class JobManager implements AutoCloseable {
                         meta.incr = new JobMeta.Incr(cfg.incrFields.stream().map(f -> f + 1).toList(),
                                 incrConds, incr.aBefore(), incr.aAfter(), incr.bBefore(), incr.bAfter());
                     }
+                    if (!dynWarnings.isEmpty()) meta.dynWarnings = dynWarnings;
                     ResultFiles.writeMeta(dir, meta);
                 } finally {
                     com.textdiff.engine.IncrFilter.cleanup(incr); // 过滤产物即用即删
@@ -582,6 +603,71 @@ public final class JobManager implements AutoCloseable {
             return Json.read(job.incrCond, List.class);
         } catch (RuntimeException e) {
             return null; // 条件损坏按未启用处理，不阻断对比
+        }
+    }
+
+    /**
+     * CTIS 动态栏位展开规格解析（反向匹配）：从动态配置适用清单出发，逐一验证
+     * 「parm_report_type=CTS（忽略大小写）且该报表 report_file_name 模式命中文件」，
+     * 命中即返回该 report_id（列名注入与规格解析共用）。反向匹配规避其他报表贪婪 glob
+     * 对无扩展名文件 stem 的错配（如 01A***0* 抢先命中）。栏位定位：栏位名精确匹配 →
+     * 数字作 1-based 序号；失败记告警（该栏位退化为普通比对，不阻断）。配置热导入后下一作业即生效。
+     */
+    private String ctisDynReportId(String fileA) {
+        if (ctisDyn == null || fieldMaps == null || fileA == null || fileA.isBlank()) return null;
+        java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+        for (var a : ctisDyn.allApplies()) {
+            if (!seen.add(a.textName())) continue;
+            var type = fieldMaps.typeByReport(a.textName());
+            if (type == null || type.parmReportType() == null
+                    || !"CTS".equalsIgnoreCase(type.parmReportType().strip())) continue;
+            if (com.textdiff.store.FieldMapStore.fileMatchesPattern(fileA, type.reportFileName())) {
+                return a.textName();
+            }
+        }
+        return null;
+    }
+
+    private List<com.textdiff.engine.DynExpand.Spec> resolveDynSpecs(String fileA, String ctisReportId,
+                                                                     CompareConfig cfg, List<String> warnings) {
+        if (ctisDyn == null || fieldMaps == null || ctisReportId == null) return null;
+        try {
+            List<com.textdiff.store.CtisDynFields.Apply> applies = ctisDyn.appliesFor(ctisReportId);
+            if (applies.isEmpty()) return null;
+            List<com.textdiff.engine.DynExpand.Spec> out = new ArrayList<>();
+            for (var a : applies) {
+                Integer col = locateDynCol(a.colSeq(), cfg.columnNames);
+                if (col == null) {
+                    warnings.add("动态栏位 " + a.colSeq() + "（" + a.dynName() + "）无法定位：栏位名不匹配且非数字序号，按普通栏位比对");
+                    continue;
+                }
+                Map<String, com.textdiff.engine.DynExpand.Item> items = new java.util.LinkedHashMap<>();
+                ctisDyn.itemsFor(a.dynName()).forEach((code, it) -> items.put(code,
+                        new com.textdiff.engine.DynExpand.Item(it.itemCode(), it.itemName(),
+                                it.primaryKey(), it.typeLen(), it.padAlign(), it.description())));
+                out.add(new com.textdiff.engine.DynExpand.Spec(col, a.colSeq(), a.dynName(), items));
+            }
+            return out.isEmpty() ? null : out;
+        } catch (RuntimeException e) {
+            warnings.add("动态栏位配置解析异常，按普通栏位比对: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /** 动态栏位定位：先按栏位名与列名表精确匹配，再按整数作 1-based 序号；均失败返回 null。 */
+    private static Integer locateDynCol(String colRef, List<String> columnNames) {
+        if (colRef == null || colRef.isBlank()) return null;
+        String ref = colRef.strip();
+        if (columnNames != null) {
+            for (int i = 0; i < columnNames.size(); i++) {
+                if (ref.equals(columnNames.get(i))) return i;
+            }
+        }
+        try {
+            int n = Integer.parseInt(ref);
+            return n >= 1 ? n - 1 : null;
+        } catch (NumberFormatException ignored) {
+            return null;
         }
     }
 

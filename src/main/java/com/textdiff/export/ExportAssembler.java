@@ -32,6 +32,17 @@ public final class ExportAssembler {
         }
     }
 
+    /** CTIS 虚拟子列描述（meta.dyn_cols；无则为 null——非展开作业零开销）。 */
+    public static List<com.textdiff.store.JobMeta.DynCol> dynCols(JobRecord job) {
+        if (job.resultDir == null || job.resultDir.isBlank()) return null;
+        try {
+            com.textdiff.store.JobMeta meta = ResultFiles.readMeta(Path.of(job.resultDir));
+            return meta == null || meta.dynCols == null || meta.dynCols.isEmpty() ? null : meta.dynCols;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     public static List<RowDiff> loadRows(JobRecord job, Predicate<RowDiff> filter) {
         try (var stream = ResultFiles.stream(Path.of(job.resultDir).resolve(ResultFiles.RESULT_JSONL))) {
             List<RowDiff> rows = new ArrayList<>();
@@ -54,14 +65,15 @@ public final class ExportAssembler {
      */
     public static List<Path> writeFullCsv(Path dir, JobRecord job, Predicate<RowDiff> filter) {
         List<String> names = columnNames(job);
+        List<com.textdiff.store.JobMeta.DynCol> dyn = dynCols(job);
         int width = scanFullWidth(job, filter);
         return streamCsv(dir, base(job), "_全量.csv", job, filter,
                 new PartedRowWriter() {
                     @Override public void header(java.io.BufferedWriter w) throws java.io.IOException {
-                        CsvExporter.writeFullHeader(w, names, width);
+                        CsvExporter.writeFullHeader(w, names, width, dyn);
                     }
                     @Override public boolean row(java.io.BufferedWriter w, RowDiff r) throws java.io.IOException {
-                        CsvExporter.writeFullRow(w, r, names, width);
+                        CsvExporter.writeFullRow(w, r, names, width, dyn);
                         return true;
                     }
                 });
@@ -70,13 +82,14 @@ public final class ExportAssembler {
     /** 差异 CSV 导出（分片，流式）：一条字段差异一行，≤2 万行单文件，超出切 {base}_差异_001.csv…。 */
     public static List<Path> writeDiffCsv(Path dir, JobRecord job, Predicate<RowDiff> filter) {
         List<String> names = columnNames(job);
+        List<com.textdiff.store.JobMeta.DynCol> dyn = dynCols(job);
         return streamCsv(dir, base(job), "_差异.csv", job, filter,
                 new PartedRowWriter() {
                     @Override public void header(java.io.BufferedWriter w) throws java.io.IOException {
                         CsvExporter.writeDiffHeader(w);
                     }
                     @Override public boolean row(java.io.BufferedWriter w, RowDiff r) throws java.io.IOException {
-                        return CsvExporter.writeDiffRow(w, r, names);
+                        return CsvExporter.writeDiffRow(w, r, names, dyn);
                     }
                 });
     }

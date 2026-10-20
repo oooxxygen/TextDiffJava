@@ -76,8 +76,17 @@ public final class DiffFeatureExtractor {
                 return n;
             });
             f.count++;
-            String a = col < row.aCols.length ? row.aCols[col] : "";
-            String b = col < row.bCols.length ? row.bCols[col] : "";
+            String a;
+            String b;
+            if (col >= com.textdiff.engine.DynExpand.VBASE) {
+                // CTIS 虚拟子列：取值在行级 dyn 子值里（aCols 只有真实列）
+                com.textdiff.engine.DynExpand.Val v = findDyn(row, col);
+                a = v == null || v.a == null ? "" : v.a;
+                b = v == null || v.b == null ? "" : v.b;
+            } else {
+                a = col < row.aCols.length ? row.aCols[col] : "";
+                b = col < row.bCols.length ? row.bCols[col] : "";
+            }
             // A→B 模式全量计数（样本封顶之外也计）；空值计数同为全量
             f.patternCounts.merge(a + "\u0001" + b, 1L, Long::sum);
             if (a.isBlank()) f.emptyA++;
@@ -92,6 +101,15 @@ public final class DiffFeatureExtractor {
                 else if (a.length() > b.length()) f.lengthShrinks++;
             }
         }
+    }
+
+    /** 行级 dyn 子值里按虚拟索引取值（无则 null）。 */
+    private static com.textdiff.engine.DynExpand.Val findDyn(RowDiff row, int idx) {
+        if (row.dyn == null) return null;
+        for (com.textdiff.engine.DynExpand.Val v : row.dyn) {
+            if (v.idx == idx) return v;
+        }
+        return null;
     }
 
     /** A→B 模式分布后处理：按次数降序取 TOP_PATTERNS 条展示项。 */

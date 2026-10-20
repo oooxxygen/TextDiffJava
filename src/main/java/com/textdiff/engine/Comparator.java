@@ -121,11 +121,24 @@ public final class Comparator {
                                               ResultSink sink, long maxInMemoryBytes, Path tmpDir,
                                               FieldTranscoder transA, FieldTranscoder transB)
             throws IOException {
+        return compareFiles(pathA, pathB, config, sink, maxInMemoryBytes, tmpDir, transA, transB, null);
+    }
+
+    /**
+     * CTIS 动态栏位版：dynSpecs 非空时，配置的父栏位在比对阶段按 '~~' 编号展开为虚拟子列
+     * （子栏位差异即栏位差异，diff_cols/频次/导出均按虚拟子列；编号配对与出现顺序无关）。
+     */
+    public static CompareOutcome compareFiles(Path pathA, Path pathB, CompareConfig config,
+                                              ResultSink sink, long maxInMemoryBytes, Path tmpDir,
+                                              FieldTranscoder transA, FieldTranscoder transB,
+                                              List<DynExpand.Spec> dynSpecs)
+            throws IOException {
         Rules.RuleEngine engine = new Rules.RuleEngine(config);
         String delim = config.delimiter;
         String tp = config.trailerPrefix;
         String encA = Encoding.resolveEncoding(pathA, config.encodingA, delim);
         String encB = Encoding.resolveEncoding(pathB, config.encodingB, delim);
+        DynExpand dyn = DynExpand.of(dynSpecs);
 
         Summary summary = new Summary();
         Parser.TrailerData trailerA = new Parser.TrailerData();
@@ -170,18 +183,27 @@ public final class Comparator {
                     }
                     String[] aCols = index.get(key);
                     if (aCols == null) {
-                        sink.addRow(RowDiff.onlyB(key, Status.SECTION_DATA, cols));
+                        sink.addRow(dynAttach(RowDiff.onlyB(key, Status.SECTION_DATA, cols),
+                                dyn != null ? dyn.expandSingle(cols, engine.skip, false) : null));
                         summary.onlyB++;
                     } else {
                         index.markSeen(key);
-                        int[] diffCols = compareCols(aCols, cols, engine);
+                        int[] diffCols;
+                        List<DynExpand.Val> vals = null;
+                        if (dyn != null) {
+                            DynExpand.RowResult rr = dyn.compareRow(aCols, cols, engine.skip);
+                            diffCols = rr.diffCols();
+                            vals = rr.vals();
+                        } else {
+                            diffCols = compareCols(aCols, cols, engine);
+                        }
                         if (diffCols.length > 0) {
-                            sink.addRow(RowDiff.diff(key, Status.SECTION_DATA, aCols, cols, diffCols));
+                            sink.addRow(dynAttach(RowDiff.diff(key, Status.SECTION_DATA, aCols, cols, diffCols), vals));
                             summary.diff++;
                             for (int ci : diffCols) summary.diffColFreq.merge(ci, 1L, Long::sum);
                         } else {
                             // equal：B 隐含等于 A，不重复存 B
-                            sink.addRow(RowDiff.equal(key, Status.SECTION_DATA, aCols));
+                            sink.addRow(dynAttach(RowDiff.equal(key, Status.SECTION_DATA, aCols), vals));
                             summary.equal++;
                         }
                     }
@@ -190,13 +212,15 @@ public final class Comparator {
 
             // 阶段 3：仅 A 存在
             for (Map.Entry<String, String[]> e : index.unseen()) {
-                sink.addRow(RowDiff.onlyA(e.getKey(), Status.SECTION_DATA, e.getValue()));
+                sink.addRow(dynAttach(RowDiff.onlyA(e.getKey(), Status.SECTION_DATA, e.getValue()),
+                        dyn != null ? dyn.expandSingle(e.getValue(), engine.skip, true) : null));
                 summary.onlyA++;
             }
             spilled = index.spilled();
             summary.dupTopA = toDupTop(dupA);
             summary.dupTopB = toDupTop(dupB);
         }
+        if (dyn != null && !dyn.descs().isEmpty()) summary.dynCols = dyn.descs();
 
         // 阶段 4：trailer 对比
         compareTrailer(trailerA, trailerB, sink, summary);
@@ -221,5 +245,10 @@ public final class Comparator {
     private static String keyOf(Rules.RuleEngine engine, String[] cols) {
         if (engine.keyColumns.isEmpty()) return String.join(Rules.KEY_SEP, cols);
         return engine.keyOf(cols);
+    }
+
+    /** 子值列表非空才附加（保持非 CTIS 行为零变更）。 */
+    private static RowDiff dynAttach(RowDiff row, List<DynExpand.Val> vals) {
+        return vals == null || vals.isEmpty() ? row : row.withDyn(vals);
     }
 }

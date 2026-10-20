@@ -20,6 +20,10 @@ public final class JobMeta {
     public List<DupKey> dupTopA, dupTopB;
     /** 增量过滤信息（ADDMOD 启用时非空）。 */
     public Incr incr;
+    /** CTIS 动态栏位虚拟子列注册表（可空 = 非展开作业）：前端渲染与导出列名的依据。 */
+    public List<DynCol> dynCols;
+    /** CTIS 动态栏位解析告警（栏位定位失败等；不阻断比对）。 */
+    public List<String> dynWarnings;
     public Map<Integer, Long> diffColFreq;
     public Map<String, SummaryTrailerField> trailerFields;
     public Boolean recnumCheckA, recnumCheckB;
@@ -70,6 +74,34 @@ public final class JobMeta {
             this.a = a;
             this.b = b;
             this.equal = equal;
+        }
+    }
+
+    /** engine DynExpand.Desc 的镜像（前端 dyn_cols 契约：index/parent_col/parent_label/sub/name/dyn_name/item_name）。 */
+    public static final class DynCol {
+        public int index;
+        public int parentCol;
+        public String parentLabel;
+        public String sub;
+        public String name;
+        public String dynName;
+        public String itemName;
+
+        public DynCol() {}
+
+        public DynCol(com.textdiff.engine.DynExpand.Desc d) {
+            this.index = d.index();
+            this.parentCol = d.parentCol();
+            this.parentLabel = d.parentLabel();
+            this.sub = d.sub();
+            this.name = d.name();
+            this.dynName = d.dynName();
+            this.itemName = d.itemName();
+        }
+
+        /** 短标签（差异列 chips / 导出栏位号）："107-1B"。 */
+        public String label() {
+            return (parentLabel == null ? "" : parentLabel) + "-" + (sub == null ? "" : sub);
         }
     }
 }

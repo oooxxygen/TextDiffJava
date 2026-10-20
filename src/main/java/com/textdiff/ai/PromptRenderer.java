@@ -145,7 +145,7 @@ public final class PromptRenderer {
                 summary.diffColFreq.forEach((c, n) -> {
                     String name = names.getOrDefault(c, "栏位" + (c + 1));
                     double pct = summary.totalB == 0 ? 0 : n * 100.0 / summary.totalB;
-                    ov.append("| 第").append(c + 1).append("列 ").append(name)
+                    ov.append("| ").append(colPrefix(c)).append(name)
                             .append(" | ").append(n)
                             .append(" | ").append(String.format("%.2f", pct)).append("% |\n");
                 });
@@ -166,8 +166,8 @@ public final class PromptRenderer {
         }
         for (DiffFeatureExtractor.ColumnFeature f : cols) {
             String name = names.getOrDefault(f.col, "栏位" + (f.col + 1));
-            // 模板 v3 第八节：字段编号一律 1-based
-            cf.append("### 第").append(f.col + 1).append("列 ").append(name).append("，差异 ").append(f.count).append(" 行\n");
+            // 模板 v3 第八节：字段编号一律 1-based；CTIS 虚拟子列已是完整名（107-1B（…））
+            cf.append("### ").append(colPrefix(f.col)).append(name).append("，差异 ").append(f.count).append(" 行\n");
             if (!f.commonPrefix.isEmpty() || !f.commonSuffix.isEmpty()) {
                 cf.append("- 公共前缀：`").append(f.commonPrefix).append("`；公共后缀：`").append(f.commonSuffix).append("`\n");
             }
@@ -314,7 +314,8 @@ public final class PromptRenderer {
 
     /**
      * 0-based 列号 → 字段名。优先源系统字段配置（bat_report_conf_field），次选规则解析到的表头，
-     * 均无时回落"栏位N"。供主键/跳过栏位"列数+字段名"描述与差异栏位表使用。
+     * 均无时回落"栏位N"。CTIS 虚拟子列（VBASE+）附 meta.dyn_cols 的完整列名（107-1B（数据项名称））。
+     * 供主键/跳过栏位"列数+字段名"描述与差异栏位表使用。
      */
     public static java.util.Map<Integer, String> colNames(JobRecord job, CompareConfig cfg,
                                                            com.textdiff.store.FieldMapStore maps) {
@@ -328,7 +329,23 @@ public final class PromptRenderer {
                 }
             }
         }
+        if (job.resultDir != null && !job.resultDir.isBlank()) {
+            try {
+                com.textdiff.store.JobMeta meta =
+                        com.textdiff.store.ResultFiles.readMeta(java.nio.file.Path.of(job.resultDir));
+                if (meta != null && meta.dynCols != null) {
+                    for (var d : meta.dynCols) out.put(d.index, d.name);
+                }
+            } catch (RuntimeException ignored) {
+                // meta 缺失/损坏按无虚拟列处理
+            }
+        }
         return out;
+    }
+
+    /** 栏位展示前缀：真实列 "第N列 "；CTIS 虚拟子列已是完整名（107-1B（…））不加前缀。 */
+    static String colPrefix(int col) {
+        return col >= com.textdiff.engine.DynExpand.VBASE ? "" : "第" + (col + 1) + "列 ";
     }
 
     /** "共 N 列（第X列 字段A、第Y列 字段B…）"描述；空序列返回"无"。 */

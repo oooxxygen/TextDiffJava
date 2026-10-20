@@ -21,8 +21,10 @@ public final class Summary {
 
     /** 重复键条目：键值 + 该键第 2 次及以后出现的次数。 */
     public record KeyCount(String key, long count) {}
-    /** 差异列频次：{列号(0-based) -> 作为差异列出现的 diff 行数}。 */
+    /** 差异列频次：{列号(0-based) -> 作为差异列出现的 diff 行数}；CTIS 虚拟子列键为 DynExpand.VBASE+n。 */
     public Map<Integer, Long> diffColFreq = new LinkedHashMap<>();
+    /** CTIS 动态栏位虚拟子列注册表（首见顺序；可空 = 非 CTIS 展开作业）。 */
+    public List<DynExpand.Desc> dynCols;
     /** trailer 关键字段一致性: {key -> TrailerField}。 */
     public Map<String, TrailerField> trailerFields = new LinkedHashMap<>();
     public Boolean recnumCheckA;  // null = 无 RecNum

@@ -175,6 +175,10 @@ final class ApiViews {
         m.put("incr_state", job.incrState == null || job.incrState.isEmpty() ? null : job.incrState);
         m.put("incr", meta != null ? meta.incr : null);
         m.put("config", config);
+        if (meta != null && meta.dynCols != null && !meta.dynCols.isEmpty()) m.put("dyn_cols", meta.dynCols);
+        if (meta != null && meta.dynWarnings != null && !meta.dynWarnings.isEmpty()) {
+            m.put("dyn_warnings", meta.dynWarnings);
+        }
         resp.put("meta", m);
 
         if (summary != null) {
@@ -208,6 +212,7 @@ final class ApiViews {
             m.put("diff_cols", r.diffCols);
             if (r.aRaw != null) m.put("a_raw", r.aRaw);
             if (r.bRaw != null) m.put("b_raw", r.bRaw);
+            if (r.dyn != null && !r.dyn.isEmpty()) m.put("dyn", r.dyn);
             out.add(m);
         }
         return out;

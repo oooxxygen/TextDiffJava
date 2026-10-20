@@ -118,14 +118,35 @@ public final class BatchDetailExcel {
             if (s == null || s.diffColFreq == null || s.diffColFreq.isEmpty()) continue;
             CompareConfig cfg = Rules.parseLegacy(job.configLine, " | ", "|||||");
             Map<Integer, String> names = com.textdiff.ai.PromptRenderer.colNames(job, cfg, maps);
+            List<com.textdiff.store.JobMeta.DynCol> dyn = readDynCols(job);
             List<Integer> cols = s.diffColFreq.keySet().stream().sorted().toList();
             for (int c : cols) {
                 Row row = sheet.createRow(r++);
                 cell(row, 0, job.nickname);
-                cell(row, 1, c + 1); // 1-based 列号，与结果页/提示词一致
-                cell(row, 2, names.getOrDefault(c, "栏位" + (c + 1)));
+                if (c >= VBASE) {
+                    // CTIS 虚拟子列：列号=短标签（107-1B），列名=完整列名（107-1B（数据项名称））
+                    com.textdiff.store.JobMeta.DynCol d = dyn == null ? null
+                            : dyn.stream().filter(x -> x.index == c).findFirst().orElse(null);
+                    cell(row, 1, d == null ? String.valueOf(c) : d.label());
+                    cell(row, 2, names.getOrDefault(c, d == null ? "虚拟列" : d.name));
+                } else {
+                    cell(row, 1, c + 1); // 1-based 列号，与结果页/提示词一致
+                    cell(row, 2, names.getOrDefault(c, "栏位" + (c + 1)));
+                }
                 cell(row, 3, ""); // 备注：默认为空
             }
+        }
+    }
+
+    /** CTIS 虚拟子列基址（与引擎约定一致）。 */
+    private static final int VBASE = com.textdiff.engine.DynExpand.VBASE;
+
+    private static List<com.textdiff.store.JobMeta.DynCol> readDynCols(JobRecord job) {
+        try {
+            com.textdiff.store.JobMeta meta = ResultFiles.readMeta(Path.of(job.resultDir));
+            return meta == null ? null : meta.dynCols;
+        } catch (RuntimeException e) {
+            return null;
         }
     }
 

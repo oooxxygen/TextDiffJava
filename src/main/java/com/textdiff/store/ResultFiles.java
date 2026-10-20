@@ -238,6 +238,9 @@ public final class ResultFiles {
             m.diffColFreq = s.diffColFreq;
             m.recnumCheckA = s.recnumCheckA;
             m.recnumCheckB = s.recnumCheckB;
+            if (s.dynCols != null && !s.dynCols.isEmpty()) {
+                m.dynCols = s.dynCols.stream().map(JobMeta.DynCol::new).toList();
+            }
             if (s.trailerFields != null) {
                 m.trailerFields = new java.util.LinkedHashMap<>();
                 for (var e : s.trailerFields.entrySet()) {
@@ -251,16 +254,16 @@ public final class ResultFiles {
 
     /**
      * RowDiff 的可反序列化 DTO（RowDiff 为 final 字段无默认构造器，Jackson 原生支持 record）。
-     * JSONL 行格式即 DTO 格式。
+     * JSONL 行格式即 DTO 格式。dyn = CTIS 动态栏位子值（可空）。
      */
     record RowDto(String key, String status, String section, String[] aCols, String[] bCols, int[] diffCols,
-                  String aRaw, String bRaw) {
+                  String aRaw, String bRaw, List<com.textdiff.engine.DynExpand.Val> dyn) {
         static RowDto of(RowDiff r) {
-            return new RowDto(r.key, r.status, r.section, r.aCols, r.bCols, r.diffCols, r.aRaw, r.bRaw);
+            return new RowDto(r.key, r.status, r.section, r.aCols, r.bCols, r.diffCols, r.aRaw, r.bRaw, r.dyn);
         }
 
         RowDiff toRowDiff() {
-            return new RowDiff(key, status, section, aCols, bCols, diffCols, aRaw, bRaw);
+            return new RowDiff(key, status, section, aCols, bCols, diffCols, aRaw, bRaw, dyn);
         }
     }
 

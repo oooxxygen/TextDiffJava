@@ -41,11 +41,18 @@ public class WebBeansConfig {
         return new com.textdiff.store.CharsetMapStore(paths.baseDir().resolve("store"), cfg.store().enabled());
     }
 
+    /** CTIS 动态栏位配置（'~~' 子栏位展开规则）：JSONL 事实来源 + H2 镜像。 */
+    @Bean(destroyMethod = "close")
+    public com.textdiff.store.CtisDynFieldStore ctisDynFieldStore(AppPaths paths, AppConfig cfg) {
+        return new com.textdiff.store.CtisDynFieldStore(paths.baseDir().resolve("store"), cfg.store().enabled());
+    }
+
     @Bean(destroyMethod = "close")
     public JobManager jobManager(DualJobStore store, AppPaths paths, AppConfig cfg,
                                  com.textdiff.store.FieldMapStore fieldMaps,
-                                 com.textdiff.store.CharsetMapStore charsetMaps) {
-        return new JobManager(store, paths.resultsDir(), cfg.engine(), fieldMaps, charsetMaps);
+                                 com.textdiff.store.CharsetMapStore charsetMaps,
+                                 com.textdiff.store.CtisDynFieldStore ctisDyn) {
+        return new JobManager(store, paths.resultsDir(), cfg.engine(), fieldMaps, charsetMaps, ctisDyn);
     }
 
     /** 压缩文件预解压服务：*.gz 逻辑名匹配 → 临时目录解压 → 预解压池动态补位调度。 */

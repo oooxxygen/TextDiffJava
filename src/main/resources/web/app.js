@@ -351,7 +351,7 @@ const SeqField = {
 
 /* ---------- 记录行组件 ---------- */
 const RecordRow = {
-  props: ["row", "skipSet", "columnNames", "sourceA", "sourceB", "forceOpen", "forceCollapse", "defaultOpen", "note", "supportsNote"],
+  props: ["row", "skipSet", "columnNames", "sourceA", "sourceB", "forceOpen", "forceCollapse", "defaultOpen", "note", "supportsNote", "dynCols"],
   emits: ["save-note"],
   setup(props, { emit }) {
     const localOpen = ref(!!props.defaultOpen);
@@ -361,12 +361,47 @@ const RecordRow = {
     watch(() => props.forceCollapse, () => { localOpen.value = false; });
     const colName = (i) => (props.columnNames && props.columnNames[i]) ? props.columnNames[i] : "";
 
+    // ---- CTIS 动态栏位（虚拟子列）----
+    const VBASE = 1000000;
+    const dynDescByIndex = computed(() => {
+      const m = {};
+      for (const d of (props.dynCols || [])) m[d.index] = d;
+      return m;
+    });
+    const dynParentSet = computed(() => new Set((props.dynCols || []).map(d => d.parent_col)));
+    const isDynCol = (i) => dynParentSet.value.has(i) && (props.row.dyn || []).some(v => v.c === i);
+    const dynSubs = (i) => (props.row.dyn || []).filter(v => v.c === i);
+    function dynDesc(idx) { return dynDescByIndex.value[idx]; }
+    function dynSubLabel(idx) {
+      const d = dynDesc(idx);
+      return d ? (d.parent_label + '-' + d.sub) : String(idx);
+    }
+    function dynTitle(idx) {
+      const d = dynDesc(idx);
+      if (!d) return '';
+      const parts = ['字段名称：' + (d.dyn_name || '—')];
+      parts.push('数据项名称：' + (d.item_name || d.sub));
+      return parts.join('\n');
+    }
+    // 子栏位字符级高亮：差异子项按 a/b 对计算 opcodes，相等子项原样
+    function dynSegs(v, side) {
+      if (!diffSet.value.has(v.idx)) return [{ text: (side === 'a' ? v.a : v.b) || "", cls: "" }];
+      const a = v.a || "", b = v.b || "";
+      return segments(side === "a" ? a : b, computeOpcodes(a, b), side);
+    }
+    const dynDiffOf = (i) => dynSubs(i).some(v => diffSet.value.has(v.idx));
+    // 差异列标签：虚拟子列 → 107-1B；真实列 → N·名称
+    function diffColLabel(c) {
+      if (c >= VBASE) return dynSubLabel(c);
+      return colName(c) ? (c + 1) + '·' + colName(c) : String(c + 1);
+    }
+
     // ---- 记录评议(note) ----
     const noteEditing = ref(false);
     const noteDraft = ref("");
     const hasNote = computed(() => !!(props.note && String(props.note).trim()));
     function openNote() { noteDraft.value = props.note || ""; noteEditing.value = true; }
-    function cancelNote() { noteEditing.value = false; }
+    function cancel() { noteEditing.value = false; }
     function saveNote() { emit("save-note", { key: props.row.key, note: noteDraft.value }); noteEditing.value = false; }
     function delNote() { emit("save-note", { key: props.row.key, note: "" }); noteEditing.value = false; }
 
@@ -395,7 +430,7 @@ const RecordRow = {
     function lineClass(side, i) {
       const cls = [];
       if (props.skipSet.has(i)) cls.push("skip");
-      if (diffSet.value.has(i)) cls.push("diff");
+      if (diffSet.value.has(i) || (isDynCol(i) && dynDiffOf(i))) cls.push("diff");
       return cls;
     }
 
@@ -411,7 +446,8 @@ const RecordRow = {
 
     const hasNames = computed(() => Array.isArray(props.columnNames) && props.columnNames.some(n => n));
     return { isOpen, toggle, sideCols, lineClass, cellSegs, maxLen, colName, hasNames,
-             noteEditing, noteDraft, hasNote, openNote, cancelNote, saveNote, delNote };
+             isDynCol, dynSubs, dynSegs, dynSubLabel, dynTitle, dynDiffOf, diffColLabel,
+             noteEditing, noteDraft, hasNote, openNote, cancel, saveNote, delNote };
   },
   template: `
   <div class="rec" :class="['s-' + row.status, isOpen ? 'open' : '', hasNote ? 'has-note' : '']">
@@ -419,7 +455,7 @@ const RecordRow = {
       <span class="caret">▶</span>
       <span class="key">{{ keyText(row.key) }}</span>
       <span class="tag" :class="row.status">{{ statusLabel(row.status) }}</span>
-      <span class="meta" v-if="row.diff_cols && row.diff_cols.length">差异列: {{ row.diff_cols.map(c=> (colName(c) ? (c+1)+'·'+colName(c) : (c+1))).join(', ') }}</span>
+      <span class="meta" v-if="row.diff_cols && row.diff_cols.length">差异列: {{ row.diff_cols.map(diffColLabel).join(', ') }}</span>
       <span class="rec-fill"></span>
       <button v-if="supportsNote" class="note-mark" :class="{ has: hasNote }" @click.stop="openNote"
               :title="hasNote ? '查看/编辑评议' : '添加评议'">{{ hasNote ? '📝 已评议' : '✏️ 评议' }}</button>
@@ -430,7 +466,7 @@ const RecordRow = {
       <div class="note-actions">
         <button class="mini-btn" @click="saveNote">保存</button>
         <button class="mini-btn danger" v-if="hasNote" @click="delNote">删除</button>
-        <button class="mini-btn" @click="cancelNote">取消</button>
+        <button class="mini-btn" @click="cancel">取消</button>
       </div>
     </div>
     <div class="note-show" v-else-if="supportsNote && hasNote" @click.stop="openNote" title="点击编辑评议">📝 {{ note }}</div>
@@ -443,17 +479,30 @@ const RecordRow = {
         <template v-for="i in maxLen" :key="i">
           <div class="gcell field" v-if="hasNames" :class="{ diff: lineClass('a', i-1).includes('diff') }">
             <span class="ci">{{ i }}</span><span class="nm">{{ colName(i-1) }}</span>
+            <span class="dyn-mark" v-if="isDynCol(i-1)" title="CTIS 动态栏位：已按 ~~ 编号展开为子栏位">⧉</span>
           </div>
           <div class="gcell" :class="[lineClass('a', i-1), sideClass('a')]">
             <template v-if="sideCols('a')">
               <span class="ci">{{ i }}</span>
-              <span class="cv"><span v-for="(s,si) in cellSegs('a', i-1, (sideCols('a')[i-1]||''))" :key="si" :class="s.cls">{{ s.text }}</span></span>
+              <div class="dynsubs" v-if="isDynCol(i-1)">
+                <div v-for="v in dynSubs(i-1)" :key="v.idx" class="dynsub" :class="{ diff: row.diff_cols.includes(v.idx) }">
+                  <span class="dyn-chip" :title="dynTitle(v.idx)">{{ dynSubLabel(v.idx) }}</span>
+                  <span class="cv"><span v-for="(s,si) in dynSegs(v,'a')" :key="si" :class="s.cls">{{ s.text }}</span></span>
+                </div>
+              </div>
+              <span class="cv" v-else><span v-for="(s,si) in cellSegs('a', i-1, (sideCols('a')[i-1]||''))" :key="si" :class="s.cls">{{ s.text }}</span></span>
             </template>
           </div>
           <div class="gcell" :class="[lineClass('b', i-1), sideClass('b')]">
             <template v-if="sideCols('b')">
               <span class="ci">{{ i }}</span>
-              <span class="cv"><span v-for="(s,si) in cellSegs('b', i-1, (sideCols('b')[i-1]||''))" :key="si" :class="s.cls">{{ s.text }}</span></span>
+              <div class="dynsubs" v-if="isDynCol(i-1)">
+                <div v-for="v in dynSubs(i-1)" :key="v.idx" class="dynsub" :class="{ diff: row.diff_cols.includes(v.idx) }">
+                  <span class="dyn-chip" :title="dynTitle(v.idx)">{{ dynSubLabel(v.idx) }}</span>
+                  <span class="cv"><span v-for="(s,si) in dynSegs(v,'b')" :key="si" :class="s.cls">{{ s.text }}</span></span>
+                </div>
+              </div>
+              <span class="cv" v-else><span v-for="(s,si) in cellSegs('b', i-1, (sideCols('b')[i-1]||''))" :key="si" :class="s.cls">{{ s.text }}</span></span>
             </template>
           </div>
         </template>
@@ -482,7 +531,7 @@ const RecordRow = {
 const ZonePanel = {
   components: { RecordRow },
   props: ["jobId", "zone", "label", "total", "skipSet", "columnNames", "sourceA", "sourceB",
-          "openByDefault", "recordsOpen", "pageSize", "exportUrl",
+          "openByDefault", "recordsOpen", "pageSize", "exportUrl", "dynCols",
           "supportsNote", "notes", "noteCount", "extQuery", "extQueryNonce", "notesNonce"],
   emits: ["save-note"],
   setup(props, { emit }) {
@@ -603,7 +652,7 @@ const ZonePanel = {
       <div class="empty" v-if="total === 0">{{ active ? '无匹配记录' : '无记录' }}</div>
       <RecordRow v-for="(r, idx) in rows" :key="idx" :row="r" :skip-set="skipSet" :column-names="columnNames"
                  :source-a="sourceA" :source-b="sourceB" :force-open="allOpen" :force-collapse="collapseNonce"
-                 :default-open="recordsOpen" :supports-note="supportsNote" :note="noteOf(r.key)" @save-note="onSaveNote" />
+                 :default-open="recordsOpen" :supports-note="supportsNote" :note="noteOf(r.key)" :dyn-cols="dynCols" @save-note="onSaveNote" />
       <div class="load-more" v-if="loading">
         <span class="muted">加载中…</span>
       </div>
@@ -798,6 +847,8 @@ const ResultView = {
     const error = ref("");
     const skipSet = ref(new Set());
     const columnNames = ref([]);
+    const dynCols = ref([]);          // CTIS 动态栏位虚拟子列描述（meta.dyn_cols）
+    const DYN_VBASE = 1000000;
     const ai = reactive({ enabled: false, model: "", loading: false, content: "", error: "" });
     // 记录评议(note) + 全局搜索
     const notes = ref({});               // { key: {note, zone, updated_at} }
@@ -816,6 +867,7 @@ const ResultView = {
         const s = new Set([...(cfg.omit_columns || []), ...(cfg.ignore_columns || [])]);
         skipSet.value = s;
         columnNames.value = cfg.column_names || [];
+        dynCols.value = r.meta.dyn_cols || [];
         if (r.meta.status === "running" || r.meta.status === "pending") {
           timer = setTimeout(load, 600);
         }
@@ -875,14 +927,22 @@ const ResultView = {
     });
 
     // 差异列差异度：列出全部有差异的列，按频次降序（freq 键经 JSON 后为字符串），附列名
+    // CTIS 虚拟子列：编号显示 107-1B 短标签、名称用完整列名
     const diffConcentration = computed(() => {
       const s = summary.value;
       if (!s || !s.diff_col_freq) return [];
       const diff = s.diff || 0;
       const names = columnNames.value || [];
+      const dynByIndex = {};
+      for (const d of (dynCols.value || [])) dynByIndex[d.index] = d;
       return Object.keys(s.diff_col_freq)
         .map(k => {
           const i = Number(k);
+          if (i >= DYN_VBASE) {
+            const d = dynByIndex[i] || {};
+            return { col: d.parent_label + '-' + (d.sub || i), name: (d.name || ""), count: s.diff_col_freq[k],
+                     pct: diff ? (s.diff_col_freq[k] * 100 / diff) : 0 };
+          }
           return { col: i + 1, name: (names[i] || ""), count: s.diff_col_freq[k],
                    pct: diff ? (s.diff_col_freq[k] * 100 / diff) : 0 };
         })
@@ -923,7 +983,7 @@ const ResultView = {
       catch (e) { notify(e.message, "error"); }
     }
 
-    return { meta, summary, zoneCounts, error, skipSet, columnNames, trailerChips,
+    return { meta, summary, zoneCounts, error, skipSet, columnNames, dynCols, trailerChips,
              diffConcentration, concList, concShown, loadMoreConc,
              dupTopA, dupTopB, incrText,
              ai, aiHtml, runAnalyze, exportUrl, onRerun, fmtTime, fmtDur, editLabel, backText,
@@ -1012,6 +1072,7 @@ const ResultView = {
             </div>
           </div>
           <div class="incr-line" v-if="meta.incr">⤴ 增量过滤（{{ incrText }}）：{{ sourceA }} {{ meta.incr.a_before }}→{{ meta.incr.a_after }} 行 · {{ sourceB }} {{ meta.incr.b_before }}→{{ meta.incr.b_after }} 行</div>
+          <div class="incr-line" v-if="meta.dyn_warnings && meta.dyn_warnings.length">⚠ CTIS 动态栏位告警：{{ meta.dyn_warnings.join('；') }}</div>
           <div style="margin-top:12px; font-size:12px; color:var(--text-soft);">
             触发时间 {{ fmtTime(meta.created_at) }} · 完成时间 {{ fmtTime(meta.finished_at) }}<span v-if="meta.started_at && meta.finished_at"> · ⏱ 耗时 {{ fmtDur(meta.finished_at - meta.started_at) }}</span><span v-if="meta.locked"> · 🔒 已锁定</span><br/>
             编码 {{ sourceA }}={{ meta.detected_encoding_a }} · {{ sourceB }}={{ meta.detected_encoding_b }}
@@ -1057,16 +1118,16 @@ const ResultView = {
       <!-- 三分区 + trailer -->
       <template v-if="summary">
         <ZonePanel :job-id="jobId" zone="diff" label="🔴 匹配但有差异" :total="zoneCounts.diff||0"
-                   :skip-set="skipSet" :column-names="columnNames" :source-a="sourceA" :source-b="sourceB" :open-by-default="true" :records-open="false" :page-size="10" :export-url="exportUrl('diff')"
+                   :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="true" :records-open="false" :page-size="10" :export-url="exportUrl('diff')"
                    :supports-note="true" :notes="notes" :note-count="zoneNoteCounts.diff||0" :ext-query="globalQ" :ext-query-nonce="globalNonce" :notes-nonce="notesNonce" @save-note="onSaveNote" />
         <ZonePanel :job-id="jobId" zone="unmatched" label="⬛ 未匹配（仅单侧存在）" :total="zoneCounts.unmatched||0"
-                   :skip-set="skipSet" :column-names="columnNames" :source-a="sourceA" :source-b="sourceB" :open-by-default="false" :records-open="false" :page-size="10" :export-url="exportUrl('unmatched')"
+                   :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="false" :records-open="false" :page-size="10" :export-url="exportUrl('unmatched')"
                    :supports-note="true" :notes="notes" :note-count="zoneNoteCounts.unmatched||0" :ext-query="globalQ" :ext-query-nonce="globalNonce" :notes-nonce="notesNonce" @save-note="onSaveNote" />
         <ZonePanel :job-id="jobId" zone="equal" label="🟢 完全匹配（默认折叠）" :total="zoneCounts.equal||0"
-                   :skip-set="skipSet" :column-names="columnNames" :source-a="sourceA" :source-b="sourceB" :open-by-default="false" :records-open="false" :page-size="10" :export-url="exportUrl('equal')"
+                   :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="false" :records-open="false" :page-size="10" :export-url="exportUrl('equal')"
                    :supports-note="true" :notes="notes" :note-count="zoneNoteCounts.equal||0" :ext-query="globalQ" :ext-query-nonce="globalNonce" :notes-nonce="notesNonce" @save-note="onSaveNote" />
         <ZonePanel :job-id="jobId" zone="trailer" label="🔵 尾部信息对比" :total="zoneCounts.trailer||0"
-                   :skip-set="skipSet" :column-names="columnNames" :source-a="sourceA" :source-b="sourceB" :open-by-default="true" :records-open="false" :page-size="10" :export-url="exportUrl('trailer')" />
+                   :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="true" :records-open="false" :page-size="10" :export-url="exportUrl('trailer')" />
       </template>
     </template>
   </div>`,
@@ -1969,6 +2030,32 @@ const SettingsPage = {
     }
     onMounted(loadCharsetStatus);
 
+    // CTIS 动态栏位配置导入（'~~' 子栏位展开规则，全量替换）
+    const ctdyn = reactive({ busy: false, msg: "", ok: null, file: null, status: null });
+    function onCtDynFile(ev) { ctdyn.file = ev.target.files[0] || null; }
+    async function importCtDyn() {
+      if (!ctdyn.file) { ctdyn.msg = "请先选择动态栏位配置 Excel（.xlsx）"; ctdyn.ok = false; return; }
+      ctdyn.busy = true; ctdyn.msg = "导入中…"; ctdyn.ok = null;
+      try {
+        const fd = new FormData();
+        fd.append("file", ctdyn.file);
+        const r = await api("/api/ctis-dyn/import", { method: "POST", body: fd });
+        ctdyn.ok = true;
+        ctdyn.msg = "导入成功：适用文本 " + r.applies + " 行、子栏位 " + r.items + " 条（"
+          + (r.dyn_names || []).join("、") + "）"
+          + (r.db_available ? "，已同步 H2 镜像" : "");
+        if (r.warnings && r.warnings.length) {
+          ctdyn.msg += "；告警：" + r.warnings.join("；");
+        }
+        loadCtDynStatus();
+      } catch (e) { ctdyn.ok = false; ctdyn.msg = "导入失败: " + e.message; }
+      finally { ctdyn.busy = false; }
+    }
+    async function loadCtDynStatus() {
+      try { ctdyn.status = await api("/api/ctis-dyn/status"); } catch (e) {}
+    }
+    onMounted(loadCtDynStatus);
+
     // 生成路径设置（任务管理：差异CSV导出目录；AI 分析结果随该目录）
     const dirs = reactive({ export_dir: "", msg: "", ok: null });
     async function loadDirs() {
@@ -2031,6 +2118,7 @@ const SettingsPage = {
              rt, saveRuntime, imp, onImpFiles, importStructure,
              base, onBaseFiles, importBaseline, exportConfigs,
              cs, onCsFile, importCharset,
+             ctdyn, onCtDynFile, importCtDyn,
              dirs, loadDirs, saveDirs,
              extract, loadExtract, saveExtract,
              jvm, loadJvm, saveJvm };
@@ -2114,6 +2202,20 @@ const SettingsPage = {
           <button class="btn" @click="importCharset" :disabled="cs.busy">{{ cs.busy ? '导入中…' : '导入编码映射' }}</button>
           <span v-if="cs.status" style="font-size:13px;color:var(--text-soft);">已导入：{{ cs.status.tables }} 表 / {{ cs.status.fields }} 字段{{ cs.status.source_file ? '（' + cs.status.source_file + '）' : '' }}{{ cs.status.db_available ? ' · H2 镜像正常' : ' · 纯文件模式' }}</span>
           <span v-if="cs.msg" :style="{ color: cs.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ cs.msg }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">🧩 CTIS 动态栏位配置导入（'~~' 子栏位展开）</div>
+      <div class="card-body">
+        <p class="ai-hint" style="margin-top:0;">上传 CTIS <b>动态栏位区域说明 Excel</b>（如 BXXF_BUFFER 区域说明）：<b>sheet1</b> 适用清单（适用文本名 = 报表昵称 report_id、关联行序号 = 文本内栏位序号、关联行名称 = 动态栏位逻辑名）；<b>sheet2</b> 子栏位明细（数据项名称 / 主键 / 数据类型长度 / <b>字段编号</b> / 对齐补位 / 描述 / 备注），落库 H2 表 <code>ctis_dyn_field</code> / <code>ctis_dyn_item</code>。启用条件（双条件）：报表类型表 parm_report_type=<b>CTS</b> 且适用清单命中该文本——对比时该栏位按 <code>~~+编号+内容</code> 展开为虚拟子栏位逐项比对（编号配对、顺序无关），结果展示 / 导出 / AI 栏位名按 <code>107-1B（数据项名称）</code> 命名。一个文件只允许一个关联行名称。导入为全量替换。</p>
+        <div class="field"><label>动态栏位配置 Excel（.xlsx：sheet1 适用清单 + sheet2 子栏位明细）</label>
+          <input type="file" accept=".xlsx" @change="onCtDynFile" /></div>
+        <div class="btn-row">
+          <button class="btn" @click="importCtDyn" :disabled="ctdyn.busy">{{ ctdyn.busy ? '导入中…' : '导入动态栏位配置' }}</button>
+          <span v-if="ctdyn.status" style="font-size:13px;color:var(--text-soft);">已导入：{{ ctdyn.status.applies }} 适用行 / {{ ctdyn.status.items }} 子栏位（{{ (ctdyn.status.dyn_names||[]).join('、') }}，适用文本 {{ (ctdyn.status.texts||[]).join('、') }}）{{ ctdyn.status.db_available ? ' · H2 镜像正常' : ' · 纯文件模式' }}</span>
+          <span v-if="ctdyn.msg" :style="{ color: ctdyn.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ ctdyn.msg }}</span>
         </div>
       </div>
     </div>

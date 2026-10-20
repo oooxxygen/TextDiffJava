@@ -1,5 +1,7 @@
 package com.textdiff.engine;
 
+import java.util.List;
+
 /**
  * 一条记录（数据行或 trailer 项）的对比结果。对等 Python models.RowDiff。
  * 字符级高亮不在后端：前端按 aCols/bCols 实时计算，后端只给 diffCols + Summary。
@@ -10,9 +12,11 @@ public final class RowDiff {
     public final String section;    // Status.SECTION_DATA / SECTION_TRAILER
     public final String[] aCols;    // 可空
     public final String[] bCols;    // 可空
-    public final int[] diffCols;    // 差异列索引（0-based）
+    public final int[] diffCols;    // 差异列索引（0-based；CTIS 虚拟子列为 DynExpand.VBASE+n）
     public final String aRaw;       // 可空：整行原貌（报表模块界面整行展示用；折行记录含 \n）
     public final String bRaw;       // 可空：同上 B 侧
+    /** CTIS 动态栏位子值（可空）：行内全部子项，含相等子项（前端在父栏位格内逐项渲染）。 */
+    public final List<DynExpand.Val> dyn;
 
     private static final int[] NO_DIFF = new int[0];
 
@@ -23,6 +27,11 @@ public final class RowDiff {
 
     public RowDiff(String key, String status, String section,
                    String[] aCols, String[] bCols, int[] diffCols, String aRaw, String bRaw) {
+        this(key, status, section, aCols, bCols, diffCols, aRaw, bRaw, null);
+    }
+
+    public RowDiff(String key, String status, String section, String[] aCols, String[] bCols,
+                   int[] diffCols, String aRaw, String bRaw, List<DynExpand.Val> dyn) {
         this.key = key;
         this.status = status;
         this.section = section;
@@ -31,11 +40,17 @@ public final class RowDiff {
         this.diffCols = diffCols == null ? NO_DIFF : diffCols;
         this.aRaw = aRaw;
         this.bRaw = bRaw;
+        this.dyn = dyn;
     }
 
     /** 派生副本：附加整行原貌（其余字段不变）。 */
     public RowDiff withRaw(String aRaw, String bRaw) {
-        return new RowDiff(key, status, section, aCols, bCols, diffCols, aRaw, bRaw);
+        return new RowDiff(key, status, section, aCols, bCols, diffCols, aRaw, bRaw, dyn);
+    }
+
+    /** 派生副本：附加 CTIS 动态栏位子值（其余字段不变）。 */
+    public RowDiff withDyn(List<DynExpand.Val> dyn) {
+        return new RowDiff(key, status, section, aCols, bCols, diffCols, aRaw, bRaw, dyn);
     }
 
     public static RowDiff equal(String key, String section, String[] aCols) {
