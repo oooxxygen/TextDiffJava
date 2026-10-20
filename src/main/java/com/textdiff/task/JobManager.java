@@ -750,5 +750,24 @@ public final class JobManager implements AutoCloseable {
         commandPoller.shutdownNow();
         preparePool.shutdownNow();
         pool.shutdownNow();
+        awaitTermination(pool);
+        awaitTermination(preparePool);
+        awaitTermination(commandPoller);
+    }
+
+    /**
+     * 等待池内线程完全退出（含作业线程的 finally 收尾：KeyIndex/RowStore 关闭、状态落盘）。
+     * 只 shutdownNow 不等待曾让测试的临时目录清理与线程收尾赛跑（CI 偶发 DirectoryNotEmpty），
+     * 应用停机同理需要等资源真正释放。
+     */
+    private static void awaitTermination(java.util.concurrent.ExecutorService ex) {
+        try {
+            if (!ex.awaitTermination(15, java.util.concurrent.TimeUnit.SECONDS)) {
+                ex.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            ex.shutdownNow();
+        }
     }
 }
