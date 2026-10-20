@@ -1,0 +1,5 @@
+# 行尾策略：bat 必须恒为 CRLF（cmd 解析依赖，LF 会在含括号块/标签时碎裂），
+# sh 恒为 LF；其余文本按各平台默认
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.sh text eol=lf

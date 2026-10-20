@@ -121,3 +121,14 @@ runtime {
         imageOptions = listOf("--app-version", project.version.toString())
     }
 }
+
+// 平移升级脚本随包携带（解压后在 upgrade/ 下，见 scripts/upgrade/）：
+// jpackage 产出 image 后补入脚本目录，runtimeZip 随链压缩（doLast 写入以避开输出目录重叠校验）
+tasks.named("jpackageImage") {
+    doLast {
+        copy {
+            from("scripts/upgrade")
+            into(layout.buildDirectory.dir("image/upgrade"))
+        }
+    }
+}
