@@ -71,6 +71,7 @@ class JobRecordCopyTest {
     @Test
     void batchRecordCopyPreservesFieldsAndCopiesLists() {
         BatchRecord b = new BatchRecord("b1", "标签", "/a", "/b", "3 行配置", 3);
+        b.createdAt = 1600000000L; // 显式历史时间：copy 若漏拷会带成当下秒值（与构造值同秒时断言恒真假阳性）
         b.locked = true;
         b.batchType = "ctis";
         b.templateDir = "/tpl";

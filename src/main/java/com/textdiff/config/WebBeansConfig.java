@@ -59,17 +59,36 @@ public class WebBeansConfig {
     }
 
     /**
-     * 启动收尾（全部 bean 装配完成后）：清空上次进程残留的解压产物，再恢复中断作业。
+     * 启动收尾（全部 bean 装配完成后）：清空上次进程残留的解压产物，修复存量批次时间，再恢复中断作业。
      * 恢复必须在 extractService/reportRunner 挂载之后——此前在 JobManager 构造器内恢复，
      * 压缩作业会在解压服务就绪前被直接当作文本对比 .gz 原文件。
      */
     @Bean
     org.springframework.boot.ApplicationRunner startupRecovery(
-            JobManager jobManager, com.textdiff.task.ExtractService extractService) {
+            JobManager jobManager, com.textdiff.task.ExtractService extractService,
+            DualJobStore store) {
         return args -> {
             extractService.purgeExtractRoot();
+            repairBatchCreatedAt(store);
             jobManager.start();
         };
+    }
+
+    /**
+     * 存量数据自愈：正常批次先建档后建作业，createdAt ≤ 任一作业的 createdAt；
+     * 晚于最早作业即曾被 BatchRecord.copy 漏拷漂移（存成保存时刻），按最早作业创建时间回填。
+     */
+    static void repairBatchCreatedAt(DualJobStore store) {
+        for (com.textdiff.store.BatchRecord b : store.listBatches()) {
+            long minChild = Long.MAX_VALUE;
+            for (com.textdiff.store.JobRecord j : store.listJobs(b.id)) {
+                if (j.createdAt > 0 && j.createdAt < minChild) minChild = j.createdAt;
+            }
+            if (minChild != Long.MAX_VALUE && b.createdAt > minChild) {
+                b.createdAt = minChild;
+                store.saveBatch(b);
+            }
+        }
     }
 
     /** 任务管理：登记/执行作业完成后的默认生成任务（差异 CSV 导出 + AI 分析）。 */

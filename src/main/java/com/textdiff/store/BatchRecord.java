@@ -47,6 +47,7 @@ public final class BatchRecord {
     /** 逐字段拷贝（列表浅拷贝到新 ArrayList，防外部改写共享清单）。 */
     public BatchRecord copy() {
         BatchRecord c = new BatchRecord(id, label, dirA, dirB, configSource, jobCount);
+        c.createdAt = createdAt; // 构造器把 createdAt 置为当下，漏拷会让列表时间随轮询漂移成"实时"
         c.locked = locked;
         c.noRuleFiles = noRuleFiles == null ? null : new java.util.ArrayList<>(noRuleFiles);
         c.missingFiles = missingFiles == null ? null : new java.util.ArrayList<>(missingFiles);
