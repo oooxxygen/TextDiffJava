@@ -36,8 +36,11 @@ class CreateBatchAsyncTest {
             BatchRecord batch = mgr.createBatchAsync(dir.resolve("a"), dir.resolve("b"),
                     List.of("NICK:*.txt:KEYSEQ=1"), null, null);
             long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
-            assertEquals(BatchRecord.PREPARING, store.getBatch(batch.id).prepareState,
-                    "返回时批次应处于 preparing");
+            // 后台建档极快时返回前即可能已 READY：两种状态都证明调用未阻塞等待建档完成
+            BatchRecord first = store.getBatch(batch.id);
+            assertTrue(BatchRecord.PREPARING.equals(first.prepareState)
+                            || BatchRecord.READY.equals(first.prepareState),
+                    "返回时应为 preparing 或已就绪，实测 " + first.prepareState);
 
             // 建档在后台完成：轮询至 READY，再等作业全部执行到终态
             BatchRecord done = null;
@@ -64,7 +67,11 @@ class CreateBatchAsyncTest {
             // 非法配置行 → 配对阶段抛异常 → 批次终态 failed（页面可见原因）
             BatchRecord batch = mgr.createBatchAsync(dir.resolve("a"), dir.resolve("b"),
                     List.of("BOGUS:::KEYSEQ=???"), null, null);
-            assertEquals(BatchRecord.PREPARING, store.getBatch(batch.id).prepareState);
+            BatchRecord b = store.getBatch(batch.id);
+            // 建档仅 1 个文件对且配置秒败：返回后下一瞬即可能已 failed——两者皆证明异步未阻塞
+            assertTrue(BatchRecord.PREPARING.equals(b.prepareState)
+                            || BatchRecord.PREPARE_FAILED.equals(b.prepareState),
+                    "返回时应为 preparing 或已 failed，实测 " + b.prepareState);
             for (int i = 0; i < 100; i++) {
                 if (BatchRecord.PREPARE_FAILED.equals(store.getBatch(batch.id).prepareState)) break;
                 Thread.sleep(50);
