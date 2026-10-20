@@ -119,7 +119,12 @@ public final class ExtractService implements AutoCloseable {
             try {
                 extractOne(Path.of(path), target);
             } catch (IOException e) {
-                throw new UncheckedIOException("解压失败: " + base(path) + " (" + e.getMessage() + ")", e);
+                String src = base(path);
+                String reason = e.getMessage() == null ? e.toString() : e.getMessage();
+                // 运行内按需解压与预解压池是两条失败路径：清单必须同权落账，
+                // 否则观察者看到作业 FAILED 时 extract_failed 缺失（CI 曾因此偶发断言失败）
+                recordExtractFailure(job, src, reason);
+                throw new UncheckedIOException("解压失败: " + src + " (" + reason + ")", e);
             }
         }
         return target;
@@ -264,17 +269,7 @@ public final class ExtractService implements AutoCloseable {
         String src = !g.sourcesA().isEmpty() ? base(job.fileA)
                 : !g.sourcesB().isEmpty() ? base(job.fileB) : g.logicalName();
         String reason = e.getMessage() == null ? e.toString() : e.getMessage();
-        if (job.batchId != null) {
-            synchronized (batchLock) {
-                BatchRecord latest = store.getBatch(job.batchId);
-                if (latest != null) {
-                    if (latest.extractFailed == null) latest.extractFailed = new ArrayList<>();
-                    String entry = src + "（" + reason + "）";
-                    if (!latest.extractFailed.contains(entry)) latest.extractFailed.add(entry);
-                    store.saveBatch(latest);
-                }
-            }
-        }
+        recordExtractFailure(job, src, reason);
         synchronized (store) {
             JobRecord fresh = store.getJob(job.id);
             if (fresh != null && JobRecord.PENDING.equals(fresh.status)) {
@@ -285,6 +280,20 @@ public final class ExtractService implements AutoCloseable {
             }
         }
         refill();
+    }
+
+    /** 解压失败计入批次 extract_failed 清单（读改写互斥，去重；两条失败路径共用）。 */
+    private void recordExtractFailure(JobRecord job, String src, String reason) {
+        if (job.batchId == null) return;
+        synchronized (batchLock) {
+            BatchRecord latest = store.getBatch(job.batchId);
+            if (latest != null) {
+                if (latest.extractFailed == null) latest.extractFailed = new ArrayList<>();
+                String entry = src + "（" + reason + "）";
+                if (!latest.extractFailed.contains(entry)) latest.extractFailed.add(entry);
+                store.saveBatch(latest);
+            }
+        }
     }
 
     private Path extractRoot() {
