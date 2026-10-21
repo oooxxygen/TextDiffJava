@@ -284,7 +284,7 @@ public final class ReportCompareService implements AutoCloseable {
         tasks.remove(jobId);
     }
 
-    /** 单作业摘要（summary 端点返回体）。 */
+    /** 单作业摘要（summary 端点返回体）。config = 本次对比配置（与普通对比同构）；conf = 当前 conf 规则状态。 */
     public Map<String, Object> summaryView(String jobId) {
         JobRecord job = store.getJob(jobId);
         if (job == null) return null;
@@ -300,7 +300,73 @@ public final class ReportCompareService implements AutoCloseable {
         out.put("label", job.label == null || job.label.isEmpty() ? job.nickname : job.label);
         out.put("finished_at", job.finishedAt);
         out.put("summary", s == null ? Map.of() : s);
+        out.put("config", configView(job));
         return out;
+    }
+
+    /** 本次对比配置：昵称/文件名/主键跳过序列（来自提交时 conf 解析结果）+ conf 规则当前状态（重跑参考）。 */
+    private Map<String, Object> configView(JobRecord job) {
+        Map<String, Object> config = new LinkedHashMap<>();
+        String nick = "";
+        String keySeq = "";
+        String omitSeq = "";
+        try {
+            CompareConfig cfg = Rules.parseLegacy(job.configLine, "|", "|||||");
+            nick = cfg.nickname == null ? "" : cfg.nickname;
+            keySeq = seq1based(cfg.keyColumns);
+            omitSeq = skipSeq(cfg.skipSet());
+        } catch (RuntimeException ignored) {
+            // 旧作业 configLine 解析失败：保持空（默认为空）
+        }
+        if (nick.isEmpty()) nick = resolveNickname(fileName(job.fileA));
+        String[] conf = confKeyTokens(nick);
+        config.put("nickname", nick);
+        config.put("file_name", fileName(job.fileA));
+        config.put("key_seq", keySeq);
+        config.put("omit_seq", omitSeq);
+        config.put("conf_hit", !(conf[0].isEmpty() && conf[1].isEmpty()));
+        config.put("conf_key_seq", conf[0]);
+        config.put("conf_omit_seq", conf[1]);
+        return config;
+    }
+
+    /** 0-based 主键列 → "3/5"（1-based 串）；空列 = 空串（配置未设置，整行对比）。 */
+    private static String seq1based(List<Integer> cols) {
+        if (cols == null || cols.isEmpty()) return "";
+        return String.join("/", cols.stream().map(c -> String.valueOf(c + 1)).toList());
+    }
+
+    private static String skipSeq(java.util.Set<Integer> skip) {
+        if (skip == null || skip.isEmpty()) return "";
+        return String.join("/", skip.stream().sorted().map(c -> String.valueOf(c + 1)).toList());
+    }
+
+    /**
+     * 就地重跑：清结果态重新执行（沿用 job_id，覆盖原结果文件）。
+     * syncConf=true 时按昵称重查 conf 规则刷新 KEYSEQ/OMITSEQ（同步最新配置）；未命中 = 整行对比。
+     */
+    public synchronized void rerun(String jobId, boolean syncConf) {
+        JobRecord job = store.getJob(jobId);
+        if (job == null || !JOB_TYPE.equals(job.jobType)) {
+            throw new IllegalArgumentException("报表对比作业不存在: " + jobId);
+        }
+        if (JobRecord.PENDING.equals(job.status) || JobRecord.RUNNING.equals(job.status)) {
+            throw new IllegalStateException("作业进行中，不可重复触发");
+        }
+        if (syncConf) {
+            String name = fileName(job.fileA);
+            String nick = resolveNickname(name);
+            String[] tokens = confKeyTokens(nick);
+            job.configLine = nick + ":" + name
+                    + (tokens[0].isEmpty() ? "" : ":KEYSEQ=" + tokens[0])
+                    + (tokens[1].isEmpty() ? "" : ":OMITSEQ=" + tokens[1]);
+        }
+        job.status = JobRecord.PENDING;
+        job.error = null;
+        job.startedAt = 0;
+        job.finishedAt = 0;
+        store.saveJob(job);
+        submit(job);
     }
 
     public ReportSummary readSummary(Path resultDir) {

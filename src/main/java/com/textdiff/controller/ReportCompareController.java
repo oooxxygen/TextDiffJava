@@ -95,12 +95,29 @@ public class ReportCompareController {
         return dir;
     }
 
-    /** 单报表作业摘要（含 ReportSummary：条数/分区差异/匹配统计/条数核对）。 */
+    /** 单报表作业摘要（含 ReportSummary：条数/分区差异/匹配统计/条数核对 + config 配置段）。 */
     @GetMapping("/report-jobs/{id}/summary")
     public Map<String, Object> summary(@PathVariable String id) {
         Map<String, Object> out = service.summaryView(require(id).id);
         if (out == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "作业不存在: " + id);
         return out;
+    }
+
+    /**
+     * 报表作业重跑（就地覆盖原结果）：body.sync=true 时按昵称重查 conf 规则刷新主键/跳过栏位
+     * （同步最新配置），false 沿用本次 configLine；未命中 conf = 整行对比。
+     */
+    @PostMapping("/report-jobs/{id}/rerun")
+    public Map<String, Object> rerun(@PathVariable String id,
+                                     @RequestBody(required = false) Map<String, Object> body) {
+        require(id);
+        boolean sync = body != null && Boolean.TRUE.equals(body.get("sync"));
+        try {
+            service.rerun(id, sync);
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        }
+        return Map.of("job_id", id, "status", "pending");
     }
 
     /**

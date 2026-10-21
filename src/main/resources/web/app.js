@@ -660,6 +660,37 @@ const ZonePanel = {
   </div>`,
 };
 
+/* ---------- 列表分页（lazy load）：大列表按页切片渲染，避免超多条目一次铺满 DOM ---------- */
+function usePager(listGetter, defaultSize) {
+  const page = ref(1);
+  const size = ref(defaultSize);
+  const total = computed(() => listGetter().length);
+  const pages = computed(() => Math.max(1, Math.ceil(total.value / size.value)));
+  const paged = computed(() => listGetter().slice((page.value - 1) * size.value, page.value * size.value));
+  function go(n) { page.value = Math.min(Math.max(1, (n | 0) || 1), pages.value); }
+  function resize(s) { size.value = s; page.value = 1; }
+  function reset() { page.value = 1; }
+  // reactive 包装：嵌套 ref 在模板中自动解包（pg.paged 直接是数组、pg.page 是数值）
+  return reactive({ page, size, total, pages, paged, go, resize, reset });
+}
+/* 分页控件（列表卡片头部；复用 zone-pager 样式） */
+const ListPager = {
+  props: { page: Number, pages: Number, total: Number, size: Number },
+  emits: ["go", "resize"],
+  template: `
+  <span class="zone-pager" @click.stop>
+    <button class="mini-btn" :disabled="page<=1" @click="$emit('go', page-1)">‹ 上一页</button>
+    <span>第 <input class="pager-input" :value="page"
+        @keyup.enter="$emit('go', parseInt($event.target.value) || 1)" /> / {{ pages }} 页 · 共 {{ total }} 条</span>
+    <button class="mini-btn" :disabled="page>=pages" @click="$emit('go', page+1)">下一页 ›</button>
+    <select class="pager-size" :value="size" @change="$emit('resize', +$event.target.value)" title="每页条数">
+      <option :value="50">50/页</option>
+      <option :value="100">100/页</option>
+      <option :value="200">200/页</option>
+    </select>
+  </span>`,
+};
+
 /* ---------- 配置展览区（只读 + 编辑重跑） ---------- */
 const ConfigPanel = {
   components: { SeqField },
@@ -1605,8 +1636,7 @@ const JobList = {
     }
 
     // ---- 多选 ----
-    const toggleJob = (id) => { selJobs.has(id) ? selJobs.delete(id) : selJobs.add(id); bumpSel(); };
-    const toggleBatch = (id) => { selBatches.has(id) ? selBatches.delete(id) : selBatches.add(id); bumpSel(); };
+    const toggleJob = (id) => { selJobs.has(id) ? selJobs.delete(id) : selJobs.add(id); bumpSel(); };    const toggleBatch = (id) => { selBatches.has(id) ? selBatches.delete(id) : selBatches.add(id); bumpSel(); };
     const isJobSel = (id) => (selVer.value, selJobs.has(id));
     const isBatchSel = (id) => (selVer.value, selBatches.has(id));
     const selCount = computed(() => (selVer.value, selJobs.size + selBatches.size));
@@ -1636,7 +1666,15 @@ const JobList = {
       } catch (e) { notify("批量删除失败: " + e.message, "error"); }
     }
 
+    // ---- 分页 lazy load（默认 50/页）：超多条目下只渲染当前页 ----
+    const pgReport = usePager(() => fReportBatches.value, 50);
+    const pgFile = usePager(() => fFileBatches.value, 50);
+    const pgJobs = usePager(() => fJobs.value, 50);
+    const pgSplit = usePager(() => fSplit.value, 50);
+    watch(q, () => { pgReport.reset(); pgFile.reset(); pgJobs.reset(); pgSplit.reset(); });
+
     return { batches, standalone, splitJobs, q, fBatches, fFileBatches, fReportBatches, fJobs, fSplit,
+             pgReport, pgFile, pgJobs, pgSplit,
              fmtTime, srcA, srcB, gradeOf,
              isReport, isCustom, isCtis, openBatchEntry, openReportBatchFromList,
              open: (id) => emit("open", id), openBatch: (id) => emit("open-batch", id),
@@ -1664,8 +1702,13 @@ const JobList = {
     </div>
 
     <div class="card" v-if="fReportBatches.length">
-      <div class="card-head">🧾 报表对比结果（点击进入查看各报表）</div>      <div>
-        <div class="job-row batch-row" v-for="b in fReportBatches" :key="b.batch.batch_id" @click="openReportBatchFromList(b)">
+      <div class="card-head">🧾 报表对比结果（点击进入查看各报表）
+        <div class="head-actions">
+          <ListPager :page="pgReport.page" :pages="pgReport.pages" :total="pgReport.total" :size="pgReport.size"
+                     @go="pgReport.go" @resize="pgReport.resize" />
+        </div>
+      </div>      <div>
+        <div class="job-row batch-row" v-for="b in pgReport.paged" :key="b.batch.batch_id" @click="openReportBatchFromList(b)">
           <span class="nick-badge" title="报表对比批次">🧾 报表</span>
           <span class="jid">{{ b.batch.batch_id }}</span>
           <span class="badge-status" :class="b.status">{{ b.status }}</span>
@@ -1686,9 +1729,13 @@ const JobList = {
 
     <div class="card" v-if="fFileBatches.length">
       <div class="card-head">📦 批量对比批次（点击进入查看各文件）
-        <label class="sel-all" @click.stop><input type="checkbox" :checked="allBatchesSel" @change="toggleAllBatches" /> 全选批次</label>
+        <div class="head-actions">
+          <label class="sel-all" @click.stop><input type="checkbox" :checked="allBatchesSel" @change="toggleAllBatches" /> 全选批次</label>
+          <ListPager :page="pgFile.page" :pages="pgFile.pages" :total="pgFile.total" :size="pgFile.size"
+                     @go="pgFile.go" @resize="pgFile.resize" />
+        </div>
       </div>      <div>
-        <div class="job-row batch-row" :class="{ selected: isBatchSel(b.batch.batch_id) }" v-for="b in fFileBatches" :key="b.batch.batch_id" @click="openBatchEntry(b)">
+        <div class="job-row batch-row" :class="{ selected: isBatchSel(b.batch.batch_id) }" v-for="b in pgFile.paged" :key="b.batch.batch_id" @click="openBatchEntry(b)">
           <input class="row-check" type="checkbox" :checked="isBatchSel(b.batch.batch_id)" @click.stop="toggleBatch(b.batch.batch_id)" />
           <span class="nick-badge" v-if="isCtis(b)" title="CTIS 文本对比批次">🔀 CTIS</span>
           <span class="nick-badge" v-else-if="isCustom(b)" title="自定义格式对比批次">📐 段对比</span>
@@ -1711,11 +1758,15 @@ const JobList = {
 
     <div class="card">
       <div class="card-head">🗂️ 单文件对比作业
-        <label class="sel-all" v-if="fJobs.length" @click.stop><input type="checkbox" :checked="allJobsSel" @change="toggleAllJobs" /> 全选</label>
+        <div class="head-actions">
+          <label class="sel-all" v-if="fJobs.length" @click.stop><input type="checkbox" :checked="allJobsSel" @change="toggleAllJobs" /> 全选</label>
+          <ListPager :page="pgJobs.page" :pages="pgJobs.pages" :total="pgJobs.total" :size="pgJobs.size"
+                     @go="pgJobs.go" @resize="pgJobs.resize" />
+        </div>
       </div>
       <div>
         <div class="empty" v-if="!fJobs.length">无匹配作业</div>
-        <div class="job-row" :class="{ selected: isJobSel(j.job_id) }" v-for="j in fJobs" :key="j.job_id" @click="open(j.job_id)">
+        <div class="job-row" :class="{ selected: isJobSel(j.job_id) }" v-for="j in pgJobs.paged" :key="j.job_id" @click="open(j.job_id)">
           <input class="row-check" type="checkbox" :checked="isJobSel(j.job_id)" @click.stop="toggleJob(j.job_id)" />
           <span class="jid">{{ j.job_id }}</span>
           <span class="group-badge" v-if="(j.config||{}).group">{{ j.config.group }}</span>
@@ -1737,9 +1788,14 @@ const JobList = {
     </div>
 
     <div class="card" v-if="fSplit.length">
-      <div class="card-head">🪓 文本拆分作业</div>
+      <div class="card-head">🪓 文本拆分作业
+        <div class="head-actions">
+          <ListPager :page="pgSplit.page" :pages="pgSplit.pages" :total="pgSplit.total" :size="pgSplit.size"
+                     @go="pgSplit.go" @resize="pgSplit.resize" />
+        </div>
+      </div>
       <div>
-        <div class="job-row" v-for="s in fSplit" :key="s.job_id" @click="openSplit(s.job_id)">
+        <div class="job-row" v-for="s in pgSplit.paged" :key="s.job_id" @click="openSplit(s.job_id)">
           <span class="jid">{{ s.job_id }}</span>
           <span class="badge-status" :class="s.status">{{ s.status }}</span>
           <span class="group-badge" v-if="s.label" :title="s.label">🏷 {{ s.label }}</span>
@@ -1797,6 +1853,9 @@ const BatchView = {
         nickOf(c).toLowerCase().includes(ql) || baseName(c.file_a).toLowerCase().includes(ql)
         || groupOf(c).toLowerCase().includes(ql));
     });
+    // 子作业分页 lazy load（默认 100/页）：超大批次只渲染当前页
+    const pgChildren = usePager(() => children.value, 100);
+    watch([q, groupFilter, starFilter], () => pgChildren.reset());
     async function toggleStar(c) {
       try {
         await api("/api/jobs/" + c.job_id + (c.starred ? "/unstar" : "/star"), { method: "POST" });
@@ -1817,7 +1876,7 @@ const BatchView = {
             if (ov.value && ov.value.batch) ov.value.batch.label = v; }
       catch (e) { notify(e.message, "error"); }
     }
-    return { ov, q, children, baseName, nickOf, groupOf, fmtTime, srcA, srcB, sourceA, sourceB, gradeOf,
+    return { ov, q, children, pgChildren, baseName, nickOf, groupOf, fmtTime, srcA, srcB, sourceA, sourceB, gradeOf,
              starFilter, starCounts, toggleStar, groupFilter, groupOptions, exportHref, exportAllHref,
              editLabel,
              open: (id) => emit("open", id), goBack: () => emit("back") };
@@ -1870,6 +1929,8 @@ const BatchView = {
              title="导出批次明细 Excel：文件昵称 / 归属组 / 对比配置 / 对比详情（记录总数与差异情况）。已选归属组时只导出该组">⬇ 导出明细 Excel{{ groupFilter ? '（' + groupFilter + '）' : '' }}</a>
           <a class="mini-btn" :href="exportAllHref"
              title="打包下载批次内每个表的全量导出 Excel（zip）">📦 打包下载全部表</a>
+          <ListPager :page="pgChildren.page" :pages="pgChildren.pages" :total="pgChildren.total" :size="pgChildren.size"
+                     @go="pgChildren.go" @resize="pgChildren.resize" />
         </div>
       </div>
       <div class="card-body" style="padding:12px 18px;">
@@ -1891,7 +1952,7 @@ const BatchView = {
       </div>
       <div>
         <div class="empty" v-if="!children.length">无匹配文件</div>
-        <div class="job-row" v-for="c in children" :key="c.job_id" @click="open(c.job_id)">
+        <div class="job-row" v-for="c in pgChildren.paged" :key="c.job_id" @click="open(c.job_id)">
           <button class="star-btn" :class="{on: c.starred}" @click.stop="toggleStar(c)" :title="c.starred ? '取消星标' : '加星标'">{{ c.starred ? '★' : '☆' }}</button>
           <span class="nick-badge" v-if="nickOf(c)" :title="'配置昵称 ' + nickOf(c)">{{ nickOf(c) }}</span>
           <span class="jid">{{ baseName(c.file_a) }}</span>
@@ -2396,6 +2457,15 @@ const TaskManagerPage = {
       try { await api("/api/tasks/" + id, { method: "DELETE" }); await load(); }
       catch (e) { notify(e.message, "error"); }
     }
+    // ---- 搜索过滤 + 分页 lazy load（批次/单文件作业默认 50/页） ----
+    const ql = computed(() => q.value.trim().toLowerCase());
+    const fBatches = computed(() => !ql.value ? batches.value : batches.value.filter(b =>
+      (b.batch.batch_id + " " + b.batch.dir_a + " " + b.batch.dir_b + " " + (b.batch.label || "")).toLowerCase().includes(ql.value)));
+    const fStandalone = computed(() => !ql.value ? standalone.value : standalone.value.filter(j =>
+      (j.job_id + " " + (j.file_a || "") + " " + (j.file_b || "")).toLowerCase().includes(ql.value)));
+    const pgBatches = usePager(() => fBatches.value, 50);
+    const pgJobs = usePager(() => fStandalone.value, 50);
+    watch(q, () => { pgBatches.reset(); pgJobs.reset(); });
     // ---- CSV 分文件管理（2 万条/文件的切割产物） ----
     const openTaskFiles = reactive(new Set());
     const toggleTaskFiles = (id) => toggle(openTaskFiles, id);
@@ -2404,9 +2474,22 @@ const TaskManagerPage = {
       : n >= 1048576 ? (n / 1048576).toFixed(1) + " MB"
       : n >= 1024 ? (n / 1024).toFixed(0) + " KB" : (n || 0) + " B";
     const taskZipUrl = (t) => "/api/tasks/" + t.task_id + "/files/zip";
+    // 展开批次的子作业分页（默认 100/页，防超大批次展开卡顿）
+    const childPg = reactive({});   // batchId -> {page, size}
+    const childState = (id) => childPg[id] || (childPg[id] = { page: 1, size: 100 });
+    const childTotal = (id) => (batchChildren[id] || []).length;
+    const childPages = (id) => Math.max(1, Math.ceil(childTotal(id) / childState(id).size));
+    const childPaged = (id) => {
+      const st = childState(id);
+      return (batchChildren[id] || []).slice((st.page - 1) * st.size, st.page * st.size);
+    };
+    const childGo = (id, n) => { const st = childState(id); st.page = Math.min(Math.max(1, (n | 0) || 1), childPages(id)); };
+    const childResize = (id, s) => { const st = childState(id); st.size = s; st.page = 1; };
     return { batches, standalone, openBatches, openJobs, q, tasksOf, typeText, statusText, fileName,
              durTask, durJob, durBatch,
+             fBatches, fStandalone, pgBatches, pgJobs,
              toggle, toggleBatch, batchChildren, regen, delTask, fmtTime,
+             childTotal, childPages, childPaged, childGo, childResize,
              selTasks, runAt, jobAllSel, toggleJobSel, batchRegen,
              openTaskFiles, toggleTaskFiles, fileNameOf, fmtSize, taskZipUrl,
              open: (id) => emit("open", id), openBatch: (id) => emit("open-batch", id) };
@@ -2417,15 +2500,17 @@ const TaskManagerPage = {
     <div class="card">
       <div class="toolbar">
         <input class="search-input" v-model="q" placeholder="🔎 搜索任务（按批次/作业/文件/产物路径）" />
-        <span class="toolbar-count">已选 {{ selTasks.size }} 项任务</span>
+        <span class="toolbar-count">批次 {{ fBatches.length }} · 单文件作业 {{ fStandalone.length }} · 已选 {{ selTasks.size }} 项任务</span>
         <input type="datetime-local" v-model="runAt" style="width:210px;" title="留空 = 立即执行；选择未来时间 = 定时执行" />
         <button class="mini-btn" @click="batchRegen" :disabled="!selTasks.size">⚡ 批量重新生成（差异CSV / AI分析）</button>
         <button class="mini-btn" @click="selTasks.clear()" :disabled="!selTasks.size">清空选择</button>
         <span class="toolbar-note">勾选作业后提交；填了时间则到点自动执行（重启后仍恢复）</span>
+        <ListPager :page="pgBatches.page" :pages="pgBatches.pages" :total="pgBatches.total" :size="pgBatches.size"
+                   @go="pgBatches.go" @resize="pgBatches.resize" />
       </div>
     </div>
 
-    <div class="card" v-for="b in batches" :key="b.batch.batch_id">
+    <div class="card" v-for="b in pgBatches.paged" :key="b.batch.batch_id">
       <div class="job-row batch-row" @click="toggleBatch(b.batch.batch_id)">
         <span class="jid">{{ b.batch.batch_id }}</span>
         <span class="badge-status" :class="b.status">{{ b.status }}</span>
@@ -2440,7 +2525,7 @@ const TaskManagerPage = {
         </span>
       </div>
       <template v-if="openBatches.has(b.batch.batch_id)">
-        <template v-for="c in (batchChildren[b.batch.batch_id] || [])" :key="c.job_id">
+        <template v-for="c in childPaged(b.batch.batch_id)" :key="c.job_id">
           <div class="job-row" style="padding-left:32px;" @click="toggle(openJobs, c.job_id)">
             <label class="sel-all" style="margin-left:0;margin-right:10px;" @click.stop title="选中该作业的差异CSV + AI分析任务"><input type="checkbox" :checked="jobAllSel(c.job_id)" @change="toggleJobSel(c.job_id)" /></label>
             <span class="jid">{{ (c.file_a||'').split(/[\\\\/]/).pop() }}</span>
@@ -2483,14 +2568,25 @@ const TaskManagerPage = {
             </template>
           </template>
         </template>
+        <!-- 展开批次的子作业分页（默认 100/页） -->
+        <div class="job-row" style="padding-left:32px;" v-if="childPages(b.batch.batch_id) > 1">
+          <ListPager :page="childState(b.batch.batch_id).page" :pages="childPages(b.batch.batch_id)"
+                     :total="childTotal(b.batch.batch_id)" :size="childState(b.batch.batch_id).size"
+                     @go="(n) => childGo(b.batch.batch_id, n)" @resize="(s) => childResize(b.batch.batch_id, s)" />
+        </div>
       </template>
     </div>
 
     <div class="card">
-      <div class="card-head">🗂️ 单文件作业任务</div>
+      <div class="card-head">🗂️ 单文件作业任务
+        <div class="head-actions">
+          <ListPager :page="pgJobs.page" :pages="pgJobs.pages" :total="pgJobs.total" :size="pgJobs.size"
+                     @go="pgJobs.go" @resize="pgJobs.resize" />
+        </div>
+      </div>
       <div>
-        <div class="empty" v-if="!standalone.length">无作业</div>
-        <template v-for="j in standalone" :key="j.job_id">
+        <div class="empty" v-if="!fStandalone.length">无作业</div>
+        <template v-for="j in pgJobs.paged" :key="j.job_id">
           <div class="job-row" @click="toggle(openJobs, j.job_id)">
             <label class="sel-all" style="margin-left:0;margin-right:10px;" @click.stop title="选中该作业的差异CSV + AI分析任务"><input type="checkbox" :checked="jobAllSel(j.job_id)" @change="toggleJobSel(j.job_id)" /></label>
             <span class="jid">{{ j.job_id }}</span>
@@ -3010,6 +3106,9 @@ const ReportBatchView = {
         ((c.label || "") + baseName2(c.file_a)).toLowerCase().includes(ql));
     });
     const exportHref = computed(() => "/api/report-batches/" + props.batchId + "/export-detail");
+    // 子报表分页 lazy load（默认 100/页）
+    const pgChildren = usePager(() => children.value, 100);
+    watch(q, () => pgChildren.reset());
     async function editLabel() {
       const cur = (ov.value && ov.value.batch && ov.value.batch.label) || "";
       const v = await askInput({ title: "设置批次标签", message: "留空即清除标签", value: cur, placeholder: "标签内容" });
@@ -3019,7 +3118,7 @@ const ReportBatchView = {
       catch (e) { notify(e.message, "error"); }
     }
     function baseName2(p) { return (p || "").split(/[\\/]/).pop(); }
-    return { ov, q, children, exportHref, fmtTime, baseName: baseName2, editLabel, REPORT_STATUS,
+    return { ov, q, children, pgChildren, exportHref, fmtTime, baseName: baseName2, editLabel, REPORT_STATUS,
              open: (id) => emit("open", id), goBack: () => emit("back") };
   },
   template: `
@@ -3053,13 +3152,18 @@ const ReportBatchView = {
       </div>
     </div>
     <div class="card">
-      <div class="card-head">📄 报表核对结果（点击查看单报表详情）</div>
+      <div class="card-head">📄 报表核对结果（点击查看单报表详情）
+        <div class="head-actions">
+          <ListPager :page="pgChildren.page" :pages="pgChildren.pages" :total="pgChildren.total" :size="pgChildren.size"
+                     @go="pgChildren.go" @resize="pgChildren.resize" />
+        </div>
+      </div>
       <div class="card-body" style="padding:12px 18px;">
         <div class="field"><input v-model="q" placeholder="🔎 按昵称 / 文件名模糊搜索" /></div>
       </div>
       <div>
         <div class="empty" v-if="!children.length">无匹配报表</div>
-        <div class="job-row" v-for="c in children" :key="c.job_id" @click="open(c.job_id)">
+        <div class="job-row" v-for="c in pgChildren.paged" :key="c.job_id" @click="open(c.job_id)">
           <span class="nick-badge">{{ (c.config||{}).nickname || c.label }}</span>
           <span class="jid">{{ baseName(c.file_a) }}</span>
           <span class="badge-status" :class="c.status">{{ REPORT_STATUS[c.status] || c.status }}</span>
@@ -3092,6 +3196,32 @@ const ReportResultView = {
     }
     onMounted(load);
     const s = computed(() => (sum.value && sum.value.summary) || null);
+    const cfg = computed(() => (sum.value && sum.value.config) || {});
+    const confHit = computed(() => !!cfg.value.conf_hit);
+    const confHint = computed(() => {
+      const c = cfg.value;
+      if (!confHit.value) return "配置来源：conf 规则未命中（昵称「" + (c.nickname || "—") + "」无对应规则）→ 默认整行对比";
+      let t = "配置来源：conf 规则（已命中昵称「" + c.nickname + "」";
+      const cur = [];
+      if (c.conf_key_seq) cur.push("KEYSEQ=" + c.conf_key_seq);
+      if (c.conf_omit_seq) cur.push("OMITSEQ=" + c.conf_omit_seq);
+      t += cur.length ? "，conf 当前 " + cur.join(" / ") : "，conf 未配置主键 = 整行对比";
+      return t + "）";
+    });
+    // 重跑（就地覆盖原结果）：sync=true 按昵称重查 conf 规则刷新主键/跳过栏位
+    const busyRerun = ref(false); const rerunErr = ref("");
+    async function doRerun(sync) {
+      const msg = sync
+        ? "将按昵称重新读取 conf 规则（主键/跳过栏位）并就地重跑，覆盖原结果。确认？"
+        : "将沿用本次配置就地重跑，覆盖原结果。确认？";
+      if (!(await askConfirm(msg, { okText: "重新执行" }))) return;
+      busyRerun.value = true; rerunErr.value = "";
+      try {
+        await jpost(`/api/report-jobs/${props.jobId}/rerun`, { sync });
+        await load(); // 状态转 pending 后 load 内部持续轮询，完成后视图自动刷新
+      } catch (e) { rerunErr.value = e.message; }
+      finally { busyRerun.value = false; }
+    }
     const fileName = (p) => (p || "").split(/[\\/]/).pop();
     /* 条数核对展示：相符项收敛为汇总一行，仅逐条列出不符项（避免多段报表平铺几十行）。 */
     const countCheckText = computed(() => {
@@ -3106,7 +3236,7 @@ const ReportResultView = {
       return lines;
     });
     const exportHref = computed(() => `/api/report-jobs/${props.jobId}/export`);
-    return { sum, s, fileName, countCheckText, exportHref, REPORT_STATUS, goBack: () => emit("back") };
+    return { sum, s, cfg, confHit, confHint, busyRerun, rerunErr, doRerun, fileName, countCheckText, exportHref, REPORT_STATUS, goBack: () => emit("back") };
   },
   template: `
   <div v-if="sum">
@@ -3120,10 +3250,36 @@ const ReportResultView = {
            title="仅导出单侧不匹配 + 行部分匹配（部分匹配一条差异栏位一行）">⬇ 导出差异 CSV</a>
       </template>
     </PageHeader>
+    <!-- 配置卡片（始终显示；error 态重跑即重试入口） -->
+    <div class="card">
+      <div class="card-head">⚙️ 本次对比配置
+        <div class="head-actions">
+          <button class="mini-btn" @click="doRerun(true)" :disabled="busyRerun"
+                  title="按昵称重新读取 conf 规则（主键/跳过栏位）后就地重跑">↻ 同步最新配置并重跑</button>
+          <button class="mini-btn" @click="doRerun(false)" :disabled="busyRerun"
+                  title="沿用本次配置就地重跑">↺ 重新执行</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="cfg-files">A: <code>{{ sum.file_a }}</code> &nbsp;↔&nbsp; B: <code>{{ sum.file_b }}</code></div>
+        <div class="form-grid" style="margin-top:12px;">
+          <div class="field"><label>昵称</label><input :value="cfg.nickname" readonly /></div>
+          <div class="field mono"><label>文件名</label><input :value="cfg.file_name" readonly /></div>
+          <div class="field mono"><label>主键序列 KEYSEQ</label><input :value="cfg.key_seq" readonly placeholder="（空 = 整行对比）" /></div>
+          <div class="field mono"><label>跳过序列 OMITSEQ</label><input :value="cfg.omit_seq" readonly placeholder="（空 = 不跳过）" /></div>
+        </div>
+        <div style="margin-top:10px;font-size:12px;color:var(--text-soft);">{{ confHint }}</div>
+        <div class="error-box" v-if="rerunErr" style="margin-top:10px;">{{ rerunErr }}</div>
+      </div>
+    </div>
     <div class="card" v-if="sum.status === 'error'">
       <div class="card-head">❌ 对比失败</div>
       <div class="card-body"><div class="error-box">{{ sum.error }}</div></div>
     </div>
+    <!-- 重跑进行中：结果文件正被覆盖，避免展示半截结果 -->
+    <template v-else-if="sum.status === 'pending' || sum.status === 'running'">
+      <div class="card"><div class="card-body loading">⏳ 对比执行中，结果就绪后自动刷新…</div></div>
+    </template>
     <template v-else>
       <div class="card">
         <div class="card-head">🧾 对比概览</div>
@@ -3154,16 +3310,17 @@ const ReportResultView = {
         </div>
       </div>
 
+      <!-- key 含 finished_at：就地重跑完成后强制分区重挂载重新取数 -->
       <ReportZone :job-id="jobId" section="header" zone="all" title="报表头 · 全部行对照（差异字符高亮）" tone="diff"
-                  :default-open="true" sourceA="A" sourceB="B" :field-names="s.field_names || []" :key="'h' + jobId" />
+                  :default-open="true" sourceA="A" sourceB="B" :field-names="s.field_names || []" :key="'h' + jobId + '-' + (sum.finished_at || 0)" />
       <ReportZone :job-id="jobId" section="footer" zone="all" title="报表尾 · 全部行对照（差异字符高亮）" tone="diff"
-                  :default-open="true" sourceA="A" sourceB="B" :field-names="s.field_names || []" :key="'f' + jobId" />
+                  :default-open="true" sourceA="A" sourceB="B" :field-names="s.field_names || []" :key="'f' + jobId + '-' + (sum.finished_at || 0)" />
       <ReportZone :job-id="jobId" section="data" zone="diff" title="业务内容 · 部分匹配" tone="diff"
-                  :default-open="true" sourceA="A" sourceB="B" :field-names="s.field_names || []" :key="'d1' + jobId" />
+                  :default-open="true" sourceA="A" sourceB="B" :field-names="s.field_names || []" :key="'d1' + jobId + '-' + (sum.finished_at || 0)" />
       <ReportZone :job-id="jobId" section="data" zone="unmatched" title="业务内容 · 单侧不匹配" tone="unmatched"
-                  :default-open="true" sourceA="A" sourceB="B" :key="'d2' + jobId" />
+                  :default-open="true" sourceA="A" sourceB="B" :key="'d2' + jobId + '-' + (sum.finished_at || 0)" />
       <ReportZone :job-id="jobId" section="data" zone="equal" title="业务内容 · 完全匹配（已按字段排序对齐）" tone="equal"
-                  :default-open="false" sourceA="A" sourceB="B" :key="'d3' + jobId" />
+                  :default-open="false" sourceA="A" sourceB="B" :key="'d3' + jobId + '-' + (sum.finished_at || 0)" />
     </template>
   </div>
   <div v-else class="loading">加载中…</div>`,
@@ -3291,7 +3448,10 @@ const CustomBatchView = {
       catch (e) { notify(e.message, "error"); }
     }
     function baseName2(p) { return (p || "").split(/[\\/]/).pop(); }
-    return { ov, q, children, fmtTime, baseName: baseName2, editLabel, REPORT_STATUS,
+    // 子文件分页 lazy load（默认 100/页）
+    const pgChildren = usePager(() => children.value, 100);
+    watch(q, () => pgChildren.reset());
+    return { ov, q, children, pgChildren, fmtTime, baseName: baseName2, editLabel, REPORT_STATUS,
              open: (id) => emit("open", id), goBack: () => emit("back") };
   },
   template: `
@@ -3321,13 +3481,18 @@ const CustomBatchView = {
       </div>
     </div>
     <div class="card">
-      <div class="card-head">📄 段对比结果（点击查看单文件详情）</div>
+      <div class="card-head">📄 段对比结果（点击查看单文件详情）
+        <div class="head-actions">
+          <ListPager :page="pgChildren.page" :pages="pgChildren.pages" :total="pgChildren.total" :size="pgChildren.size"
+                     @go="pgChildren.go" @resize="pgChildren.resize" />
+        </div>
+      </div>
       <div class="card-body" style="padding:12px 18px;">
         <div class="field"><input v-model="q" placeholder="🔎 按文件名模糊搜索" /></div>
       </div>
       <div>
         <div class="empty" v-if="!children.length">无匹配文件</div>
-        <div class="job-row" v-for="c in children" :key="c.job_id" @click="open(c.job_id)">
+        <div class="job-row" v-for="c in pgChildren.paged" :key="c.job_id" @click="open(c.job_id)">
           <span class="jid">{{ baseName(c.file_a) }}</span>
           <span class="badge-status" :class="c.status">{{ REPORT_STATUS[c.status] || c.status }}</span>
           <span v-if="c.error" class="count" style="color:var(--diff-bar);" :title="c.error">✗ {{ c.error }}</span>
@@ -3511,4 +3676,4 @@ const App = {
   </div>`,
 };
 
-createApp(App).component("PageHeader", PageHeader).mount("#app");
+createApp(App).component("PageHeader", PageHeader).component("ListPager", ListPager).mount("#app");
