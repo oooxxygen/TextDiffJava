@@ -44,7 +44,7 @@ public class ReportCompareController {
         this.paths = paths;
     }
 
-    /** 提交报表对比批次：模板路径（目录或 .header 文件） + 数据文本路径 A/B；可选 key_seq/omit_seq（1-based，如 "3/4/5"）。 */
+    /** 提交报表对比批次：模板路径（目录或 .header 文件） + 数据文本路径 A/B；主键/跳过栏位按昵称从 conf 规则读取。 */
     @PostMapping("/report-compare")
     public Map<String, Object> submit(@RequestBody Map<String, Object> body) throws Exception {
         String templatePath = str(body.get("template_path"));
@@ -53,8 +53,7 @@ public class ReportCompareController {
         String dirB = str(body.get("dir_b"));
         if (dirA == null || dirB == null) throw new IllegalArgumentException("缺少 dir_a / dir_b");
         var batch = service.submit(templatePath == null || templatePath.isBlank() ? null : Path.of(templatePath),
-                Path.of(dirA), Path.of(dirB), str(body.get("label")),
-                str(body.get("key_seq")), str(body.get("omit_seq")));
+                Path.of(dirA), Path.of(dirB), str(body.get("label")));
         List<String> ids = store.listJobs(batch.id).stream().map(j -> j.id).toList();
         return Map.of("batch_id", batch.id, "job_ids", ids);
     }

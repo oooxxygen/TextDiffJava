@@ -2912,23 +2912,14 @@ const ReportZone = {
   </div>`,
 };
 
-/* 【报表对比】首页：路径对比 / 上传文件对比（模板路径或 .header 文件）+ 报表批次列表。 */
+/* 【报表对比】首页：路径对比 / 上传文件对比（模板路径或 .header 文件）。批次结果统一在作业列表查看。 */
 const ReportPage = {
   emits: ["open-batch"],
   setup(props, { emit }) {
     const mode = ref("path");
-    const form = reactive({ template_path: "", dir_a: "", dir_b: "", label: "", key_seq: "", omit_seq: "" });
+    const form = reactive({ template_path: "", dir_a: "", dir_b: "", label: "" });
     const up = reactive({ files_a: [], files_b: [], files_tpl: [] });
     const busy = ref(false); const err = ref("");
-    const batches = ref([]); let timer = null;
-    async function load() {
-      try {
-        const r = await api("/api/joblist");
-        batches.value = (r.batches || []).filter(b => (b.batch || {}).batch_type === "report");
-      } catch (e) {}
-      timer = setTimeout(load, 3000);
-    }
-    onMounted(load);
     function onFiles(ev, target) { up[target] = Array.from(ev.target.files); }
     async function submitPath() {
       err.value = "";
@@ -2937,7 +2928,6 @@ const ReportPage = {
       try {
         const r = await jpost("/api/report-compare", {
           template_path: form.template_path || null, dir_a: form.dir_a, dir_b: form.dir_b, label: form.label || null,
-          key_seq: form.key_seq.trim() || null, omit_seq: form.omit_seq.trim() || null,
         });
         emit("open-batch", r.batch_id);
       } catch (e) { err.value = e.message; } finally { busy.value = false; }
@@ -2954,12 +2944,11 @@ const ReportPage = {
         const r = await api("/api/report-compare/upload", { method: "POST", body: fd });
         const r2 = await jpost("/api/report-compare", {
           template_path: r.template_dir || null, dir_a: r.dir_a, dir_b: r.dir_b, label: form.label || null,
-          key_seq: form.key_seq.trim() || null, omit_seq: form.omit_seq.trim() || null,
         });
         emit("open-batch", r2.batch_id);
       } catch (e) { err.value = e.message; } finally { busy.value = false; }
     }
-    return { mode, form, up, busy, err, batches, submitPath, submitUpload, onFiles, REPORT_STATUS, fmtTime };
+    return { mode, form, up, busy, err, submitPath, submitUpload, onFiles, REPORT_STATUS, fmtTime };
   },
   template: `
   <div>
@@ -2987,30 +2976,13 @@ const ReportPage = {
           <label class="field">批次标签（可选，显示在批次任务中）
             <input v-model="form.label" placeholder="如 2026-07-10 夜批量核对" />
           </label>
-          <label class="field">对比主键栏位（可选，1-based 列序，如 3/4/5；留空按整行内容对比）
-            <input v-model="form.key_seq" placeholder="如 1 或 2/5" spellcheck="false" />
-          </label>
-          <label class="field">跳过栏位（可选，不参与比对的列序，如 6/7）
-            <input v-model="form.omit_seq" placeholder="如 6/7" spellcheck="false" />
-          </label>
         </div>
         <div class="btn-row" style="margin-top:10px;">
           <button v-if="mode==='path'" class="btn primary" :disabled="busy" @click="submitPath">{{ busy ? '提交中…' : '开始报表核对' }}</button>
           <button v-else class="btn primary" :disabled="busy" @click="submitUpload">{{ busy ? '上传并对比中…' : '上传并开始报表核对' }}</button>
-          <span class="count" style="align-self:center;">两目录按文件名配对非 header 文件；昵称取列名映射（#占位符通配）</span>
+          <span class="count" style="align-self:center;">两目录按文件名配对非 header 文件；昵称取列名映射（#占位符通配）；主键/跳过栏位按昵称从 conf 规则读取（未命中按整行对比）</span>
         </div>
         <div class="error-box" v-if="err">{{ err }}</div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-head">📋 报表对比批次</div>
-      <div class="empty" v-if="!batches.length">暂无报表对比批次</div>
-      <div class="job-row" v-for="b in batches" :key="b.batch.batch_id" @click="$emit('open-batch', b.batch.batch_id)">
-        <span class="nick-badge">报表对比</span>
-        <span class="jid">{{ b.batch.batch_id }}</span>
-        <span v-if="b.batch.label" class="group-badge">🏷 {{ b.batch.label }}</span>
-        <span class="badge-status" :class="b.status">{{ REPORT_STATUS[b.status] || b.status }}</span>
-        <span class="count">文件 {{ b.total_files }} · 有差异 {{ b.diff_files }} · 完成 {{ b.done }} · {{ fmtTime(b.batch.created_at) }}</span>
       </div>
     </div>
   </div>`,
@@ -3207,15 +3179,6 @@ const CustomPage = {
     const form = reactive({ start_pattern: "^\\{1:", end_pattern: "^-\\}", key_pattern: ":20:(\\S+)", dir_a: "", dir_b: "", label: "" });
     const up = reactive({ files_a: [], files_b: [] });
     const busy = ref(false); const err = ref("");
-    const batches = ref([]); let timer = null;
-    async function load() {
-      try {
-        const r = await api("/api/joblist");
-        batches.value = (r.batches || []).filter(b => (b.batch || {}).batch_type === "custom");
-      } catch (e) {}
-      timer = setTimeout(load, 3000);
-    }
-    onMounted(load);
     function onFiles(ev, target) { up[target] = Array.from(ev.target.files); }
     function useMt950() {
       form.start_pattern = "^\\{1:"; form.end_pattern = "^-\\}"; form.key_pattern = ":20:(\\S+)";
@@ -3250,7 +3213,7 @@ const CustomPage = {
         emit("open-batch", r2.batch_id);
       } catch (e) { err.value = e.message; } finally { busy.value = false; }
     }
-    return { mode, form, up, busy, err, batches, submitPath, submitUpload, onFiles, useMt950, REPORT_STATUS, fmtTime };
+    return { mode, form, up, busy, err, submitPath, submitUpload, onFiles, useMt950, REPORT_STATUS, fmtTime };
   },
   template: `
   <div>
@@ -3293,17 +3256,6 @@ const CustomPage = {
           <span class="count" style="align-self:center;">段 = 起始行（含）~ 结束行（含）；行展示保持段内原始行原貌</span>
         </div>
         <div class="error-box" v-if="err">{{ err }}</div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-head">📋 自定义格式对比批次</div>
-      <div class="empty" v-if="!batches.length">暂无自定义格式对比批次</div>
-      <div class="job-row" v-for="b in batches" :key="b.batch.batch_id" @click="$emit('open-batch', b.batch.batch_id)">
-        <span class="nick-badge">段对比</span>
-        <span class="jid">{{ b.batch.batch_id }}</span>
-        <span v-if="b.batch.label" class="group-badge">🏷 {{ b.batch.label }}</span>
-        <span class="badge-status" :class="b.status">{{ REPORT_STATUS[b.status] || b.status }}</span>
-        <span class="count">文件 {{ b.total_files }} · 有差异 {{ b.diff_files }} · 完成 {{ b.done }} · {{ fmtTime(b.batch.created_at) }}</span>
       </div>
     </div>
   </div>`,

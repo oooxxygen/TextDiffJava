@@ -123,12 +123,17 @@ public class ExportController {
         return zipDownload(zip);
     }
 
+    /** zone 过滤与结果页分区一致：trailer=尾部区全量（任意状态）；equal/diff/unmatched 不含尾部行。 */
     static Predicate<com.textdiff.engine.RowDiff> zoneFilter(String zone) {
         if (zone == null || zone.isBlank() || "all".equals(zone)) return ExportAssembler.ALL;
+        Predicate<com.textdiff.engine.RowDiff> trailer =
+                r -> com.textdiff.engine.Status.SECTION_TRAILER.equals(r.section);
+        if ("trailer".equals(zone)) return trailer;
         if ("unmatched".equals(zone)) {
-            return r -> Status.UNMATCHED_A.equals(r.status) || Status.UNMATCHED_B.equals(r.status);
+            return trailer.negate().and(r -> Status.UNMATCHED_A.equals(r.status)
+                    || Status.UNMATCHED_B.equals(r.status));
         }
-        return r -> zone.equals(r.status);
+        return trailer.negate().and(r -> zone.equals(r.status));
     }
 
     private ResponseEntity<byte[]> csvDownload(Path file, String name) {

@@ -131,7 +131,7 @@ public class WebBeansConfig {
             DualJobStore store, AppPaths paths, AppConfig cfg,
             com.textdiff.store.FieldMapStore fieldMaps, JobManager jobManager) {
         com.textdiff.report.ReportCompareService svc = new com.textdiff.report.ReportCompareService(
-                store, paths.resultsDir(), fieldMaps, Math.max(1, cfg.engine().maxThreads()));
+                store, paths.resultsDir(), paths.configsDir(), fieldMaps, Math.max(1, cfg.engine().maxThreads()));
         jobManager.reportRunner = svc::run;
         return svc;
     }

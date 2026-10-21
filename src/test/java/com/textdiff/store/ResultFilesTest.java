@@ -32,10 +32,14 @@ class ResultFilesTest {
         assertEquals(5, all.total());
         assertEquals(5, all.rows().size());
 
-        // zone 过滤
-        assertEquals(2, ResultFiles.readPage(resultFile, Status.DIFF, 0, 100).total()); // 数据 diff k2 + trailer diff T1
+        // zone 过滤（尾部行只归属 trailer 分区：diff/equal/unmatched 均不含尾部行）
+        assertEquals(1, ResultFiles.readPage(resultFile, Status.DIFF, 0, 100).total()); // 数据 diff k2；trailer diff T1 归尾部区
         assertEquals(1, ResultFiles.readPage(resultFile, Status.EQUAL, 0, 100).total());
         assertEquals(2, ResultFiles.readPage(resultFile, "unmatched", 0, 100).total());
+        ResultFiles.Page trailerZone = ResultFiles.readPage(resultFile, "trailer", 0, 100);
+        assertEquals(1, trailerZone.total());
+        assertEquals("T1", trailerZone.rows().get(0).key);
+        assertEquals(Status.SECTION_TRAILER, trailerZone.rows().get(0).section);
 
         // 分页
         ResultFiles.Page page1 = ResultFiles.readPage(resultFile, "all", 0, 2);

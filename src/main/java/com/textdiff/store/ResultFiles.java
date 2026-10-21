@@ -78,9 +78,16 @@ public final class ResultFiles {
         }
     }
 
-    /** zone 过滤语义：null/"all" = 全部；"unmatched" = unmatched_a + unmatched_b；其余按 Status 原值。 */
+    /**
+     * zone 过滤语义：null/"all" = 全部；"trailer" = 尾部区全量（任意状态，按 section 归属）；
+     * "unmatched" = unmatched_a + unmatched_b；其余按 Status 原值。
+     * 尾部行（section=trailer）只归属尾部区，不进 equal/diff/unmatched 分区。
+     */
     static boolean zoneMatches(String zone, RowDiff row) {
         if (zone == null || zone.isBlank() || "all".equals(zone)) return true;
+        boolean trailer = com.textdiff.engine.Status.SECTION_TRAILER.equals(row.section);
+        if ("trailer".equals(zone)) return trailer;
+        if (trailer) return false;
         if ("unmatched".equals(zone)) {
             return com.textdiff.engine.Status.UNMATCHED_A.equals(row.status)
                     || com.textdiff.engine.Status.UNMATCHED_B.equals(row.status);
@@ -133,6 +140,7 @@ public final class ResultFiles {
                 } catch (RuntimeException e) {
                     continue; // 半行损坏容错
                 }
+                if (!zoneMatches(zone, row)) continue; // 针串只是超集预过滤；分区归属（含 trailer 剔除）以此为准
                 if (!noFilter && !extra.test(row)) continue;
                 if (total >= offset && rows.size() < limit) rows.add(row);
                 total++;
@@ -162,6 +170,9 @@ public final class ResultFiles {
             case "unmatched" -> List.of("\"status\":\"unmatched_a\"", "\"status\":\"unmatched_b\"");
             case "equal" -> List.of("\"status\":\"equal\"");
             case "diff" -> List.of("\"status\":\"diff\"");
+            // 尾部行携带 equal/diff/unmatched 状态，针串取全状态（section 精筛交给 zoneMatches）
+            case "trailer" -> List.of("\"status\":\"equal\"", "\"status\":\"diff\"",
+                    "\"status\":\"unmatched_a\"", "\"status\":\"unmatched_b\"");
             default -> List.of("\"status\":\"" + zone + "\"");
         };
     }

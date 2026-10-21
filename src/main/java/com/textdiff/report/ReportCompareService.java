@@ -1,5 +1,6 @@
 package com.textdiff.report;
 
+import com.textdiff.engine.CompareConfig;
 import com.textdiff.engine.Encoding;
 import com.textdiff.engine.RowDiff;
 import com.textdiff.engine.Rules;
@@ -44,13 +45,16 @@ public final class ReportCompareService implements AutoCloseable {
 
     private final JobStore store;
     private final Path resultsRoot;
+    private final Path configsDir; // conf 规则目录（主键/跳过栏位来源，可空 = 不启用）
     private final FieldMapStore fieldMaps; // 可空
     private final ExecutorService pool;
     private final ConcurrentMap<String, Future<?>> tasks = new ConcurrentHashMap<>();
 
-    public ReportCompareService(JobStore store, Path resultsRoot, FieldMapStore fieldMaps, int threads) {
+    public ReportCompareService(JobStore store, Path resultsRoot, Path configsDir,
+                                FieldMapStore fieldMaps, int threads) {
         this.store = store;
         this.resultsRoot = resultsRoot;
+        this.configsDir = configsDir;
         this.fieldMaps = fieldMaps;
         this.pool = Executors.newFixedThreadPool(Math.max(1, threads), r -> {
             Thread t = new Thread(r, "report-runner");
@@ -76,16 +80,13 @@ public final class ReportCompareService implements AutoCloseable {
 
     /**
      * 提交批次：按文件名配对 dirA/dirB 的非 .header 文件。
-     * keySeq/omitSeq = 1-based 列序串（如 "3/4/5"，空串 = 不配置）；主键空 = 整行对比。
+     * 主键/跳过栏位不接收提交参数，一律按昵称从 conf 规则（configs/{nickname}.conf 的 KEYSEQ/OMITSEQ）读取；
+     * conf 未命中或未配置主键 = 整行对比。
      */
-    public BatchRecord submit(Path templateDir, Path dirA, Path dirB, String label,
-                              String keySeq, String omitSeq) throws IOException {
+    public BatchRecord submit(Path templateDir, Path dirA, Path dirB, String label) throws IOException {
         if (dirA == null || dirB == null || !Files.isDirectory(dirA) || !Files.isDirectory(dirB)) {
             throw new IllegalArgumentException("数据文本路径 A/B 必须是已存在的目录");
         }
-        // 序号在提交时解析校验（非法列序直接拒绝），持久化为 KEYSEQ/OMITSEQ 配置令牌
-        String keyToken = parseSeqToken(keySeq, "主键栏位");
-        String omitToken = parseSeqToken(omitSeq, "跳过栏位");
         List<String> namesA = listDataFiles(dirA);
         Map<String, Path> bFiles = dataFiles(dirB);
         String absA = dirA.toAbsolutePath().normalize().toString();
@@ -94,7 +95,8 @@ public final class ReportCompareService implements AutoCloseable {
         BatchRecord batch = new BatchRecord(newId(),
                 label == null || label.isBlank() ? "报表对比" : label.strip(),
                 absA, absB,
-                "模板: " + (templateDir == null ? "（随数据目录）" : templateDir.toAbsolutePath().normalize()),
+                "模板: " + (templateDir == null ? "（随数据目录）" : templateDir.toAbsolutePath().normalize())
+                        + "；主键/跳过栏位取自 conf 规则（未命中按整行对比）",
                 0);
         batch.batchType = JOB_TYPE;
         batch.templateDir = templateDir == null ? ""
@@ -110,9 +112,11 @@ public final class ReportCompareService implements AutoCloseable {
             }
             Path tpl = resolveTemplate(templateDir, dirA, name);
             String nick = resolveNickname(name);
+            // conf 规则（按昵称精确匹配）取主键/跳过栏位令牌；未命中 = 空 = 整行对比
+            String[] tokens = confKeyTokens(nick);
             String configLine = nick + ":" + name
-                    + (keyToken.isEmpty() ? "" : ":KEYSEQ=" + keyToken)
-                    + (omitToken.isEmpty() ? "" : ":OMITSEQ=" + omitToken);
+                    + (tokens[0].isEmpty() ? "" : ":KEYSEQ=" + tokens[0])
+                    + (tokens[1].isEmpty() ? "" : ":OMITSEQ=" + tokens[1]);
             JobRecord job = new JobRecord(newId(), batch.id, nick + " · " + name,
                     configLine,
                     Path.of(dirA.toString(), name).toAbsolutePath().normalize().toString(),
@@ -136,11 +140,49 @@ public final class ReportCompareService implements AutoCloseable {
         return batch;
     }
 
-    /** "3/4/5" 序列校验并原样返回（1-based，供 configLine KEYSEQ/OMITSEQ 令牌）；空输入返回空串。 */
-    private static String parseSeqToken(String seq, String what) {
-        if (seq == null || seq.isBlank()) return "";
-        Rules.parseSeq(seq); // 校验（非法抛 IllegalArgumentException）
-        return seq.strip();
+    /**
+     * conf 规则（configs 目录，按昵称精确匹配）→ {KEYSEQ 令牌, OMITSEQ 令牌}（1-based，如 "3/4/5"）。
+     * conf 目录不可用 / 规则不存在 / 解析失败 / 未配置主键 → {"", ""}（整行对比）。
+     */
+    private String[] confKeyTokens(String nickname) {
+        if (configsDir == null || nickname == null || nickname.isBlank()
+                || !java.nio.file.Files.isDirectory(configsDir)) {
+            return new String[]{"", ""};
+        }
+        try (Stream<Path> s = java.nio.file.Files.list(configsDir)) {
+            for (Path p : s.filter(java.nio.file.Files::isRegularFile).sorted().toList()) {
+                String line = firstRule(java.nio.file.Files.readString(p));
+                if (line == null) continue;
+                try {
+                    CompareConfig cfg = Rules.parseLegacy(line, "|", "|||||");
+                    if (!nickname.strip().equals(cfg.nickname)) continue;
+                    // 首个昵称命中的 conf 即生效；未配置 KEYSEQ = 整行对比
+                    String key = cfg.keyColumns.isEmpty() ? "" : String.join("/",
+                            cfg.keyColumns.stream().map(c -> String.valueOf(c + 1)).toList());
+                    String omit = "";
+                    java.util.Set<Integer> skip = cfg.skipSet();
+                    if (!skip.isEmpty()) {
+                        omit = String.join("/", skip.stream().sorted()
+                                .map(c -> String.valueOf(c + 1)).toList());
+                    }
+                    return new String[]{key, omit};
+                } catch (RuntimeException ignored) {
+                    return new String[]{"", ""}; // 命中昵称但规则损坏 = 未配置
+                }
+            }
+        } catch (IOException ignored) {
+            // conf 目录读失败按未配置处理（整行对比）
+        }
+        return new String[]{"", ""};
+    }
+
+    /** conf 文本的首条有效规则行（跳过空行/注释）；无则 null。 */
+    private static String firstRule(String text) {
+        for (String line : text.split("\r?\n")) {
+            line = line.strip();
+            if (!line.isEmpty() && !line.startsWith("#")) return line;
+        }
+        return null;
     }
 
     public synchronized void submit(JobRecord job) {
