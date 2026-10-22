@@ -715,3 +715,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   border-bottom: 1px dashed var(--border); font-size: 13px; }
 .dup-item code { overflow-wrap: anywhere; }
 .dup-item .cnt { color: #dc2626; white-space: nowrap; }
+
+/* ---- 关注字段监测表（DISCARD_COLS）：批次卡片 / 结果页小卡片 / 批次总结页共用 ---- */
+.discard-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.discard-table th, .discard-table td { border-bottom: 1px solid var(--border); padding: 7px 9px;
+  text-align: left; vertical-align: top; white-space: nowrap; }
+.discard-table th { color: var(--text-soft); font-weight: 600; background: var(--surface-2, #f8fafc);
+  position: sticky; top: 0; }
+.discard-table tbody tr:nth-child(even) { background: rgba(148, 163, 184, 0.06); }
+.discard-table td.vals { white-space: normal; min-width: 220px; max-width: 420px; overflow-wrap: anywhere; }
+.discard-table td.vals.bad { color: #dc2626; }
+.discard-table td.mono { font-family: Consolas, "Courier New", monospace; font-size: 12px; }

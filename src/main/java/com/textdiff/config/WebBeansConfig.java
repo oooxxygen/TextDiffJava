@@ -47,6 +47,12 @@ public class WebBeansConfig {
         return new com.textdiff.store.CtisDynFieldStore(paths.baseDir().resolve("store"), cfg.store().enabled());
     }
 
+    /** 关注字段监测配置（DISCARD）：JSONL 事实来源 + H2 镜像。 */
+    @Bean(destroyMethod = "close")
+    public com.textdiff.store.DiscardFieldStore discardFieldStore(AppPaths paths, AppConfig cfg) {
+        return new com.textdiff.store.DiscardFieldStore(paths.baseDir().resolve("store"), cfg.store().enabled());
+    }
+
     @Bean(destroyMethod = "close")
     public JobManager jobManager(DualJobStore store, AppPaths paths, AppConfig cfg,
                                  com.textdiff.store.FieldMapStore fieldMaps,
@@ -144,6 +150,16 @@ public class WebBeansConfig {
                 store, paths.resultsDir(), Math.max(1, cfg.engine().maxThreads()));
         jobManager.customRunner = svc::run;
         return svc;
+    }
+
+    /** 关注字段监测采集（DISCARD_COLS 懒生成 + 缓存）：依赖报表服务复用其解析分支。 */
+    @Bean
+    public com.textdiff.export.DiscardColsService discardColsService(
+            DualJobStore store, com.textdiff.store.DiscardFieldStore discardFields,
+            com.textdiff.store.FieldMapStore fieldMaps,
+            com.textdiff.report.ReportCompareService reportService, AppPaths paths) {
+        return new com.textdiff.export.DiscardColsService(
+                store, discardFields, fieldMaps, reportService, paths.resultsDir());
     }
 
     /** REST 响应统一 snake_case，对齐前端契约。 */

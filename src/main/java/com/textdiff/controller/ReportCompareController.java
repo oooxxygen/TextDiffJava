@@ -53,7 +53,8 @@ public class ReportCompareController {
         String dirB = str(body.get("dir_b"));
         if (dirA == null || dirB == null) throw new IllegalArgumentException("缺少 dir_a / dir_b");
         var batch = service.submit(templatePath == null || templatePath.isBlank() ? null : Path.of(templatePath),
-                Path.of(dirA), Path.of(dirB), str(body.get("label")));
+                Path.of(dirA), Path.of(dirB), str(body.get("label")),
+                str(body.get("source_a")), str(body.get("source_b")));
         List<String> ids = store.listJobs(batch.id).stream().map(j -> j.id).toList();
         return Map.of("batch_id", batch.id, "job_ids", ids);
     }

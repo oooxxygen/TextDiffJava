@@ -57,7 +57,8 @@ public class CustomCompareController {
         }
         CustomFormat cfg = CustomFormat.of(str(body.get("start_pattern")),
                 str(body.get("end_pattern")), str(body.get("key_pattern")));
-        var batch = service.submit(Path.of(pa), Path.of(pb), str(body.get("label")), cfg);
+        var batch = service.submit(Path.of(pa), Path.of(pb), str(body.get("label")), cfg,
+                str(body.get("source_a")), str(body.get("source_b")));
         List<String> ids = store.listJobs(batch.id).stream().map(j -> j.id).toList();
         return Map.of("batch_id", batch.id, "job_ids", ids);
     }

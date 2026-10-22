@@ -69,6 +69,12 @@ public final class CustomCompareService implements AutoCloseable {
 
     /** 提交批次：路径 A/B 各可为目录（按文件名配对全部文件）或单个文件。 */
     public BatchRecord submit(Path pathA, Path pathB, String label, CustomFormat cfg) throws IOException {
+        return submit(pathA, pathB, label, cfg, null, null);
+    }
+
+    /** 提交批次（可带 A/B 来源命名，写入 configLine JSON 的 srca/srcb 键）。 */
+    public BatchRecord submit(Path pathA, Path pathB, String label, CustomFormat cfg,
+                              String sourceA, String sourceB) throws IOException {
         if (pathA == null || pathB == null || !Files.exists(pathA) || !Files.exists(pathB)) {
             throw new IllegalArgumentException("文本路径 A/B 必须是已存在的目录或文件");
         }
@@ -83,7 +89,7 @@ public final class CustomCompareService implements AutoCloseable {
                 absA, absB, "格式: 起始 " + cfg.startPattern(), 0);
         batch.batchType = JOB_TYPE;
         batch.templateDir = cfg.toConfigLine();
-        String configLine = cfg.toConfigLine();
+        String configLine = cfg.toConfigLine(sourceA, sourceB);
 
         List<JobRecord> jobs = new ArrayList<>();
         for (String[] p : pairs) { // p = {fileName, fileA, fileB}

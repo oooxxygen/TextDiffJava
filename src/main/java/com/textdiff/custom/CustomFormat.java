@@ -34,12 +34,19 @@ public record CustomFormat(String startPattern, String endPattern, String keyPat
         return f;
     }
 
-    /** configLine 编解码（JSON，键 start/end/key）。 */
+    /** configLine 编解码（JSON，键 start/end/key；fromConfigLine 忽略 srca/srcb 等附加键）。 */
     public String toConfigLine() {
+        return toConfigLine(null, null);
+    }
+
+    /** 带 A/B 来源命名的 configLine：值非空且非默认侧名才写入（供批次总结/监测表头沿用启动时命名）。 */
+    public String toConfigLine(String srca, String srcb) {
         Map<String, String> m = new LinkedHashMap<>();
         m.put("start", startPattern);
         m.put("end", endPattern == null ? "" : endPattern);
         m.put("key", keyPattern == null ? "" : keyPattern);
+        if (srca != null && !srca.isBlank() && !srca.strip().equals("A")) m.put("srca", srca.strip());
+        if (srcb != null && !srcb.isBlank() && !srcb.strip().equals("B")) m.put("srcb", srcb.strip());
         return Json.write(m);
     }
 

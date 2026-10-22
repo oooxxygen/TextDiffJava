@@ -84,6 +84,15 @@ public final class ReportCompareService implements AutoCloseable {
      * conf 未命中或未配置主键 = 整行对比。
      */
     public BatchRecord submit(Path templateDir, Path dirA, Path dirB, String label) throws IOException {
+        return submit(templateDir, dirA, dirB, label, null, null);
+    }
+
+    /**
+     * 提交批次（可带 A/B 来源命名）：sourceA/sourceB 非空且非默认 A/B 时注入各作业
+     * configLine SRCA/SRCB 令牌，供关注字段监测表头与批次总结报告沿用启动时命名。
+     */
+    public BatchRecord submit(Path templateDir, Path dirA, Path dirB, String label,
+                              String sourceA, String sourceB) throws IOException {
         if (dirA == null || dirB == null || !Files.isDirectory(dirA) || !Files.isDirectory(dirB)) {
             throw new IllegalArgumentException("数据文本路径 A/B 必须是已存在的目录");
         }
@@ -116,7 +125,9 @@ public final class ReportCompareService implements AutoCloseable {
             String[] tokens = confKeyTokens(nick);
             String configLine = nick + ":" + name
                     + (tokens[0].isEmpty() ? "" : ":KEYSEQ=" + tokens[0])
-                    + (tokens[1].isEmpty() ? "" : ":OMITSEQ=" + tokens[1]);
+                    + (tokens[1].isEmpty() ? "" : ":OMITSEQ=" + tokens[1])
+                    + srcToken("SRCA", sourceA, "A")
+                    + srcToken("SRCB", sourceB, "B");
             JobRecord job = new JobRecord(newId(), batch.id, nick + " · " + name,
                     configLine,
                     Path.of(dirA.toString(), name).toAbsolutePath().normalize().toString(),
@@ -140,11 +151,16 @@ public final class ReportCompareService implements AutoCloseable {
         return batch;
     }
 
+    /** SRCA/SRCB 令牌：值非空且非默认侧名才注入。 */
+    private static String srcToken(String key, String value, String dft) {
+        if (value == null || value.isBlank() || value.strip().equals(dft)) return "";
+        return ":" + key + "=" + value.strip();
+    }
+
     /**
      * conf 规则（configs 目录，按昵称精确匹配）→ {KEYSEQ 令牌, OMITSEQ 令牌}（1-based，如 "3/4/5"）。
      * conf 目录不可用 / 规则不存在 / 解析失败 / 未配置主键 → {"", ""}（整行对比）。
-     */
-    private String[] confKeyTokens(String nickname) {
+     */    private String[] confKeyTokens(String nickname) {
         if (configsDir == null || nickname == null || nickname.isBlank()
                 || !java.nio.file.Files.isDirectory(configsDir)) {
             return new String[]{"", ""};
@@ -221,32 +237,10 @@ public final class ReportCompareService implements AutoCloseable {
             } catch (RuntimeException ignored) {
                 // 旧作业 configLine 为 昵称:文件名，解析失败按缺省整行对比
             }
-            // 空行占位模板（表头骨架 + 5~10 连续空行报表体占位 + 表尾骨架）优先于控制行检测：
-            // 用户指定按模板分区（控制行值两侧不同会导致控制行版式签名配对全失败）
-            List<String> tpl = null;
-            Path tplFile = Path.of(job.templateFile == null ? "" : job.templateFile);
-            if (job.templateFile != null && !job.templateFile.isBlank() && Files.isRegularFile(tplFile)) {
-                tpl = readLines(tplFile, Encoding.resolveEncoding(tplFile, "auto", "|"));
-            }
-            boolean zonedTemplate = tpl != null && ReportParser.firstBlankRun(tpl, 5) != null;
-            if (zonedTemplate) {
-                pa = ReportParser.parse(tpl, la);
-                pb = ReportParser.parse(tpl, lb);
-                fieldNames = fieldNamesFor(job);
-            } else if (ReportParser.hasControlLines(la) || ReportParser.hasControlLines(lb)) {
-                // 控制行版式（1@OD@|...，含折行/分页报表）：自分区，模板不参与
-                pa = ReportParser.parseControlFormat(la);
-                pb = ReportParser.parseControlFormat(lb);
-                fieldNames = !pa.columnNames().isEmpty() ? pa.columnNames() : pb.columnNames();
-            } else {
-                if (tpl == null) {
-                    throw new IllegalArgumentException("模板不存在：请在模板路径或数据目录下提供 "
-                            + stem(fileName(job.fileA)) + ".header");
-                }
-                pa = ReportParser.parse(tpl, la);
-                pb = ReportParser.parse(tpl, lb);
-                fieldNames = fieldNamesFor(job);
-            }
+            ParsedPair parsed = parseReports(job, la, lb);
+            pa = parsed.pa();
+            pb = parsed.pb();
+            fieldNames = parsed.fieldNames();
             ReportComparator.Result result =
                     ReportComparator.compare(pa, pb, fieldNames, keyColumns, omitColumns);
 
@@ -282,6 +276,61 @@ public final class ReportCompareService implements AutoCloseable {
         }
         store.saveJob(job);
         tasks.remove(jobId);
+    }
+
+    /** 两侧报表解析结果（run 与关注字段采集共用同一分支决策）。 */
+    record ParsedPair(ReportParser.ParsedReport pa, ReportParser.ParsedReport pb, List<String> fieldNames) {}
+
+    /**
+     * 按模板/控制行/兜底分支解析两侧报表；模板缺失抛 IllegalArgumentException。
+     * 空行占位模板（表头骨架 + 5~10 连续空行报表体占位 + 表尾骨架）优先于控制行检测：
+     * 用户指定按模板分区（控制行值两侧不同会导致控制行版式签名配对全失败）。
+     */
+    private ParsedPair parseReports(JobRecord job, List<String> la, List<String> lb) throws IOException {
+        List<String> tpl = null;
+        Path tplFile = Path.of(job.templateFile == null ? "" : job.templateFile);
+        if (job.templateFile != null && !job.templateFile.isBlank() && Files.isRegularFile(tplFile)) {
+            tpl = readLines(tplFile, Encoding.resolveEncoding(tplFile, "auto", "|"));
+        }
+        ReportParser.ParsedReport pa;
+        ReportParser.ParsedReport pb;
+        List<String> fieldNames;
+        if (tpl != null && ReportParser.firstBlankRun(tpl, 5) != null) {
+            pa = ReportParser.parse(tpl, la);
+            pb = ReportParser.parse(tpl, lb);
+            fieldNames = fieldNamesFor(job);
+        } else if (ReportParser.hasControlLines(la) || ReportParser.hasControlLines(lb)) {
+            // 控制行版式（1@OD@|...，含折行/分页报表）：自分区，模板不参与
+            pa = ReportParser.parseControlFormat(la);
+            pb = ReportParser.parseControlFormat(lb);
+            fieldNames = !pa.columnNames().isEmpty() ? pa.columnNames() : pb.columnNames();
+        } else {
+            if (tpl == null) {
+                throw new IllegalArgumentException("模板不存在：请在模板路径或数据目录下提供 "
+                        + stem(fileName(job.fileA)) + ".header");
+            }
+            pa = ReportParser.parse(tpl, la);
+            pb = ReportParser.parse(tpl, lb);
+            fieldNames = fieldNamesFor(job);
+        }
+        return new ParsedPair(pa, pb, fieldNames);
+    }
+
+    /** 两侧业务行字段切分（关注字段采集用；折行记录已合并为单行业务行）。 */
+    public record ReportSides(List<String[]> a, List<String[]> b) {}
+
+    /** 关注字段采集：按与 run 相同分支重新解析两侧报表，返回业务行字段数组。 */
+    public ReportSides monitorRows(JobRecord job) throws IOException {
+        Path fa = Path.of(job.fileA);
+        Path fb = Path.of(job.fileB);
+        List<String> la = readLines(fa, Encoding.resolveEncoding(fa, "auto", "|"));
+        List<String> lb = readLines(fb, Encoding.resolveEncoding(fb, "auto", "|"));
+        ParsedPair p = parseReports(job, la, lb);
+        List<String[]> a = new ArrayList<>();
+        for (ReportParser.Row r : p.pa().rows()) a.add(r.fields());
+        List<String[]> b = new ArrayList<>();
+        for (ReportParser.Row r : p.pb().rows()) b.add(r.fields());
+        return new ReportSides(a, b);
     }
 
     /** 单作业摘要（summary 端点返回体）。config = 本次对比配置（与普通对比同构）；conf = 当前 conf 规则状态。 */

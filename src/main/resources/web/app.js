@@ -1,6 +1,6 @@
 /* TextDiff 前端：无构建 Vue3 应用。
    提交对比 / 作业列表 / 类 Git 三分区结果展示（字符级高亮 + 懒加载）。 */
-const { createApp, reactive, ref, computed, onMounted, watch, nextTick } = Vue;
+const { createApp, reactive, ref, computed, onMounted, onBeforeUnmount, watch, nextTick } = Vue;
 
 /* ---------- API ---------- */
 async function api(url, opts) {
@@ -691,6 +691,194 @@ const ListPager = {
   </span>`,
 };
 
+/* ---------- 关注字段监测（DISCARD_COLS）表 + 卡片 + 批次情况总结页 ---------- */
+/* 监测取值表：批次卡片 / 单文件结果卡片 / 批次总结页共用（自带 100/页分页）。 */
+const DiscardTable = {
+  props: { rows: { type: Array, default: () => [] }, srcA: { type: String, default: "A" }, srcB: { type: String, default: "B" } },
+  setup(props) {
+    const pg = usePager(() => props.rows || [], 100);
+    function vals(r, side) {
+      const src = side === "a" ? props.srcA : props.srcB;
+      if (r.file_missing) return "（" + src + " 原文不可采集" + (r.error ? "：" + r.error : "") + "）";
+      const list = side === "a" ? r.values_a : r.values_b;
+      let s = !list || !list.length ? "（无数据行）" : list.map(v => !v ? "（空）" : v).join("、");
+      if (side === "a" ? r.truncated_a : r.truncated_b) s += "…（超出上限已截断）";
+      return s;
+    }
+    return { pg, vals };
+  },
+  template: `
+  <div style="overflow-x:auto;">
+    <table class="discard-table" v-if="rows.length">
+      <thead><tr>
+        <th>昵称</th><th>归属组</th><th>实际文件名</th><th>字段序号</th><th>字段名</th><th>字段含义</th>
+        <th>{{ srcA }} 的所有取值</th><th>{{ srcB }} 的所有取值</th>
+      </tr></thead>
+      <tbody>
+        <tr v-for="(r, i) in pg.paged" :key="i">
+          <td>{{ r.nickname }}</td>
+          <td>{{ r.group }}</td>
+          <td class="mono">{{ r.file_name }}</td>
+          <td>{{ r.col_seq }}</td>
+          <td>{{ r.field_name }}</td>
+          <td>{{ r.field_meaning }}</td>
+          <td class="vals" :class="{ bad: r.file_missing }">{{ vals(r, 'a') }}</td>
+          <td class="vals" :class="{ bad: r.file_missing }">{{ vals(r, 'b') }}</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="empty" v-if="!rows.length">无监测数据行</div>
+    <div v-if="rows.length" style="margin-top:8px; display:flex; justify-content:flex-end;">
+      <ListPager :page="pg.page" :pages="pg.pages" :total="pg.total" :size="pg.size"
+                 @go="pg.go" @resize="pg.resize" />
+    </div>
+  </div>`,
+};
+
+/* 关注字段监测卡片：batchId（批次详情）/ jobId（单文件·报表结果页）二选一；未命中不渲染。 */
+const DiscardCard = {
+  props: { batchId: String, jobId: String },
+  setup(props) {
+    const data = ref(null); const err = ref(""); let timer = null; let stopped = false;
+    async function load() {
+      if (stopped) return;
+      try {
+        const url = props.batchId ? "/api/batches/" + props.batchId + "/discard-cols"
+                                  : "/api/jobs/" + props.jobId + "/discard-cols";
+        data.value = await api(url);
+        err.value = "";
+        if (data.value && data.value.status === "pending" && !stopped) timer = setTimeout(load, 2500);
+      } catch (e) { err.value = e.message; }
+    }
+    onMounted(load);
+    onBeforeUnmount(() => { stopped = true; if (timer) clearTimeout(timer); });
+    const show = computed(() => data.value && (data.value.hit || data.value.status === "pending"));
+    const srcA2 = computed(() => (data.value && data.value.src_a) || "A");
+    const srcB2 = computed(() => (data.value && data.value.src_b) || "B");
+    const waiting = computed(() => data.value && !((data.value.rows || []).length)
+      && (data.value.status === "pending" || data.value.status === "running"));
+    const csvHref = computed(() => props.batchId ? "/api/batches/" + props.batchId + "/discard-cols.csv" : "");
+    return { data, err, show, srcA2, srcB2, waiting, csvHref, fmtTime };
+  },
+  template: `
+  <div class="card" v-if="show">
+    <div class="card-head">🔍 关注字段监测（DISCARD_COLS）
+      <div class="head-actions">
+        <span v-if="data.generated_at" class="count" style="align-self:center;">采集于 {{ fmtTime(data.generated_at) }}</span>
+        <a v-if="batchId && data.hit" class="mini-btn" :href="csvHref"
+           title="下载本批次关注字段 A/B 取值范围 CSV（UTF-8 BOM，可直接用 Excel 打开）">⬇ DISCARD_COLS.csv</a>
+      </div>
+    </div>
+    <div class="card-body">
+      <div v-if="waiting" class="empty">⏳ 对比仍在执行中，完成后自动采集监测栏位取值。</div>
+      <template v-else>
+        <DiscardTable :rows="data.rows || []" :src-a="srcA2" :src-b="srcB2" />
+        <p class="hint" style="margin:8px 0 0;">取值按首次出现顺序去重（每侧上限 1000 个）；（空）= 栏位存在但值为空。这些栏位新旧线理论上取值范围固定且两侧一致，不一致需人工核查。</p>
+      </template>
+      <div v-if="err" class="error-box">{{ err }}</div>
+    </div>
+  </div>`,
+};
+
+/* 批次情况总结页：概览 + 偏离 Top + 关注字段监测表；可下载自包含 HTML。 */
+const BatchSummaryPage = {
+  emits: ["back"],
+  props: { batchId: String, backText: { type: String, default: "返回" } },
+  setup(props) {
+    const p = ref(null); const err = ref(""); const busy = ref(false);
+    async function load() {
+      busy.value = true;
+      try { p.value = await api("/api/batches/" + props.batchId + "/summary-report"); err.value = ""; }
+      catch (e) { err.value = e.message; }
+      finally { busy.value = false; }
+    }
+    onMounted(load);
+    const htmlHref = computed(() => "/api/batches/" + props.batchId + "/summary-report.html");
+    const STATUS_TEXT = { done: "已完成", running: "执行中", preparing: "准备中", error: "异常" };
+    const d = computed(() => (p.value && p.value.discard) || {});
+    function pct(t) { return (t.ratio * 100).toFixed(1); }
+    return { p, err, busy, load, htmlHref, STATUS_TEXT, d, pct, fmtTime, gradeOf, goBack: () => emit("back") };
+  },
+  template: `
+  <div>
+    <PageHeader :back-text="backText" @back="goBack" title="批次情况总结">
+      <template #meta>
+        <span class="jid" v-if="p">{{ p.batch_id }}</span>
+        <span class="group-badge" v-if="p && p.label">🏷 {{ p.label }}</span>
+        <span class="badge-status" v-if="p" :class="p.status">{{ STATUS_TEXT[p.status] || p.status }}</span>
+      </template>
+      <template #actions>
+        <button class="mini-btn" @click="load" :disabled="busy">↻ 刷新</button>
+        <a class="mini-btn" v-if="p" :href="htmlHref"
+           title="下载自包含 HTML 报告（概览 + 偏离 Top + 关注字段监测，可离线打开归档）">⬇ 下载 HTML</a>
+      </template>
+    </PageHeader>
+    <div class="loading" v-if="!p && !err">加载中…</div>
+    <div class="error-box" v-if="err">{{ err }}</div>
+    <template v-if="p">
+      <div class="card">
+        <div class="card-head">📦 批次概览</div>
+        <div class="card-body">
+          <div class="summary-metrics">
+            <div class="metric total"><div class="num">{{ p.total_files }}</div><div class="lbl">文本总数</div></div>
+            <div class="metric diff"><div class="num">{{ p.diff_files }}</div><div class="lbl">存在差异</div></div>
+            <div class="metric"><div class="num">{{ p.done }}</div><div class="lbl">已完成</div></div>
+            <div class="metric" :class="{ diff: p.failed > 0 }"><div class="num">{{ p.failed }}</div><div class="lbl">失败</div></div>
+            <div class="metric only"><div class="num">{{ p.no_rule_count }}</div><div class="lbl">无规则未对比</div></div>
+            <div class="metric only"><div class="num">{{ p.missing_count }}</div><div class="lbl">缺失文件</div></div>
+          </div>
+          <div style="margin-top:12px;font-size:12px;color:var(--text-soft);">
+            {{ p.src_a }}：{{ p.dir_a }}<br/>{{ p.src_b }}：{{ p.dir_b }}<br/>
+            开始 {{ fmtTime(p.started_at) }} · 完成 {{ fmtTime(p.finished_at) }} · 报告生成于 {{ fmtTime(p.generated_at) }}
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">📉 偏离度高的文本（差异行占比 Top {{ p.top_n }}）</div>
+        <div class="card-body">
+          <div class="empty" v-if="!(p.top_diff || []).length">本批次全部文本完全匹配，无差异行。</div>
+          <div v-else style="overflow-x:auto;">
+            <table class="discard-table">
+              <thead><tr><th>#</th><th>昵称</th><th>文件名</th><th style="min-width:160px;">差异行占比</th><th>数量偏离等级</th><th>完全匹配</th><th>有差异</th><th>仅{{ p.src_a }}</th><th>仅{{ p.src_b }}</th></tr></thead>
+              <tbody>
+                <tr v-for="(t, i) in p.top_diff" :key="i">
+                  <td>{{ i + 1 }}</td>
+                  <td>{{ t.nickname }}</td>
+                  <td class="mono">{{ t.file_name }}</td>
+                  <td>
+                    <span class="conc-bar" style="width:120px;"><span :style="{ width: pct(t) + '%' }"></span></span>
+                    <b style="margin-left:8px;">{{ pct(t) }}%</b>
+                  </td>
+                  <td><span class="badge-grade" :class="gradeOf(t.total_a, t.total_b).cls"
+                            :title="t.grade_desc">{{ t.grade }}</span></td>
+                  <td>{{ t.equal }}</td><td><b style="color:var(--diff-bar)">{{ t.diff }}</b></td>
+                  <td>{{ t.only_a }}</td><td>{{ t.only_b }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <p class="hint" style="margin:8px 0 0;">占比 =（有差异 + 仅{{ p.src_a }} + 仅{{ p.src_b }}）/ 全部匹配行；等级为记录数偏离评判（|A−B|/均值）。</p>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">🔍 关注字段取值监测（DISCARD_COLS）
+          <div class="head-actions" v-if="d.hit">
+            <a class="mini-btn" :href="'/api/batches/' + p.batch_id + '/discard-cols.csv'"
+               title="下载本批次关注字段 A/B 取值范围 CSV">⬇ DISCARD_COLS.csv</a>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="empty" v-if="!d.hit">{{ d.status === 'pending' ? '⏳ 批次仍在执行中，完成后自动采集。' : '本批次无可监测命中文本（未在「设置」导入 DISCARD 监测配置，或昵称未命中）。' }}</div>
+          <template v-else>
+            <DiscardTable :rows="d.rows || []" :src-a="d.src_a || p.src_a" :src-b="d.src_b || p.src_b" />
+            <p class="hint" style="margin:8px 0 0;">取值按首次出现顺序去重（每侧上限 1000 个）；（空）= 栏位存在但值为空。两侧取值范围理论上应一致，不一致需人工核查。</p>
+          </template>
+        </div>
+      </div>
+    </template>
+  </div>`,
+};
+
 /* ---------- 配置展览区（只读 + 编辑重跑） ---------- */
 const ConfigPanel = {
   components: { SeqField },
@@ -1115,6 +1303,9 @@ const ResultView = {
 
       <!-- 本次配置展览 + 重跑 -->
       <ConfigPanel v-if="meta.config" :meta="meta" :encodings="encodings" @rerun="onRerun" />
+
+      <!-- 关注字段监测（昵称命中才有内容） -->
+      <DiscardCard :job-id="jobId" />
 
       <!-- AI 优化建议 -->
       <div class="card" v-if="summary">
@@ -1814,7 +2005,7 @@ const JobList = {
 /* ---------- 批次详情（二级页：路径+概况 + 可搜索的文件列表） ---------- */
 const BatchView = {
   props: ["batchId"],
-  emits: ["open", "back"],
+  emits: ["open", "back", "summary"],
   setup(props, { emit }) {
     const ov = ref(null); const q = ref(""); let timer = null; let stopped = false;
     const starFilter = ref("all");   // all | starred | unstarred
@@ -1922,9 +2113,14 @@ const BatchView = {
       </div>
     </div>
 
+    <!-- 关注字段监测（昵称命中才有内容；批次运行中显示等待） -->
+    <DiscardCard :batch-id="ov.batch.batch_id" />
+
     <div class="card">
       <div class="card-head">📄 文件对比结果（点击查看单文件详情）
         <div class="head-actions">
+          <button class="mini-btn" @click="$emit('summary')"
+                  title="打开批次情况总结（概览 / 偏离度 Top / 关注字段监测，可下载 HTML）">📋 批次情况总结</button>
           <a class="mini-btn" :href="exportHref"
              title="导出批次明细 Excel：文件昵称 / 归属组 / 对比配置 / 对比详情（记录总数与差异情况）。已选归属组时只导出该组">⬇ 导出明细 Excel{{ groupFilter ? '（' + groupFilter + '）' : '' }}</a>
           <a class="mini-btn" :href="exportAllHref"
@@ -2117,6 +2313,41 @@ const SettingsPage = {
     }
     onMounted(loadCtDynStatus);
 
+    // 关注字段监测导入（DISCARD.xlsx，全量替换）
+    const discard = reactive({ busy: false, msg: "", ok: null, file: null, status: null });
+    function onDiscardFile(ev) { discard.file = ev.target.files[0] || null; }
+    async function importDiscard() {
+      if (!discard.file) { discard.msg = "请先选择关注字段监测 Excel（.xlsx）"; discard.ok = false; return; }
+      discard.busy = true; discard.msg = "导入中…"; discard.ok = null;
+      try {
+        const fd = new FormData();
+        fd.append("file", discard.file);
+        const r = await api("/api/discard-fields/import", { method: "POST", body: fd });
+        discard.ok = true;
+        discard.msg = "导入成功：监测 " + r.count + " 条 / " + r.nickname_count + " 个昵称（"
+          + (r.nicknames || []).join("、") + "）"
+          + (r.db_available ? "，已同步 H2 镜像" : "");
+        if (r.warnings && r.warnings.length) {
+          discard.msg += "；告警：" + r.warnings.join("；");
+        }
+        loadDiscardStatus();
+      } catch (e) { discard.ok = false; discard.msg = "导入失败: " + e.message; }
+      finally { discard.busy = false; }
+    }
+    async function loadDiscardStatus() {
+      try { discard.status = await api("/api/discard-fields/status"); } catch (e) {}
+    }
+    async function clearDiscard() {
+      const ok = await askConfirm("确认清空全部关注字段监测配置？后续对比将不再采集监测栏位。", { okText: "清空" });
+      if (!ok) return;
+      try {
+        await api("/api/discard-fields", { method: "DELETE" });
+        discard.msg = "已清空监测配置"; discard.ok = true;
+        loadDiscardStatus();
+      } catch (e) { discard.ok = false; discard.msg = "清空失败: " + e.message; }
+    }
+    onMounted(loadDiscardStatus);
+
     // 生成路径设置（任务管理：差异CSV导出目录；AI 分析结果随该目录）
     const dirs = reactive({ export_dir: "", msg: "", ok: null });
     async function loadDirs() {
@@ -2180,6 +2411,7 @@ const SettingsPage = {
              base, onBaseFiles, importBaseline, exportConfigs,
              cs, onCsFile, importCharset,
              ctdyn, onCtDynFile, importCtDyn,
+             discard, onDiscardFile, importDiscard, clearDiscard,
              dirs, loadDirs, saveDirs,
              extract, loadExtract, saveExtract,
              jvm, loadJvm, saveJvm };
@@ -2277,6 +2509,22 @@ const SettingsPage = {
           <button class="btn" @click="importCtDyn" :disabled="ctdyn.busy">{{ ctdyn.busy ? '导入中…' : '导入动态栏位配置' }}</button>
           <span v-if="ctdyn.status" style="font-size:13px;color:var(--text-soft);">已导入：{{ ctdyn.status.applies }} 适用行 / {{ ctdyn.status.items }} 子栏位（{{ (ctdyn.status.dyn_names||[]).join('、') }}，适用文本 {{ (ctdyn.status.texts||[]).join('、') }}）{{ ctdyn.status.db_available ? ' · H2 镜像正常' : ' · 纯文件模式' }}</span>
           <span v-if="ctdyn.msg" :style="{ color: ctdyn.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ ctdyn.msg }}</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">🔍 关注字段监测导入（DISCARD_COLS）</div>
+      <div class="card-body">
+        <p class="ai-hint" style="margin-top:0;">上传<b>关注字段监测 Excel</b>（列：文本名称 / 栏位 / 栏位名 / 含义；栏位为 ≥1 整数，1-based 同 KEYSEQ 语义），落库 H2 表 <code>discard_field</code>。批次对比、单文本对比、报表对比时按<b>昵称命中</b>自动采集这些栏位在 A/B 两侧数据行的<b>去重取值</b>（每侧上限 1000 个），批次完成后生成 <code>DISCARD_COLS.csv</code> 于 <code>results/{批次ID}/export/</code>，并在批次详情与批次情况总结中展示。适用于理论上取值范围固定的新旧线枚举型栏位监控。导入为全量替换。</p>
+        <div class="field"><label>关注字段监测 Excel（.xlsx：文本名称 / 栏位 / 栏位名 / 含义）</label>
+          <input type="file" accept=".xlsx" @change="onDiscardFile" /></div>
+        <div class="btn-row">
+          <button class="btn" @click="importDiscard" :disabled="discard.busy">{{ discard.busy ? '导入中…' : '导入监测配置' }}</button>
+          <button class="btn ghost" v-if="discard.status && discard.status.count" @click="clearDiscard"
+                  title="清空全部关注字段监测配置">清空监测配置</button>
+          <span v-if="discard.status" style="font-size:13px;color:var(--text-soft);"
+                >已导入：{{ discard.status.count }} 条 / {{ discard.status.nickname_count }} 个昵称{{ discard.status.source_file ? '（' + discard.status.source_file + '）' : '' }}{{ discard.status.db_available ? ' · H2 镜像正常' : ' · 纯文件模式' }}</span>
+          <span v-if="discard.msg" :style="{ color: discard.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ discard.msg }}</span>
         </div>
       </div>
     </div>
@@ -3013,7 +3261,7 @@ const ReportPage = {
   emits: ["open-batch"],
   setup(props, { emit }) {
     const mode = ref("path");
-    const form = reactive({ template_path: "", dir_a: "", dir_b: "", label: "" });
+    const form = reactive({ template_path: "", dir_a: "", dir_b: "", label: "", source_a: "", source_b: "" });
     const up = reactive({ files_a: [], files_b: [], files_tpl: [] });
     const busy = ref(false); const err = ref("");
     function onFiles(ev, target) { up[target] = Array.from(ev.target.files); }
@@ -3024,6 +3272,7 @@ const ReportPage = {
       try {
         const r = await jpost("/api/report-compare", {
           template_path: form.template_path || null, dir_a: form.dir_a, dir_b: form.dir_b, label: form.label || null,
+          source_a: form.source_a || null, source_b: form.source_b || null,
         });
         emit("open-batch", r.batch_id);
       } catch (e) { err.value = e.message; } finally { busy.value = false; }
@@ -3040,6 +3289,7 @@ const ReportPage = {
         const r = await api("/api/report-compare/upload", { method: "POST", body: fd });
         const r2 = await jpost("/api/report-compare", {
           template_path: r.template_dir || null, dir_a: r.dir_a, dir_b: r.dir_b, label: form.label || null,
+          source_a: form.source_a || null, source_b: form.source_b || null,
         });
         emit("open-batch", r2.batch_id);
       } catch (e) { err.value = e.message; } finally { busy.value = false; }
@@ -3072,6 +3322,12 @@ const ReportPage = {
           <label class="field">批次标签（可选，显示在批次任务中）
             <input v-model="form.label" placeholder="如 2026-07-10 夜批量核对" />
           </label>
+          <label class="field">A 来源名称（可选，替代“A”显示于监测表/总结报告）
+            <input v-model="form.source_a" placeholder="默认 A，如 旧线/IBM" />
+          </label>
+          <label class="field">B 来源名称（可选，替代“B”显示于监测表/总结报告）
+            <input v-model="form.source_b" placeholder="默认 B，如 新线/X86" />
+          </label>
         </div>
         <div class="btn-row" style="margin-top:10px;">
           <button v-if="mode==='path'" class="btn primary" :disabled="busy" @click="submitPath">{{ busy ? '提交中…' : '开始报表核对' }}</button>
@@ -3086,7 +3342,7 @@ const ReportPage = {
 
 /* 报表批次详情：总览 + 子作业（昵称/文件名/条数/差异统计）+ 导出明细 Excel。 */
 const ReportBatchView = {
-  emits: ["open", "back"],
+  emits: ["open", "back", "summary"],
   props: { batchId: [String, Number], backText: { type: String, default: "返回报表对比" } },
   setup(props, { emit }) {
     const ov = ref(null); const q = ref(""); let timer = null; let stopped = false;
@@ -3131,6 +3387,8 @@ const ReportBatchView = {
         <span class="badge-status" :class="ov.status">{{ REPORT_STATUS[ov.status] || ov.status }}</span>
       </template>
       <template #actions>
+        <button class="mini-btn" @click="$emit('summary')"
+                title="打开批次情况总结（概览 / 偏离度 Top / 关注字段监测，可下载 HTML）">📋 批次情况总结</button>
         <a class="mini-btn" :href="exportHref"
            title="Sheet1 报表对比总览（昵称/文件名/总条数/差异统计/条数核对），Sheet2 差异明细">⬇ 导出明细 Excel</a>
       </template>
@@ -3151,6 +3409,8 @@ const ReportBatchView = {
         </div>
       </div>
     </div>
+    <!-- 关注字段监测（昵称命中才有内容；批次运行中显示等待） -->
+    <DiscardCard :batch-id="ov.batch.batch_id" />
     <div class="card">
       <div class="card-head">📄 报表核对结果（点击查看单报表详情）
         <div class="head-actions">
@@ -3272,6 +3532,8 @@ const ReportResultView = {
         <div class="error-box" v-if="rerunErr" style="margin-top:10px;">{{ rerunErr }}</div>
       </div>
     </div>
+    <!-- 关注字段监测（昵称命中才有内容） -->
+    <DiscardCard :job-id="jobId" />
     <div class="card" v-if="sum.status === 'error'">
       <div class="card-head">❌ 对比失败</div>
       <div class="card-body"><div class="error-box">{{ sum.error }}</div></div>
@@ -3333,7 +3595,7 @@ const CustomPage = {
   emits: ["open-batch"],
   setup(props, { emit }) {
     const mode = ref("path");
-    const form = reactive({ start_pattern: "^\\{1:", end_pattern: "^-\\}", key_pattern: ":20:(\\S+)", dir_a: "", dir_b: "", label: "" });
+    const form = reactive({ start_pattern: "^\\{1:", end_pattern: "^-\\}", key_pattern: ":20:(\\S+)", dir_a: "", dir_b: "", label: "", source_a: "", source_b: "" });
     const up = reactive({ files_a: [], files_b: [] });
     const busy = ref(false); const err = ref("");
     function onFiles(ev, target) { up[target] = Array.from(ev.target.files); }
@@ -3349,6 +3611,7 @@ const CustomPage = {
         const r = await jpost("/api/custom-compare", {
           start_pattern: form.start_pattern, end_pattern: form.end_pattern || null,
           key_pattern: form.key_pattern || null, dir_a: form.dir_a, dir_b: form.dir_b, label: form.label || null,
+          source_a: form.source_a || null, source_b: form.source_b || null,
         });
         emit("open-batch", r.batch_id);
       } catch (e) { err.value = e.message; } finally { busy.value = false; }
@@ -3366,6 +3629,7 @@ const CustomPage = {
         const r2 = await jpost("/api/custom-compare", {
           start_pattern: form.start_pattern, end_pattern: form.end_pattern || null,
           key_pattern: form.key_pattern || null, dir_a: r.dir_a, dir_b: r.dir_b, label: form.label || null,
+          source_a: form.source_a || null, source_b: form.source_b || null,
         });
         emit("open-batch", r2.batch_id);
       } catch (e) { err.value = e.message; } finally { busy.value = false; }
@@ -3406,6 +3670,12 @@ const CustomPage = {
           <label class="field">批次标签（可选，显示在批次任务中）
             <input v-model="form.label" placeholder="如 MT950 对账核对" />
           </label>
+          <label class="field">A 来源名称（可选，替代“A”显示于总结报告）
+            <input v-model="form.source_a" placeholder="默认 A，如 旧线/IBM" />
+          </label>
+          <label class="field">B 来源名称（可选，替代“B”显示于总结报告）
+            <input v-model="form.source_b" placeholder="默认 B，如 新线/X86" />
+          </label>
         </div>
         <div class="btn-row" style="margin-top:10px;">
           <button v-if="mode==='path'" class="btn primary" :disabled="busy" @click="submitPath">{{ busy ? '提交中…' : '开始段对比' }}</button>
@@ -3420,7 +3690,7 @@ const CustomPage = {
 
 /* 自定义格式对比批次详情：总览 + 子作业（段数/匹配统计）。 */
 const CustomBatchView = {
-  emits: ["open", "back"],
+  emits: ["open", "back", "summary"],
   props: ["batchId"],
   setup(props, { emit }) {
     const ov = ref(null); const q = ref(""); let timer = null; let stopped = false;
@@ -3463,6 +3733,10 @@ const CustomBatchView = {
         <button class="mini-btn" @click="editLabel">{{ ov.batch.label ? '改标签' : '加标签' }}</button>
         <span class="badge-status" :class="ov.status">{{ REPORT_STATUS[ov.status] || ov.status }}</span>
       </template>
+      <template #actions>
+        <button class="mini-btn" @click="$emit('summary')"
+                title="打开批次情况总结（概览 / 偏离度 Top / 关注字段监测，可下载 HTML）">📋 批次情况总结</button>
+      </template>
     </PageHeader>
     <div class="card">
       <div class="card-head">📐 批次概况</div>
@@ -3480,6 +3754,8 @@ const CustomBatchView = {
         </div>
       </div>
     </div>
+    <!-- 关注字段监测（昵称命中才有内容；批次运行中显示等待） -->
+    <DiscardCard :batch-id="ov.batch.batch_id" />
     <div class="card">
       <div class="card-head">📄 段对比结果（点击查看单文件详情）
         <div class="head-actions">
@@ -3583,7 +3859,7 @@ const CustomResultView = {
 const App = {
   components: { SubmitForm, JobList, BatchView, ResultView, SettingsPage, SplitPage, SplitResultView,
                 TaskManagerPage, ReportPage, ReportBatchView, ReportResultView,
-                CustomPage, CustomBatchView, CustomResultView, AppDialog, AppToast },
+                CustomPage, CustomBatchView, CustomResultView, BatchSummaryPage, AppDialog, AppToast },
   setup() {
     const tab = ref("submit");
     const jobId = ref(null);
@@ -3594,6 +3870,8 @@ const App = {
     const splitJobId = ref(null);  // 当前查看的拆分作业
     const reportBatchId = ref(null); // 当前查看的报表对比批次
     const reportJobId = ref(null);   // 当前查看的报表对比作业
+    const summaryBatchId = ref(null); // 批次情况总结页当前批次
+    const summaryBackTab = ref("jobs"); // 总结页返回目标（批次详情来源）
     const encodings = ref(["auto", "utf-8"]);
     onMounted(async () => {
       try { const r = await api("/api/encodings"); encodings.value = r.encodings; } catch (e) {}
@@ -3627,11 +3905,20 @@ const App = {
     const customJobId = ref(null);   // 当前查看的自定义格式对比作业
     function openCustomBatch(id) { customBatchId.value = id; tab.value = "custombatch"; }
     function openCustomJob(id) { customJobId.value = id; tab.value = "customresult"; }
+    // 批次情况总结页导航：记录来源批次 tab，返回时回到对应批次详情
+    const SUMMARY_BACK = { batch: "返回批次详情", reportbatch: "返回报表批次", custombatch: "返回自定义批次" };
+    function openSummary(id, back) {
+      summaryBatchId.value = id;
+      summaryBackTab.value = back || "jobs";
+      tab.value = "batchreport";
+    }
+    const summaryBackText = computed(() => SUMMARY_BACK[summaryBackTab.value] || "返回作业列表");
     return { tab, jobId, batchId, backBatch, backTab, resultNonce, splitJobId, encodings,
              reportBatchId, reportJobId, reportBackTab, customBatchId, customJobId,
+             summaryBatchId, summaryBackTab, summaryBackText,
              onSubmitted, onBatched, openJob, openBatch, openChild, openJobFromTasks,
              openBatchFromTasks, onRerun, onResultBack, backToJobs, openSplit,
-             openReportBatch, openReportJob, openCustomBatch, openCustomJob };
+             openReportBatch, openReportJob, openCustomBatch, openCustomJob, openSummary };
   },
   template: `
   <div class="app-header">
@@ -3642,7 +3929,7 @@ const App = {
     <button class="nav-btn" :class="['custom','custombatch','customresult'].includes(tab)?'active':''" @click="tab='custom'">自定义格式对比</button>
     <button class="nav-btn" :class="['split','splitresult'].includes(tab)?'active':''" @click="tab='split'">文本拆分</button>
     <div class="spacer"></div>
-    <button class="nav-btn" :class="['jobs','batch'].includes(tab)?'active':''" @click="tab='jobs'">作业列表</button>
+    <button class="nav-btn" :class="['jobs','batch','batchreport'].includes(tab)?'active':''" @click="tab='jobs'">作业列表</button>
     <button class="nav-btn" :class="tab==='tasks'?'active':''" @click="tab='tasks'">任务管理</button>
     <span class="nav-divider"></span>
     <button class="nav-btn" :class="tab==='result'?'active':''" @click="tab='result'" :disabled="!jobId">结果</button>
@@ -3654,12 +3941,12 @@ const App = {
     <ReportPage v-else-if="tab==='report'" @open-batch="openReportBatch" />
     <ReportBatchView v-else-if="tab==='reportbatch' && reportBatchId" :batch-id="reportBatchId" :key="reportBatchId"
                      :back-text="reportBackTab === 'jobs' ? '返回作业列表' : '返回报表对比'"
-                     @open="openReportJob" @back="tab = reportBackTab" />
+                     @open="openReportJob" @summary="openSummary(reportBatchId, 'reportbatch')" @back="tab = reportBackTab" />
     <ReportResultView v-else-if="tab==='reportresult' && reportJobId" :job-id="reportJobId" :key="reportJobId"
                       @back="tab='reportbatch'" />
     <CustomPage v-else-if="tab==='custom'" @open-batch="openCustomBatch" />
     <CustomBatchView v-else-if="tab==='custombatch' && customBatchId" :batch-id="customBatchId" :key="customBatchId"
-                     @open="openCustomJob" @back="tab='custom'" />
+                     @open="openCustomJob" @summary="openSummary(customBatchId, 'custombatch')" @back="tab='custom'" />
     <CustomResultView v-else-if="tab==='customresult' && customJobId" :job-id="customJobId" :key="customJobId"
                       @back="tab='custombatch'" />
     <JobList v-else-if="tab==='jobs'" @open="openJob" @open-batch="openBatch" @open-split="openSplit"
@@ -3667,13 +3954,18 @@ const App = {
     <TaskManagerPage v-else-if="tab==='tasks'" @open="openJobFromTasks" @open-batch="openBatchFromTasks" />
     <SplitPage v-else-if="tab==='split'" @open-split="openSplit" />
     <SplitResultView v-else-if="tab==='splitresult' && splitJobId" :job-id="splitJobId" :key="splitJobId" @back="backToJobs" />
-    <BatchView v-else-if="tab==='batch' && batchId" :batch-id="batchId" :key="batchId" @open="openChild" @back="backToJobs" />
+    <BatchView v-else-if="tab==='batch' && batchId" :batch-id="batchId" :key="batchId" @open="openChild"
+               @summary="openSummary(batchId, 'batch')" @back="backToJobs" />
     <ResultView v-else-if="tab==='result' && jobId" :job-id="jobId" :key="jobId + '-' + resultNonce" :encodings="encodings"
                 :back-batch="backBatch" :back-tasks="backTab==='tasks'" @rerun="onRerun" @back="onResultBack" />
+    <BatchSummaryPage v-else-if="tab==='batchreport' && summaryBatchId" :batch-id="summaryBatchId"
+                      :key="summaryBatchId" :back-text="summaryBackText"
+                      @back="tab = summaryBackTab" />
     <SettingsPage v-else-if="tab==='settings'" />
     <AppDialog />
     <AppToast />
   </div>`,
 };
 
-createApp(App).component("PageHeader", PageHeader).component("ListPager", ListPager).mount("#app");
+createApp(App).component("PageHeader", PageHeader).component("ListPager", ListPager)
+  .component("DiscardTable", DiscardTable).component("DiscardCard", DiscardCard).mount("#app");
