@@ -16,16 +16,19 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/** 提交类端点：编码枚举、上传、单对比、批次（目录对）。 */
+/** 提交类端点：编码枚举、上传、单对比、批次（目录对，可按对比配置分组圈定范围）。 */
 @RestController
 @RequestMapping("/api")
 public class SubmitController {
     private final JobManager jobs;
     private final AppPaths paths;
+    private final com.textdiff.store.CompareGroupStore compareGroups;
 
-    public SubmitController(JobManager jobs, AppPaths paths) {
+    public SubmitController(JobManager jobs, AppPaths paths,
+                            com.textdiff.store.CompareGroupStore compareGroups) {
         this.jobs = jobs;
         this.paths = paths;
+        this.compareGroups = compareGroups;
     }
 
     @GetMapping("/encodings")
@@ -131,7 +134,11 @@ public class SubmitController {
         return Map.of("batch_id", batch.id);
     }
 
-    /** 批次配置行解析（use_all / config_file / 内联三选一），预览与正式提交共用。 */
+    /**
+     * 批次配置行解析（use_all / config_file / 内联三选一），预览与正式提交共用。
+     * 可选 {@code group}：对比配置分组名，仅保留分组成员（按配置昵称）内的行——
+     * 目录对比圈定范围：不在分组名单内的文本不读取不对比；未指定分组则对比全部。
+     */
     private List<String> resolveConfigLines(Map<String, Object> body) throws IOException {
         List<String> lines = new ArrayList<>();
         Boolean useAll = bool(body.get("use_all"));
@@ -140,6 +147,7 @@ public class SubmitController {
             for (String f : listConfigFiles()) {
                 lines.addAll(readConfigLines(paths.configsDir().resolve(f)));
             }
+            lines = dedupeLines(lines);
         } else if (configFile != null) {
             lines.addAll(readConfigLines(paths.configsDir().resolve(configFile)));
         } else {
@@ -163,7 +171,45 @@ public class SubmitController {
             sb.append(":SRCB=").append(strOr(body.get("source_b"), "B"));
             lines.add(sb.toString());
         }
+        String group = str(body.get("group"));
+        if (group != null && !group.isBlank()) lines = filterByGroup(group.strip(), lines);
         return lines;
+    }
+
+    /** 分组过滤：配置昵称（冒号前段）命中分组成员（忽略大小写）才保留；分组不存在抛 400。 */
+    private List<String> filterByGroup(String groupName, List<String> lines) {
+        java.util.Set<String> members = compareGroups.membersOf(groupName);
+        if (compareGroups.group(groupName) == null) {
+            throw new IllegalArgumentException("对比配置分组不存在: " + groupName);
+        }
+        List<String> out = new ArrayList<>();
+        for (String line : lines) {
+            String nick = line.split(":", 2)[0].strip();
+            for (String m : members) {
+                if (m.equalsIgnoreCase(nick)) {
+                    out.add(line);
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 全部配置去重：同一规则可能同时存在于 {昵称}.conf / current.conf / default.conf，
+     * 按（昵称 + 通配名）去重保留先到者——单配置文件（UI 保存/编辑的最新内容）优先于
+     * current/default 聚合文件，避免 use_all 批次对同一文本重复建作业。
+     */
+    private static List<String> dedupeLines(List<String> lines) {
+        java.util.LinkedHashMap<String, String> out = new java.util.LinkedHashMap<>();
+        for (String line : lines) {
+            String t = line.strip();
+            if (t.isEmpty() || t.startsWith("#")) continue;
+            String[] parts = t.split(":", 3);
+            String key = parts[0].strip() + "\u0000" + (parts.length > 1 ? parts[1].strip() : "");
+            out.putIfAbsent(key, t);
+        }
+        return new ArrayList<>(out.values());
     }
 
     static List<String> readConfigLines(Path file) throws IOException {
@@ -175,16 +221,27 @@ public class SubmitController {
         return out;
     }
 
+    /** 配置文件清单（use_all）：单配置文件（{昵称}.conf 等）在前、current.conf 次之、default.conf 最后——配合去重时最新编辑优先。 */
     private List<String> listConfigFiles() throws IOException {
         Path dir = paths.configsDir();
         if (!Files.isDirectory(dir)) return List.of();
-        List<String> out = new ArrayList<>();
+        List<String> singles = new ArrayList<>();
+        String current = null;
+        String baseline = null;
         try (var s = Files.list(dir)) {
-            s.filter(p -> {
-                String n = p.getFileName().toString().toLowerCase();
-                return n.endsWith(".conf") || n.endsWith(".txt") || n.endsWith(".ini");
-            }).map(p -> p.getFileName().toString()).sorted().forEach(out::add);
+            for (Path p : s.filter(Files::isRegularFile).toList()) {
+                String n = p.getFileName().toString();
+                String low = n.toLowerCase();
+                if (!low.endsWith(".conf") && !low.endsWith(".txt") && !low.endsWith(".ini")) continue;
+                if (n.equals("current.conf")) current = n;
+                else if (n.equals("default.conf")) baseline = n;
+                else singles.add(n);
+            }
         }
+        java.util.Collections.sort(singles);
+        List<String> out = new ArrayList<>(singles);
+        if (current != null) out.add(current);
+        if (baseline != null) out.add(baseline);
         return out;
     }
 

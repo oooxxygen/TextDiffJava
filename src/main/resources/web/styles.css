@@ -726,3 +726,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .discard-table td.vals { white-space: normal; min-width: 220px; max-width: 420px; overflow-wrap: anywhere; }
 .discard-table td.vals.bad { color: #dc2626; }
 .discard-table td.mono { font-family: Consolas, "Courier New", monospace; font-size: 12px; }
+
+/* ---------- 偏离度双指标徽标（微量偏移紫 / 务必关注黄 / 严重问题红 / 正常绿）与分区搜索 ---------- */
+.badge-grade.purple { background: #ede9fe; color: #6d28d9; }
+.badge-grade.yellow { background: #fef9c3; color: #a16207; }
+.sec-search { display: flex; align-items: center; gap: 14px; margin: 0 0 10px; flex-wrap: wrap; }
+.sec-search label { font-size: 12.5px; color: var(--text-soft); display: inline-flex; align-items: center; gap: 6px; }
+.sec-search input { border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px;
+                    font-size: 12.5px; width: 190px; background: var(--surface); color: var(--text); }
+.sec-search input:focus { outline: none; border-color: var(--accent); }
+.conc-bar.count-bar > span { background: linear-gradient(90deg, #f59e0b, #d97706); }

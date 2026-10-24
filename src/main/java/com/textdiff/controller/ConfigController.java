@@ -62,6 +62,72 @@ public class ConfigController {
         throw new ResponseStatusException(HttpStatus.NOT_FOUND, "配置不存在: " + nickname);
     }
 
+    /**
+     * 配置管理列表（逐行展平）：configs 目录全部文件的所有配置行，含来源文件与行号。
+     * 多行聚合文件（current/default.conf）的每一行都是独立条目；坏行计数不阻断。
+     */
+    @GetMapping("/configs/manage")
+    public Map<String, Object> manage(@RequestParam(required = false) String q) throws IOException {
+        List<Map<String, Object>> out = new ArrayList<>();
+        int bad = 0;
+        for (Map.Entry<String, String> e : readAll().entrySet()) {
+            int lineNo = 0;
+            for (String line : e.getValue().split("\\r?\\n")) {
+                lineNo++;
+                String t = line.strip();
+                if (t.isEmpty() || t.startsWith("#")) continue;
+                try {
+                    CompareConfig cfg = Rules.parseLegacy(t,
+                            ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
+                    if (q != null && !q.isBlank()
+                            && !cfg.nickname.contains(q) && !cfg.fileGlob.contains(q)) continue;
+                    Map<String, Object> m = ApiPayloads.configMap(cfg, e.getKey());
+                    m.put("line_no", lineNo);
+                    out.add(m);
+                } catch (RuntimeException ex) {
+                    bad++;
+                }
+            }
+        }
+        return Map.of("configs", out, "bad_lines", bad);
+    }
+
+    /** 删除配置：删 {昵称}.conf（如存在），并从 current.conf / default.conf 移除该昵称的行。 */
+    @DeleteMapping("/configs")
+    public Map<String, Object> delete(@RequestParam String nickname) throws IOException {
+        if (nickname == null || nickname.isBlank()) throw new IllegalArgumentException("缺少 nickname");
+        sanitize(nickname);
+        String nick = nickname.strip();
+        List<String> touched = new ArrayList<>();
+        Path dir = paths.configsDir();
+        Path own = dir.resolve(nick + ".conf");
+        if (Files.isRegularFile(own)) {
+            Files.delete(own);
+            touched.add(own.getFileName().toString());
+        }
+        for (String agg : List.of("current.conf", "default.conf")) {
+            Path file = dir.resolve(agg);
+            if (!Files.isRegularFile(file)) continue;
+            List<String> kept = new ArrayList<>();
+            boolean removed = false;
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                if (!line.strip().isEmpty() && !line.strip().startsWith("#")
+                        && line.split(":", 2)[0].strip().equals(nick)) {
+                    removed = true;
+                    continue;
+                }
+                kept.add(line);
+            }
+            if (removed) {
+                Files.writeString(file, String.join(System.lineSeparator(), kept)
+                        + (kept.isEmpty() ? "" : System.lineSeparator()), StandardCharsets.UTF_8);
+                touched.add(agg);
+            }
+        }
+        if (touched.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "配置不存在: " + nick);
+        return Map.of("deleted", true, "nickname", nick, "files", touched);
+    }
+
     @SuppressWarnings("unchecked")
     @PostMapping("/configs")
     public Map<String, Object> save(@RequestBody Map<String, Object> body) throws IOException {

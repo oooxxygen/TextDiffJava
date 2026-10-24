@@ -303,6 +303,10 @@ public final class DiscardColsService {
     }
 
     /** 归属组：字段映射（源系统结构导入）按昵称关联；未导入为空串。 */
+    public String groupOfNickname(String nickname) {
+        return groupOf(nickname);
+    }
+
     private String groupOf(String nickname) {
         var t = fieldMaps == null ? null : fieldMaps.typeByReport(nickname);
         return t == null || t.ownershipGroup() == null || t.ownershipGroup().isBlank()

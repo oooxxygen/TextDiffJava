@@ -53,6 +53,12 @@ public class WebBeansConfig {
         return new com.textdiff.store.DiscardFieldStore(paths.baseDir().resolve("store"), cfg.store().enabled());
     }
 
+    /** 对比配置分组存储（目录批次圈定对比范围）。 */
+    @Bean(destroyMethod = "close")
+    public com.textdiff.store.CompareGroupStore compareGroupStore(AppPaths paths, AppConfig cfg) {
+        return new com.textdiff.store.CompareGroupStore(paths.baseDir().resolve("store"), cfg.store().enabled());
+    }
+
     @Bean(destroyMethod = "close")
     public JobManager jobManager(DualJobStore store, AppPaths paths, AppConfig cfg,
                                  com.textdiff.store.FieldMapStore fieldMaps,

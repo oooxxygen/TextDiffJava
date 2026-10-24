@@ -1,7 +1,8 @@
 package com.textdiff.controller;
 
+import com.textdiff.export.BatchSummaryExcel;
 import com.textdiff.export.BatchSummaryHtml;
-import com.textdiff.export.DiffGrade;
+import com.textdiff.export.Deviation;
 import com.textdiff.export.DiscardColsService;
 import com.textdiff.store.BatchRecord;
 import com.textdiff.store.DiscardExcel;
@@ -36,13 +37,11 @@ import java.util.Map;
  * GET  /api/discard-fields/status；DELETE /api/discard-fields（清空）
  * GET  /api/batches/{id}/discard-cols(.csv)（懒生成视图 / CSV 下载）
  * GET  /api/jobs/{id}/discard-cols（单作业小卡片）
- * GET  /api/batches/{id}/summary-report(.html)（批次情况总结：概览 + 偏离 Top + 监测表）
+ * GET  /api/batches/{id}/summary-report(.html/.xlsx)（批次情况总结：概览 + 全部文本偏离度双指标 + 监测表）
  */
 @RestController
 @RequestMapping("/api")
 public class DiscardController {
-    private static final int TOP_N = 10;
-
     private final JobStore store;
     private final DiscardFieldStore discardFields;
     private final DiscardColsService discardService;
@@ -134,7 +133,7 @@ public class DiscardController {
         return view;
     }
 
-    /** 批次情况总结（JSON：概览 + 偏离 Top10 + 监测表）。 */
+    /** 批次情况总结（JSON：概览 + 全部文本偏离度双指标 + 监测表）。 */
     @GetMapping("/batches/{id}/summary-report")
     public Map<String, Object> summaryReport(@PathVariable String id) {
         Map<String, Object> out = summaryPayload(id);
@@ -142,7 +141,7 @@ public class DiscardController {
         return out;
     }
 
-    /** 批次情况总结（自包含 HTML 下载）。 */
+    /** 批次情况总结（自包含 HTML 下载：全量内容 + 各分区按表名/归属组搜索）。 */
     @GetMapping("/batches/{id}/summary-report.html")
     public ResponseEntity<byte[]> summaryReportHtml(@PathVariable String id) {
         Map<String, Object> out = summaryPayload(id);
@@ -153,6 +152,21 @@ public class DiscardController {
                 .header("Content-Disposition", "attachment; filename*=UTF-8''"
                         + urlEncode(name))
                 .contentType(MediaType.parseMediaType("text/html;charset=UTF-8"))
+                .body(body);
+    }
+
+    /** 批次情况总结 Excel（一个分区一个 Sheet：概览 / 偏离度 / 关注字段监测）。 */
+    @GetMapping("/batches/{id}/summary-report.xlsx")
+    public ResponseEntity<byte[]> summaryReportExcel(@PathVariable String id) {
+        Map<String, Object> out = summaryPayload(id);
+        if (out == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "批次不存在: " + id);
+        byte[] body = BatchSummaryExcel.render(out);
+        String name = "批次情况总结_" + id + ".xlsx";
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename*=UTF-8''"
+                        + urlEncode(name))
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
                 .body(body);
     }
 
@@ -185,16 +199,19 @@ public class DiscardController {
         out.put("missing_count", stats.get("missing_count"));
         out.put("src_a", discard == null ? "A" : discard.getOrDefault("src_a", "A"));
         out.put("src_b", discard == null ? "B" : discard.getOrDefault("src_b", "B"));
-        out.put("top_n", TOP_N);
-        out.put("top_diff", topDiff(jobs));
+        out.put("deviations", deviations(jobs));
         out.put("discard", discard);
         out.put("generated_at", System.currentTimeMillis() / 1000);
         return out;
     }
 
-    /** 偏离 Top：差异行占比 = (diff+onlyA+onlyB)/(equal+diff+onlyA+onlyB) 主排，DiffGrade 等级标注。 */
-    private List<Map<String, Object>> topDiff(List<JobRecord> jobs) {
-        List<Map<String, Object>> top = new ArrayList<>();
+    /**
+     * 全部文本偏离度（双指标）：
+     *  内容偏离度 =（有差异 + 仅A + 仅B）/ A 总条数；条数偏离度 = |B − A| / A 总条数；
+     *  分级 ≥50% 严重问题 / ≥20% 务必关注 / ≥10% 微量偏移，按两指标较大者主排（同值按差异条数）。
+     */
+    private List<Map<String, Object>> deviations(List<JobRecord> jobs) {
+        List<Map<String, Object>> out = new ArrayList<>();
         for (JobRecord j : jobs) {
             if (!JobRecord.DONE.equals(j.status)) continue;
             long equal, diff, onlyA, onlyB, totalA, totalB;
@@ -215,31 +232,38 @@ public class DiscardController {
                 totalA = meta.totalA;
                 totalB = meta.totalB;
             }
-            long bad = diff + onlyA + onlyB;
-            if (bad <= 0) continue;
-            long denom = equal + bad;
+            String nickname = DiscardColsService.monitorKey(j);
+            Deviation.Metric content = Deviation.content(diff, onlyA, onlyB, totalA);
+            Deviation.Metric count = Deviation.count(totalA, totalB);
             Map<String, Object> m = new LinkedHashMap<>();
-            m.put("nickname", DiscardColsService.monitorKey(j));
+            m.put("nickname", nickname);
+            m.put("group", discardService.groupOfNickname(nickname));
             m.put("file_name", fileName(j.fileA) == null ? fileName(j.fileB) : fileName(j.fileA));
-            m.put("ratio", Math.round(bad * 10000.0 / Math.max(1, denom)) / 10000.0);
+            m.put("content_ratio", round4(content.ratio()));
+            m.put("content_grade", content.grade());
+            m.put("count_ratio", round4(count.ratio()));
+            m.put("count_grade", count.grade());
             m.put("equal", equal);
             m.put("diff", diff);
             m.put("only_a", onlyA);
             m.put("only_b", onlyB);
             m.put("total_a", totalA);
             m.put("total_b", totalB);
-            DiffGrade.Grade g = DiffGrade.of(totalA, totalB);
-            m.put("grade", g.label());
-            m.put("grade_desc", g.desc());
-            top.add(m);
+            out.add(m);
         }
-        top.sort((x, y) -> {
-            int c = Double.compare(((Number) y.get("ratio")).doubleValue(),
-                    ((Number) x.get("ratio")).doubleValue());
-            if (c != 0) return c;
+        out.sort((x, y) -> {
+            int c = Double.compare(Math.max(((Number) x.get("content_ratio")).doubleValue(),
+                            ((Number) x.get("count_ratio")).doubleValue()),
+                    Math.max(((Number) y.get("content_ratio")).doubleValue(),
+                            ((Number) y.get("count_ratio")).doubleValue()));
+            if (c != 0) return -c;
             return Long.compare(((Number) y.get("diff")).longValue(), ((Number) x.get("diff")).longValue());
         });
-        return top.size() > TOP_N ? new ArrayList<>(top.subList(0, TOP_N)) : top;
+        return out;
+    }
+
+    private static double round4(double v) {
+        return Math.round(v * 10000.0) / 10000.0;
     }
 
     private static String fileName(String path) {

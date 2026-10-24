@@ -780,11 +780,13 @@ const DiscardCard = {
   </div>`,
 };
 
-/* 批次情况总结页：概览 + 偏离 Top + 关注字段监测表；可下载自包含 HTML。 */
+/* 批次情况总结页：概览 + 全部文本偏离度双指标（内容/条数）+ 关注字段监测表；
+   各分区按表名/归属组搜索；可下载自包含 HTML 与一分区一 Sheet 的 Excel。 */
 const BatchSummaryPage = {
+  components: { ListPager },
   emits: ["back"],
   props: { batchId: String, backText: { type: String, default: "返回" } },
-  setup(props) {
+  setup(props, { emit }) {
     const p = ref(null); const err = ref(""); const busy = ref(false);
     async function load() {
       busy.value = true;
@@ -794,10 +796,33 @@ const BatchSummaryPage = {
     }
     onMounted(load);
     const htmlHref = computed(() => "/api/batches/" + props.batchId + "/summary-report.html");
+    const xlsxHref = computed(() => "/api/batches/" + props.batchId + "/summary-report.xlsx");
     const STATUS_TEXT = { done: "已完成", running: "执行中", preparing: "准备中", error: "异常" };
     const d = computed(() => (p.value && p.value.discard) || {});
-    function pct(t) { return (t.ratio * 100).toFixed(1); }
-    return { p, err, busy, load, htmlHref, STATUS_TEXT, d, pct, fmtTime, gradeOf, goBack: () => emit("back") };
+    // 偏离度双指标徽标：微量偏移（紫）/ 务必关注（黄）/ 严重问题（红）/ 正常（绿）
+    const GRADE_CLS = { "微量偏移": "purple", "务必关注": "yellow", "严重问题": "severe", "正常": "ok" };
+    function gradeCls(g) { return GRADE_CLS[g] || "ok"; }
+    function pct(v) { return (v * 100).toFixed(1); }
+    // 分区搜索（表名 + 归属组，AND 组合；在线页与离线 HTML 同语义）
+    const devNick = ref(""); const devGroup = ref("");
+    const discNick = ref(""); const discGroup = ref("");
+    function hits(list, nick, group) {
+      const n = nick.value.trim().toLowerCase(); const g = group.value.trim().toLowerCase();
+      if (!n && !g) return list;
+      return list.filter(r => {
+        const rn = (r.nickname || "").toLowerCase(); const rg = (r.group || "").toLowerCase();
+        return (!n || rn.indexOf(n) >= 0) && (!g || rg.indexOf(g) >= 0);
+      });
+    }
+    const devs = computed(() => hits(p.value ? (p.value.deviations || []) : [], devNick, devGroup));
+    const discRows = computed(() => hits(d.value.rows || [], discNick, discGroup));
+    const devPg = usePager(() => devs.value, 50);
+    const discPg = usePager(() => discRows.value, 100);
+    watch([devNick, devGroup], () => devPg.reset());
+    watch([discNick, discGroup], () => discPg.reset());
+    return { p, err, busy, load, htmlHref, xlsxHref, STATUS_TEXT, d,
+             gradeCls, pct, devNick, devGroup, discNick, discGroup, devs, discRows, devPg, discPg,
+             fmtTime, goBack: () => emit("back") };
   },
   template: `
   <div>
@@ -809,8 +834,10 @@ const BatchSummaryPage = {
       </template>
       <template #actions>
         <button class="mini-btn" @click="load" :disabled="busy">↻ 刷新</button>
+        <a class="mini-btn" v-if="p" :href="xlsxHref"
+           title="下载批次总结 Excel：概览 / 偏离度（全部文本双指标）/ 关注字段监测，一个分区一个 Sheet">⬇ 下载 Excel</a>
         <a class="mini-btn" v-if="p" :href="htmlHref"
-           title="下载自包含 HTML 报告（概览 + 偏离 Top + 关注字段监测，可离线打开归档）">⬇ 下载 HTML</a>
+           title="下载自包含 HTML 报告（全量内容 + 分区搜索，可离线打开归档）">⬇ 下载 HTML</a>
       </template>
     </PageHeader>
     <div class="loading" v-if="!p && !err">加载中…</div>
@@ -834,29 +861,44 @@ const BatchSummaryPage = {
         </div>
       </div>
       <div class="card">
-        <div class="card-head">📉 偏离度高的文本（差异行占比 Top {{ p.top_n }}）</div>
+        <div class="card-head">📉 文本偏离度（全部文本 · 双指标）
+          <div class="head-actions"><ListPager :page="devPg.page" :pages="devPg.pages" :total="devPg.total"
+                    :size="devPg.size" @go="devPg.go" @resize="devPg.resize" /></div>
+        </div>
         <div class="card-body">
-          <div class="empty" v-if="!(p.top_diff || []).length">本批次全部文本完全匹配，无差异行。</div>
+          <div class="sec-search">
+            <label>表名 <input v-model="devNick" placeholder="按表名（昵称）搜索" /></label>
+            <label>归属组 <input v-model="devGroup" placeholder="按归属组搜索" /></label>
+            <span class="hint" v-if="devs.length !== (p.deviations || []).length">命中 {{ devs.length }} / {{ (p.deviations || []).length }}</span>
+          </div>
+          <div class="empty" v-if="!devs.length">无已完成文本（或全部完全匹配无差异行）。</div>
           <div v-else style="overflow-x:auto;">
             <table class="discard-table">
-              <thead><tr><th>#</th><th>昵称</th><th>文件名</th><th style="min-width:160px;">差异行占比</th><th>数量偏离等级</th><th>完全匹配</th><th>有差异</th><th>仅{{ p.src_a }}</th><th>仅{{ p.src_b }}</th></tr></thead>
+              <thead><tr><th>#</th><th>表名（昵称）</th><th>归属组</th><th>文件名</th>
+                <th style="min-width:150px;">内容偏离度</th><th style="min-width:150px;">条数偏离度</th>
+                <th>完全匹配</th><th>有差异</th><th>仅{{ p.src_a }}</th><th>仅{{ p.src_b }}</th></tr></thead>
               <tbody>
-                <tr v-for="(t, i) in p.top_diff" :key="i">
-                  <td>{{ i + 1 }}</td>
+                <tr v-for="(t, i) in devPg.paged" :key="i">
+                  <td>{{ (devPg.page - 1) * devPg.size + i + 1 }}</td>
                   <td>{{ t.nickname }}</td>
+                  <td>{{ t.group }}</td>
                   <td class="mono">{{ t.file_name }}</td>
                   <td>
-                    <span class="conc-bar" style="width:120px;"><span :style="{ width: pct(t) + '%' }"></span></span>
-                    <b style="margin-left:8px;">{{ pct(t) }}%</b>
+                    <span class="conc-bar" style="width:90px;"><span :style="{ width: Math.min(100, pct(t.content_ratio)) + '%' }"></span></span>
+                    <b style="margin-left:6px;">{{ pct(t.content_ratio) }}%</b>
+                    <span class="badge-grade" :class="gradeCls(t.content_grade)">{{ t.content_grade }}</span>
                   </td>
-                  <td><span class="badge-grade" :class="gradeOf(t.total_a, t.total_b).cls"
-                            :title="t.grade_desc">{{ t.grade }}</span></td>
+                  <td>
+                    <span class="conc-bar count-bar" style="width:90px;"><span :style="{ width: Math.min(100, pct(t.count_ratio)) + '%' }"></span></span>
+                    <b style="margin-left:6px;">{{ pct(t.count_ratio) }}%</b>
+                    <span class="badge-grade" :class="gradeCls(t.count_grade)">{{ t.count_grade }}</span>
+                  </td>
                   <td>{{ t.equal }}</td><td><b style="color:var(--diff-bar)">{{ t.diff }}</b></td>
                   <td>{{ t.only_a }}</td><td>{{ t.only_b }}</td>
                 </tr>
               </tbody>
             </table>
-            <p class="hint" style="margin:8px 0 0;">占比 =（有差异 + 仅{{ p.src_a }} + 仅{{ p.src_b }}）/ 全部匹配行；等级为记录数偏离评判（|A−B|/均值）。</p>
+            <p class="hint" style="margin:8px 0 0;">内容偏离度 =（有差异 + 仅{{ p.src_a }} + 仅{{ p.src_b }}）/ {{ p.src_a }}选区总条数；条数偏离度 = |{{ p.src_b }} − {{ p.src_a }}|总条数差 / {{ p.src_a }}选区总条数。分级（两指标同）：≥10% 微量偏移（紫）、≥20% 务必关注（黄）、≥50% 严重问题（红）。</p>
           </div>
         </div>
       </div>
@@ -870,7 +912,12 @@ const BatchSummaryPage = {
         <div class="card-body">
           <div class="empty" v-if="!d.hit">{{ d.status === 'pending' ? '⏳ 批次仍在执行中，完成后自动采集。' : '本批次无可监测命中文本（未在「设置」导入 DISCARD 监测配置，或昵称未命中）。' }}</div>
           <template v-else>
-            <DiscardTable :rows="d.rows || []" :src-a="d.src_a || p.src_a" :src-b="d.src_b || p.src_b" />
+            <div class="sec-search">
+              <label>表名 <input v-model="discNick" placeholder="按表名（昵称）搜索" /></label>
+              <label>归属组 <input v-model="discGroup" placeholder="按归属组搜索" /></label>
+              <span class="hint" v-if="discRows.length !== (d.rows || []).length">命中 {{ discRows.length }} / {{ (d.rows || []).length }}</span>
+            </div>
+            <DiscardTable :rows="discRows" :src-a="d.src_a || p.src_a" :src-b="d.src_b || p.src_b" />
             <p class="hint" style="margin:8px 0 0;">取值按首次出现顺序去重（每侧上限 1000 个）；（空）= 栏位存在但值为空。两侧取值范围理论上应一致，不一致需人工核查。</p>
           </template>
         </div>
@@ -1445,6 +1492,7 @@ const SubmitForm = {
       key_seq: "", omit_seq: "", pri_seq: "", addmod: "",
       replace_rules_text: "",
       batch_config_file: "__all__",
+      batch_group: "",
       column_names: [],
       label: "",
     });
@@ -1484,6 +1532,11 @@ const SubmitForm = {
       try { const r = await api("/api/config-files"); cfgFiles.value = r.files;
             if (!form.batch_config_file && r.files.length) form.batch_config_file = r.files[0]; } catch (e) {}
     }
+    // 对比配置分组（目录对比圈定范围；空 = 全部文本）
+    const cmpGroups = ref([]);
+    async function loadGroups() {
+      try { const r = await api("/api/compare-groups"); cmpGroups.value = r.groups || []; } catch (e) {}
+    }
     async function saveConfig() {
       err.value = "";
       if (!form.nickname) { err.value = "保存配置需填写昵称"; return; }
@@ -1511,7 +1564,7 @@ const SubmitForm = {
       } catch (e) { saved.content = "读取失败: " + e.message; }
     }
 
-    onMounted(() => { searchConfigs(); loadConfigFiles(); });
+    onMounted(() => { searchConfigs(); loadConfigFiles(); loadGroups(); });
 
     async function parseConfig() {
       try {
@@ -1571,6 +1624,7 @@ const SubmitForm = {
                       source_a: form.source_a || null, source_b: form.source_b || null,
                       label: form.label || null,
                       kind: props.ctis ? "ctis" : null };
+          if (form.batch_group) p.group = form.batch_group;
           if (form.batch_config_file === "__all__") p.use_all = true;   // 全部生效配置(current.conf)
           else if (form.batch_config_file) p.config_file = form.batch_config_file;
           else {
@@ -1613,7 +1667,7 @@ const SubmitForm = {
 
     return { form, uploadsA, uploadsB, busy, err, toast, parseConfig, uploadFiles, submit,
              incrModal, onIncrConfirm, onIncrCancel,
-             cfgQuery, cfgResults, cfgFiles, saved, searchConfigs, pickConfig, saveConfig, viewSavedFile };
+             cfgQuery, cfgResults, cfgFiles, cmpGroups, saved, searchConfigs, pickConfig, saveConfig, viewSavedFile };
   },
   template: `
   <div>
@@ -1639,8 +1693,13 @@ const SubmitForm = {
                 <option v-if="!ctis" value="">（不选 = 用下方单规则）</option>
                 <option v-for="f in cfgFiles" :key="f" :value="f">{{ f }}</option>
               </select></div>
+            <div class="field"><label>对比配置分组（圈定范围，可选）</label>
+              <select v-model="form.batch_group">
+                <option value="">不分组（对比目录下全部文本）</option>
+                <option v-for="g in cmpGroups" :key="g.name" :value="g.name">{{ g.name }}（{{ g.count }} 个文本）</option>
+              </select></div>
           </div>
-          <p class="hint" style="margin-top:10px;">目录对比将生成<b>批次</b>：选配置文件则按其多条规则的通配名匹配并同名配对；不选则用下方单条配置。无匹配规则的文件不对比，会在批次里列出。目录内的 <code>*.gz</code> 压缩文件（含日期后缀）会先解压再参与匹配对比。</p>
+          <p class="hint" style="margin-top:10px;">目录对比将生成<b>批次</b>：选配置文件则按其多条规则的通配名匹配并同名配对；不选则用下方单条配置。选择<b>对比配置分组</b>后仅对比分组成员（配置昵称）命中的文本，名单外文本不读取不操作；不分组 = 全部。无匹配规则的文件不对比，会在批次里列出。目录内的 <code>*.gz</code> 压缩文件（含日期后缀）会先解压再参与匹配对比。分组可在「配置管理」页维护或 Excel 导入。</p>
         </div>
         <div v-else-if="form.mode==='paths'" class="form-grid">
           <div class="field mono"><label>A 文件路径</label><input v-model="form.path_a" /></div>
@@ -3856,10 +3915,268 @@ const CustomResultView = {
   <div v-else class="loading">加载中…</div>`,
 };
 
+/* ---------- 配置管理页：全部文本对比配置（查询/修改/新增/删除）+ 对比配置分组（管理与 Excel 导入） ---------- */
+const ConfigManagePage = {
+  components: { SeqField, ListPager },
+  props: ["encodings"],
+  setup(props) {
+    // ---- 对比配置 ----
+    const cfgQuery = ref(""); const configs = ref([]); const badLines = ref(0);
+    const cfgErr = ref(""); const busy = ref(false);
+    async function loadConfigs() {
+      busy.value = true;
+      try {
+        const r = await api("/api/configs/manage" + (cfgQuery.value.trim() ? "?q=" + encodeURIComponent(cfgQuery.value.trim()) : ""));
+        configs.value = r.configs || []; badLines.value = r.bad_lines || 0; cfgErr.value = "";
+      } catch (e) { cfgErr.value = e.message; }
+      finally { busy.value = false; }
+    }
+    onMounted(loadConfigs);
+    const cfgPg = usePager(() => configs.value, 50);
+    watch(cfgQuery, () => { cfgPg.reset(); });
+
+    const cfgModal = reactive({ open: false, mode: "new", err: "",
+      form: { nickname: "", file_glob: "*", key_seq: "", omit_seq: "", delimiter: " | ",
+              trailer_prefix: "|||||", encoding_a: "auto", encoding_b: "auto", pri_seq: "", addmod: "" } });
+    function newConfig() {
+      cfgModal.mode = "new"; cfgModal.err = "";
+      Object.assign(cfgModal.form, { nickname: "", file_glob: "*", key_seq: "", omit_seq: "",
+        delimiter: " | ", trailer_prefix: "|||||", encoding_a: "auto", encoding_b: "auto", pri_seq: "", addmod: "" });
+      cfgModal.open = true;
+    }
+    function editConfig(c) {
+      cfgModal.mode = "edit"; cfgModal.err = "";
+      Object.assign(cfgModal.form, {
+        nickname: c.nickname || "", file_glob: c.file_glob || "*",
+        key_seq: seqToStr(c.key_columns), omit_seq: seqToStr(c.omit_columns),
+        delimiter: c.delimiter != null ? c.delimiter : " | ",
+        trailer_prefix: c.trailer_prefix || "|||||",
+        encoding_a: c.encoding_a || "auto", encoding_b: c.encoding_b || "auto",
+        pri_seq: c.pri_seq || "", addmod: c.addmod || "" });
+      cfgModal.open = true;
+    }
+    async function saveConfig() {
+      cfgModal.err = "";
+      if (!cfgModal.form.nickname.trim()) { cfgModal.err = "昵称不能为空"; return; }
+      if (!cfgModal.form.key_seq.trim()) { cfgModal.err = "主键序列不能为空"; return; }
+      try {
+        await jpost("/api/configs", {
+          nickname: cfgModal.form.nickname, file_glob: cfgModal.form.file_glob || "*",
+          key_seq: cfgModal.form.key_seq, omit_seq: cfgModal.form.omit_seq || null,
+          delimiter: cfgModal.form.delimiter, trailer_prefix: cfgModal.form.trailer_prefix,
+          encoding_a: cfgModal.form.encoding_a, encoding_b: cfgModal.form.encoding_b,
+          pri_seq: cfgModal.form.pri_seq || null, addmod: cfgModal.form.addmod || null,
+        });
+        cfgModal.open = false; loadConfigs();
+        notify("配置「" + cfgModal.form.nickname + "」已保存（写入 " + cfgModal.form.nickname + ".conf，目录批次生效）");
+      } catch (e) { cfgModal.err = "保存失败: " + e.message; }
+    }
+    async function deleteConfig(c) {
+      const ok = await askConfirm("删除配置「" + c.nickname + "」？将删除其 .conf 并从 current/default.conf 移除该行。", { danger: true });
+      if (!ok) return;
+      try {
+        await api("/api/configs?nickname=" + encodeURIComponent(c.nickname), { method: "DELETE" });
+        notify("配置「" + c.nickname + "」已删除"); loadConfigs();
+      } catch (e) { notify("删除失败: " + e.message, "err"); }
+    }
+
+    // ---- 对比配置分组 ----
+    const groups = ref([]); const grpErr = ref(""); const grpBusy = ref(false);
+    async function loadGroups() {
+      grpBusy.value = true;
+      try { const r = await api("/api/compare-groups"); groups.value = r.groups || []; grpErr.value = ""; }
+      catch (e) { grpErr.value = e.message; }
+      finally { grpBusy.value = false; }
+    }
+    onMounted(loadGroups);
+
+    const grpModal = reactive({ open: false, mode: "new", err: "", form: { name: "", membersText: "" } });
+    function newGroup() {
+      grpModal.mode = "new"; grpModal.err = "";
+      Object.assign(grpModal.form, { name: "", membersText: "" });
+      grpModal.open = true;
+    }
+    function editGroup(g) {
+      grpModal.mode = "edit"; grpModal.err = "";
+      Object.assign(grpModal.form, { name: g.name, membersText: (g.members || []).join("、") });
+      grpModal.open = true;
+    }
+    async function saveGroup() {
+      grpModal.err = "";
+      const members = grpModal.form.membersText.split(/[、,，;；\n\r\t|/]+/)
+        .map(s => s.trim()).filter(s => s.length);
+      if (!grpModal.form.name.trim()) { grpModal.err = "分组名称不能为空"; return; }
+      if (!members.length) { grpModal.err = "至少填写一个文本昵称"; return; }
+      try {
+        await jpost("/api/compare-groups", { name: grpModal.form.name, members });
+        grpModal.open = false; loadGroups();
+        notify("分组「" + grpModal.form.name + "」已保存（" + members.length + " 个成员）");
+      } catch (e) { grpModal.err = "保存失败: " + e.message; }
+    }
+    async function deleteGroup(g) {
+      const ok = await askConfirm("删除分组「" + g.name + "」（" + g.count + " 个成员）？", { danger: true });
+      if (!ok) return;
+      try {
+        await api("/api/compare-groups?name=" + encodeURIComponent(g.name), { method: "DELETE" });
+        notify("分组「" + g.name + "」已删除"); loadGroups();
+      } catch (e) { notify("删除失败: " + e.message, "err"); }
+    }
+    async function importGroups(ev) {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      const fd = new FormData(); fd.append("file", f);
+      try {
+        const r = await api("/api/compare-groups/import", { method: "POST", body: fd });
+        notify("分组导入成功：" + (r.groups || []).join("、") + "（共 " + r.total + " 组）");
+        loadGroups();
+      } catch (e) { notify("导入失败: " + e.message, "err"); }
+      ev.target.value = "";
+    }
+
+    return { cfgQuery, configs, badLines, cfgErr, busy, loadConfigs, cfgPg,
+             cfgModal, newConfig, editConfig, saveConfig, deleteConfig,
+             groups, grpErr, grpBusy, loadGroups, grpModal, newGroup, editGroup, saveGroup,
+             deleteGroup, importGroups, fmtTime };
+  },
+  template: `
+  <div>
+    <PageHeader title="配置管理" sub="全部文本对比配置的查询 / 修改 / 新增 / 删除；对比配置分组用于目录对比时圈定对比范围（分组可 Excel 导入）" />
+    <div class="card">
+      <div class="card-head">⚙️ 对比配置（{{ configs.length }} 条<template v-if="badLines"> · {{ badLines }} 行坏行已跳过</template>）
+        <div class="head-actions">
+          <ListPager :page="cfgPg.page" :pages="cfgPg.pages" :total="cfgPg.total" :size="cfgPg.size"
+                     @go="cfgPg.go" @resize="cfgPg.resize" />
+          <button class="mini-btn" @click="loadConfigs" :disabled="busy">↻ 刷新</button>
+          <button class="mini-btn" @click="newConfig">＋ 新增配置</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="sec-search">
+          <label>搜索 <input v-model="cfgQuery" @input="loadConfigs" placeholder="按昵称 / 通配名搜索" style="width:260px;" /></label>
+        </div>
+        <div class="error-box" v-if="cfgErr">{{ cfgErr }}</div>
+        <div class="empty" v-if="!configs.length">无配置（可在「新建对比」页保存，或点右上「新增配置」）</div>
+        <div v-else style="overflow-x:auto;">
+          <table class="discard-table">
+            <thead><tr><th>昵称</th><th>文件名通配</th><th>主键栏位</th><th>跳过栏位</th><th>分隔符</th>
+              <th>编码A/B</th><th>优先级</th><th>增量</th><th>来源文件</th><th style="width:130px;">操作</th></tr></thead>
+            <tbody>
+              <tr v-for="(c, i) in cfgPg.paged" :key="c.nickname + '-' + c._source + '-' + c.line_no">
+                <td><b>{{ c.nickname }}</b></td>
+                <td class="mono">{{ c.file_glob }}</td>
+                <td>{{ c.key_seq || '—' }}</td>
+                <td>{{ c.omit_seq || '—' }}</td>
+                <td class="mono">{{ c.delimiter }}</td>
+                <td>{{ c.encoding_a }} / {{ c.encoding_b }}</td>
+                <td>{{ c.pri_seq || '5' }}</td>
+                <td>{{ c.addmod || '—' }}</td>
+                <td class="mono">{{ c._source }}<template v-if="c.line_no">:{{ c.line_no }}</template></td>
+                <td>
+                  <button class="mini-btn" @click="editConfig(c)">✏️ 修改</button>
+                  <button class="mini-btn" @click="deleteConfig(c)">🗑 删除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hint" style="margin:8px 0 0;">修改/新增写入 {昵称}.conf（目录批次「全部配置」时优先生效）；同一配置同时存在于聚合文件时，保存后以单配置文件为准。</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">🏷 对比配置分组（{{ groups.length }} 组）
+        <div class="head-actions">
+          <label class="mini-btn" title="导入 Excel（分组名称 + 文本昵称 两列，同名分组合并替换）">📥 导入 Excel<input type="file" accept=".xlsx" style="display:none;" @change="importGroups" /></label>
+          <button class="mini-btn" @click="loadGroups" :disabled="grpBusy">↻ 刷新</button>
+          <button class="mini-btn" @click="newGroup">＋ 新增分组</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="error-box" v-if="grpErr">{{ grpErr }}</div>
+        <div class="empty" v-if="!groups.length">尚无分组。目录对比不选分组 = 对比目录下全部文本；选定分组 = 仅对比分组成员（配置昵称）命中的文本。</div>
+        <div v-else style="overflow-x:auto;">
+          <table class="discard-table">
+            <thead><tr><th>分组名称</th><th>成员数</th><th>成员（配置昵称）</th><th>来源</th><th>导入时间</th><th style="width:130px;">操作</th></tr></thead>
+            <tbody>
+              <tr v-for="g in groups" :key="g.name">
+                <td><b>{{ g.name }}</b></td>
+                <td>{{ g.count }}</td>
+                <td class="vals">{{ (g.members || []).join('、') }}</td>
+                <td>{{ g.source_file || '—' }}</td>
+                <td>{{ g.imported_at ? fmtTime(g.imported_at) : '—' }}</td>
+                <td>
+                  <button class="mini-btn" @click="editGroup(g)">✏️ 修改</button>
+                  <button class="mini-btn" @click="deleteGroup(g)">🗑 删除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hint" style="margin:8px 0 0;">e.g. 分组「日常对比配置」成员 INXH、INVM、INVM_FACC：目录对比选定该分组后，仅这三类文本读取对比，名单外文本不操作。</p>
+      </div>
+    </div>
+
+    <!-- 配置 新增/修改 弹框 -->
+    <div class="modal-mask" v-if="cfgModal.open" @click.self="cfgModal.open=false">
+      <div class="modal">
+        <div class="modal-head">{{ cfgModal.mode === 'new' ? '新增对比配置' : '修改对比配置「' + cfgModal.form.nickname + '」' }}
+          <button class="modal-x" @click="cfgModal.open=false">✕</button></div>
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="field"><label>昵称</label><input v-model="cfgModal.form.nickname" :disabled="cfgModal.mode==='edit' && false" /></div>
+            <div class="field mono"><label>文件名通配</label><input v-model="cfgModal.form.file_glob" /></div>
+            <SeqField label="主键序列 KEYSEQ (1-based)" v-model="cfgModal.form.key_seq" placeholder="如 3/4/5" />
+            <SeqField label="跳过序列 OMITSEQ" v-model="cfgModal.form.omit_seq" placeholder="如 1/2/10" />
+            <div class="field mono"><label>分隔符</label><input v-model="cfgModal.form.delimiter" /></div>
+            <div class="field mono"><label>尾部前缀</label><input v-model="cfgModal.form.trailer_prefix" /></div>
+            <div class="field"><label>A 编码</label>
+              <select v-model="cfgModal.form.encoding_a"><option v-for="e in encodings" :key="e" :value="e">{{ e }}</option></select></div>
+            <div class="field"><label>B 编码</label>
+              <select v-model="cfgModal.form.encoding_b"><option v-for="e in encodings" :key="e" :value="e">{{ e }}</option></select></div>
+            <div class="field"><label>对比优先级 PRISEQ</label>
+              <select v-model="cfgModal.form.pri_seq">
+                <option value="">默认（5）</option>
+                <option v-for="n in [1,2,3,4,5]" :key="n" :value="String(n)">{{ n }}</option>
+              </select></div>
+            <div class="field mono"><label>增量过滤 ADDMOD（栏位，逗号分隔）</label>
+              <input v-model="cfgModal.form.addmod" placeholder="留空 = 全量" /></div>
+          </div>
+          <div class="error-box" v-if="cfgModal.err">{{ cfgModal.err }}</div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn ghost" @click="cfgModal.open=false">取消</button>
+          <button class="btn primary" @click="saveConfig">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 分组 新增/修改 弹框 -->
+    <div class="modal-mask" v-if="grpModal.open" @click.self="grpModal.open=false">
+      <div class="modal">
+        <div class="modal-head">{{ grpModal.mode === 'new' ? '新增对比配置分组' : '修改分组「' + grpModal.form.name + '」' }}
+          <button class="modal-x" @click="grpModal.open=false">✕</button></div>
+        <div class="modal-body">
+          <div class="field"><label>分组名称</label><input v-model="grpModal.form.name" placeholder="如 日常对比配置" /></div>
+          <div class="field" style="margin-top:12px;">
+            <label>成员（配置昵称，顿号/逗号/换行分隔）</label>
+            <textarea v-model="grpModal.form.membersText" rows="6" placeholder="如 INXH、INVM、INVM_FACC"></textarea>
+          </div>
+          <div class="error-box" v-if="grpModal.err">{{ grpModal.err }}</div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn ghost" @click="grpModal.open=false">取消</button>
+          <button class="btn primary" @click="saveGroup">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>`,
+};
+
 const App = {
   components: { SubmitForm, JobList, BatchView, ResultView, SettingsPage, SplitPage, SplitResultView,
                 TaskManagerPage, ReportPage, ReportBatchView, ReportResultView,
-                CustomPage, CustomBatchView, CustomResultView, BatchSummaryPage, AppDialog, AppToast },
+                CustomPage, CustomBatchView, CustomResultView, BatchSummaryPage, ConfigManagePage,
+                AppDialog, AppToast },
   setup() {
     const tab = ref("submit");
     const jobId = ref(null);
@@ -3931,6 +4248,7 @@ const App = {
     <div class="spacer"></div>
     <button class="nav-btn" :class="['jobs','batch','batchreport'].includes(tab)?'active':''" @click="tab='jobs'">作业列表</button>
     <button class="nav-btn" :class="tab==='tasks'?'active':''" @click="tab='tasks'">任务管理</button>
+    <button class="nav-btn" :class="tab==='configmgr'?'active':''" @click="tab='configmgr'">配置管理</button>
     <span class="nav-divider"></span>
     <button class="nav-btn" :class="tab==='result'?'active':''" @click="tab='result'" :disabled="!jobId">结果</button>
     <button class="nav-btn" :class="tab==='settings'?'active':''" @click="tab='settings'">设置</button>
@@ -3961,6 +4279,7 @@ const App = {
     <BatchSummaryPage v-else-if="tab==='batchreport' && summaryBatchId" :batch-id="summaryBatchId"
                       :key="summaryBatchId" :back-text="summaryBackText"
                       @back="tab = summaryBackTab" />
+    <ConfigManagePage v-else-if="tab==='configmgr'" :encodings="encodings" />
     <SettingsPage v-else-if="tab==='settings'" />
     <AppDialog />
     <AppToast />
