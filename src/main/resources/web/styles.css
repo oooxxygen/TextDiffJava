@@ -736,3 +736,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
                     font-size: 12.5px; width: 190px; background: var(--surface); color: var(--text); }
 .sec-search input:focus { outline: none; border-color: var(--accent); }
 .conc-bar.count-bar > span { background: linear-gradient(90deg, #f59e0b, #d97706); }
+
+/* ---------- 配置管理：分组成员未命中现有配置的标红提示 ---------- */
+.grp-members .miss, .vals span.miss { color: #d81e06; }
+.miss-hint { color: #d81e06; font-size: 11px; font-weight: 700; cursor: help; }

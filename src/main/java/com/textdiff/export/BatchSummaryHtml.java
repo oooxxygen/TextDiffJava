@@ -45,6 +45,7 @@ public final class BatchSummaryHtml {
         sb.append("</div>\n");
         kv(sb, "A 目录（" + str(p.get("src_a"), "A") + "）", str(p.get("dir_a")));
         kv(sb, "B 目录（" + str(p.get("src_b"), "B") + "）", str(p.get("dir_b")));
+        kv(sb, "对比范围", scopeText(p.get("group_name")));
         sb.append("</section>\n");
 
         // 偏离度（全部文本，双指标 + 搜索）
@@ -186,6 +187,12 @@ public final class BatchSummaryHtml {
             case "error" -> "异常";
             default -> s;
         };
+    }
+
+    /** 对比范围展示：分组圈定 / 全部文本。 */
+    static String scopeText(Object groupName) {
+        String g = groupName == null ? "" : String.valueOf(groupName);
+        return g.isBlank() ? "全部文本（未选分组）" : "分组「" + g + "」（仅分组成员命中的文本）";
     }
 
     /** 监测取值展示（HTML 转义前）：与 CSV 同语义（(空)/顿号连接/截断标注/原文缺失标注）。 */

@@ -27,6 +27,8 @@ public final class BatchRecord {
     public String prepareState;
     /** 建档失败原因（prepareState=failed 时）。 */
     public String prepareError;
+    /** 目录对比圈定的对比配置分组名（null = 未选分组，对比全部文本）。 */
+    public String groupName;
 
     public static final String PREPARING = "preparing";
     public static final String READY = "ready";
@@ -56,6 +58,7 @@ public final class BatchRecord {
         c.templateDir = templateDir;
         c.prepareState = prepareState;
         c.prepareError = prepareError;
+        c.groupName = groupName;
         return c;
     }
 }

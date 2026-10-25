@@ -43,8 +43,9 @@ public final class BatchSummaryExcel {
         String[][] rows = {
                 {"批次ID", str(p.get("batch_id"))},
                 {"标签", str(p.get("label"))},
-                {"批次类型", str(p.get("batch_type"))},
-                {"状态", str(p.get("status"))},
+                {"批次类型", batchTypeText(p.get("batch_type"))},
+                {"状态", statusText(p.get("status"))},
+                {"对比范围", BatchSummaryHtml.scopeText(p.get("group_name"))},
                 {srcA + " 目录", str(p.get("dir_a"))},
                 {srcB + " 目录", str(p.get("dir_b"))},
                 {"开始时间", fmtTime(p.get("started_at"))},
@@ -171,6 +172,28 @@ public final class BatchSummaryExcel {
 
     private static String num(Object v) {
         return v == null ? "0" : String.valueOf(v);
+    }
+
+    /** 状态中文化（与 HTML 报告同文案）。 */
+    static String statusText(Object s) {
+        return switch (s == null ? "" : String.valueOf(s)) {
+            case "done" -> "已完成";
+            case "running" -> "执行中";
+            case "preparing" -> "准备中";
+            case "error" -> "异常";
+            default -> s == null ? "" : String.valueOf(s);
+        };
+    }
+
+    /** 批次类型中文化。 */
+    static String batchTypeText(Object t) {
+        return switch (t == null ? "file" : String.valueOf(t)) {
+            case "file", "" -> "目录对比";
+            case "report" -> "报表对比";
+            case "custom" -> "自定义格式对比";
+            case "ctis" -> "CTIS对比";
+            default -> String.valueOf(t);
+        };
     }
 
     private static String fmtTime(Object epochSec) {

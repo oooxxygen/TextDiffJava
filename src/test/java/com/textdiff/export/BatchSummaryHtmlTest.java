@@ -34,6 +34,7 @@ class BatchSummaryHtmlTest {
                 "src_b", "新线",
                 "dir_a", "O:\\A",
                 "dir_b", "O:\\B",
+                "group_name", "日常对比配置",
                 "started_at", 1770000000L,
                 "finished_at", 1770000100L,
                 "generated_at", 1770000200L,
@@ -67,6 +68,7 @@ class BatchSummaryHtmlTest {
 
         List<String> missing = new java.util.ArrayList<>(List.of(
                 "批次情况总结", "批次概览", "文本偏离度（全部文本）", "内容偏离度", "条数偏离度",
+                "对比范围", "分组「日常对比配置」（仅分组成员命中的文本）",
                 "关注字段取值监测", "旧线的所有取值", "新线的所有取值", "CN、（空）、US",
                 "25.0%", "50.0%", "务必关注", "严重问题", "微量偏移",
                 "data-nick=\"INCT0101\"", "data-group=\"卡中心\"",

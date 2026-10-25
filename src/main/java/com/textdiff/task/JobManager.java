@@ -196,7 +196,14 @@ public final class JobManager implements AutoCloseable {
      */
     public BatchRecord createBatchAsync(Path dirA, Path dirB, List<String> configLines, String kind,
                                         List<List<String>> incrConds) throws IOException {
+        return createBatchAsync(dirA, dirB, configLines, kind, incrConds, null);
+    }
+
+    /** 分组圈定版：groupName 非空时记录对比范围（配置行已由调用方按分组过滤），供批次详情/总结展示。 */
+    public BatchRecord createBatchAsync(Path dirA, Path dirB, List<String> configLines, String kind,
+                                        List<List<String>> incrConds, String groupName) throws IOException {
         BatchRecord batch = newBatch(dirA, dirB, configLines, kind);
+        if (groupName != null && !groupName.isBlank()) batch.groupName = groupName.strip();
         batch.prepareState = BatchRecord.PREPARING;
         store.saveBatch(batch);
         preparePool.submit(() -> {
@@ -215,7 +222,14 @@ public final class JobManager implements AutoCloseable {
     /** 目录模式批次（同步建档）：语义同 {@link #createBatchAsync}，供 H2 命令信箱与测试使用。 */
     public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines, String kind,
                                    List<List<String>> incrConds) throws IOException {
+        return createBatch(dirA, dirB, configLines, kind, incrConds, null);
+    }
+
+    /** 分组圈定版（同步建档）。 */
+    public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines, String kind,
+                                   List<List<String>> incrConds, String groupName) throws IOException {
         BatchRecord batch = newBatch(dirA, dirB, configLines, kind);
+        if (groupName != null && !groupName.isBlank()) batch.groupName = groupName.strip();
         materializeBatch(batch, dirA, dirB, configLines, kind, incrConds);
         return batch;
     }

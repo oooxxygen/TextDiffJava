@@ -63,14 +63,16 @@ public class ConfigController {
     }
 
     /**
-     * 配置管理列表（逐行展平）：configs 目录全部文件的所有配置行，含来源文件与行号。
-     * 多行聚合文件（current/default.conf）的每一行都是独立条目；坏行计数不阻断。
+     * 配置管理列表（逐行展平 + 生效去重）：configs 目录全部文件按生效优先级排列
+     * （单配置文件 → current.conf → default.conf，同 use_all），同一（昵称 + 通配名）只展示
+     * 生效那条（来源 = 生效文件）。坏行计数不阻断。
      */
     @GetMapping("/configs/manage")
     public Map<String, Object> manage(@RequestParam(required = false) String q) throws IOException {
         List<Map<String, Object>> out = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
         int bad = 0;
-        for (Map.Entry<String, String> e : readAll().entrySet()) {
+        for (Map.Entry<String, String> e : readAllOrdered().entrySet()) {
             int lineNo = 0;
             for (String line : e.getValue().split("\\r?\\n")) {
                 lineNo++;
@@ -81,6 +83,7 @@ public class ConfigController {
                             ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
                     if (q != null && !q.isBlank()
                             && !cfg.nickname.contains(q) && !cfg.fileGlob.contains(q)) continue;
+                    if (!seen.add(cfg.nickname + "\u0000" + cfg.fileGlob)) continue;
                     Map<String, Object> m = ApiPayloads.configMap(cfg, e.getKey());
                     m.put("line_no", lineNo);
                     out.add(m);
@@ -92,7 +95,7 @@ public class ConfigController {
         return Map.of("configs", out, "bad_lines", bad);
     }
 
-    /** 删除配置：删 {昵称}.conf（如存在），并从 current.conf / default.conf 移除该昵称的行。 */
+    /** 删除配置：删 {昵称}.conf（如存在），并从 configs 目录全部配置文件中移除该昵称的行。 */
     @DeleteMapping("/configs")
     public Map<String, Object> delete(@RequestParam String nickname) throws IOException {
         if (nickname == null || nickname.isBlank()) throw new IllegalArgumentException("缺少 nickname");
@@ -100,28 +103,36 @@ public class ConfigController {
         String nick = nickname.strip();
         List<String> touched = new ArrayList<>();
         Path dir = paths.configsDir();
-        Path own = dir.resolve(nick + ".conf");
-        if (Files.isRegularFile(own)) {
-            Files.delete(own);
-            touched.add(own.getFileName().toString());
-        }
-        for (String agg : List.of("current.conf", "default.conf")) {
-            Path file = dir.resolve(agg);
-            if (!Files.isRegularFile(file)) continue;
-            List<String> kept = new ArrayList<>();
-            boolean removed = false;
-            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
-                if (!line.strip().isEmpty() && !line.strip().startsWith("#")
-                        && line.split(":", 2)[0].strip().equals(nick)) {
-                    removed = true;
+        if (Files.isDirectory(dir)) {
+            List<Path> files;
+            try (var s = Files.list(dir)) {
+                files = s.filter(Files::isRegularFile).filter(p -> {
+                    String n = p.getFileName().toString().toLowerCase();
+                    return n.endsWith(".conf") || n.endsWith(".txt") || n.endsWith(".ini");
+                }).sorted().toList();
+            }
+            for (Path file : files) {
+                String name = file.getFileName().toString();
+                if (name.equals(nick + ".conf")) {
+                    Files.delete(file);
+                    touched.add(name);
                     continue;
                 }
-                kept.add(line);
-            }
-            if (removed) {
-                Files.writeString(file, String.join(System.lineSeparator(), kept)
-                        + (kept.isEmpty() ? "" : System.lineSeparator()), StandardCharsets.UTF_8);
-                touched.add(agg);
+                List<String> kept = new ArrayList<>();
+                boolean removed = false;
+                for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                    if (!line.strip().isEmpty() && !line.strip().startsWith("#")
+                            && line.split(":", 2)[0].strip().equals(nick)) {
+                        removed = true;
+                        continue;
+                    }
+                    kept.add(line);
+                }
+                if (removed) {
+                    Files.writeString(file, kept.isEmpty() ? "" : String.join(System.lineSeparator(), kept)
+                            + System.lineSeparator(), StandardCharsets.UTF_8);
+                    touched.add(name);
+                }
             }
         }
         if (touched.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "配置不存在: " + nick);
@@ -147,8 +158,9 @@ public class ConfigController {
         if (delim != null) sb.append(":DELIM=").append(delim);
         sb.append(":ENCA=").append(strOr(body.get("encoding_a")));
         sb.append(":ENCB=").append(strOr(body.get("encoding_b")));
-        sb.append(":SRCA=").append(strOr(body.get("source_a")));
-        sb.append(":SRCB=").append(strOr(body.get("source_b")));
+        // 来源命名缺省 A/B（非 auto：SRCA=auto 会让结果页/导出的 A/B 命名显示成 "auto"）
+        sb.append(":SRCA=").append(strOr(body.get("source_a"), "A"));
+        sb.append(":SRCB=").append(strOr(body.get("source_b"), "B"));
         sb.append(":TRAILER=").append(body.get("trailer_prefix") == null ? "" : body.get("trailer_prefix"));
         String priSeq = str(body.get("pri_seq"));
         if (priSeq != null && !priSeq.isBlank()) sb.append(":PRISEQ=").append(priSeq.strip());
@@ -481,6 +493,7 @@ public class ConfigController {
 
     // ---- internals ----
 
+    /** 文件名 → 内容（LinkedHashMap 保序）。 */
     private Map<String, String> readAll() throws IOException {
         Map<String, String> out = new java.util.LinkedHashMap<>();
         Path dir = paths.configsDir();
@@ -490,6 +503,18 @@ public class ConfigController {
                 out.put(p.getFileName().toString(), Files.readString(p, StandardCharsets.UTF_8));
             }
         }
+        return out;
+    }
+
+    /** 生效优先级排序读取：单配置文件（字母序）→ current.conf → default.conf（与 use_all 去重同序）。 */
+    private Map<String, String> readAllOrdered() throws IOException {
+        Map<String, String> all = readAll();
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        all.forEach((name, content) -> {
+            if (!name.equals("current.conf") && !name.equals("default.conf")) out.put(name, content);
+        });
+        if (all.containsKey("current.conf")) out.put("current.conf", all.get("current.conf"));
+        if (all.containsKey("default.conf")) out.put("default.conf", all.get("default.conf"));
         return out;
     }
 
@@ -523,5 +548,10 @@ public class ConfigController {
     private static String strOr(Object o) {
         String s = str(o);
         return s == null || s.isBlank() ? "auto" : s.strip();
+    }
+
+    private static String strOr(Object o, String def) {
+        String s = str(o);
+        return s == null || s.isBlank() ? def : s.strip();
     }
 }

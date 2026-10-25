@@ -21,6 +21,14 @@ class BatchSummaryExcelTest {
         return m;
     }
 
+    /** 概览 Sheet 按第一列标签取值。 */
+    private static String cellValue(Sheet sh, String label) {
+        for (Row r : sh) {
+            if (label.equals(r.getCell(0).getStringCellValue())) return r.getCell(1).getStringCellValue();
+        }
+        return null;
+    }
+
     private static Map<String, Object> payload() {
         return map(
                 "batch_id", "ab12cd34", "label", "日常对比", "batch_type", "file", "status", "done",
@@ -28,6 +36,7 @@ class BatchSummaryExcelTest {
                 "no_rule_count", 0, "missing_count", 0,
                 "src_a", "旧线", "src_b", "新线",
                 "dir_a", "O:\\A", "dir_b", "O:\\B",
+                "group_name", "日常对比配置",
                 "generated_at", 1770000200L,
                 "deviations", List.of(map(
                         "nickname", "INCT0101", "group", "卡中心", "file_name", "01A3020D.v01",
@@ -55,6 +64,10 @@ class BatchSummaryExcelTest {
             Sheet ov = wb.getSheet("批次概览");
             assertEquals("批次ID", ov.getRow(0).getCell(0).getStringCellValue());
             assertEquals("ab12cd34", ov.getRow(0).getCell(1).getStringCellValue());
+            // 状态/类型中文化 + 对比范围（分组）
+            assertEquals("目录对比", cellValue(ov, "批次类型"));
+            assertEquals("已完成", cellValue(ov, "状态"));
+            assertEquals("分组「日常对比配置」（仅分组成员命中的文本）", cellValue(ov, "对比范围"));
 
             Sheet dev = wb.getSheet("偏离度");
             Row head = dev.getRow(0);

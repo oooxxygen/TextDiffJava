@@ -856,6 +856,7 @@ const BatchSummaryPage = {
           </div>
           <div style="margin-top:12px;font-size:12px;color:var(--text-soft);">
             {{ p.src_a }}：{{ p.dir_a }}<br/>{{ p.src_b }}：{{ p.dir_b }}<br/>
+            对比范围：{{ p.group_name ? '分组「' + p.group_name + '」（仅分组成员命中的文本）' : '全部文本（未选分组）' }}<br/>
             开始 {{ fmtTime(p.started_at) }} · 完成 {{ fmtTime(p.finished_at) }} · 报告生成于 {{ fmtTime(p.generated_at) }}
           </div>
         </div>
@@ -2158,7 +2159,7 @@ const BatchView = {
         </div>
         <div style="margin-top:12px;font-size:12px;color:var(--text-soft);">
           {{ sourceA }}：{{ ov.batch.dir_a }}<br/>{{ sourceB }}：{{ ov.batch.dir_b }}<br/>
-          触发时间 {{ fmtTime(ov.batch.created_at) }} · 配置来源 {{ ov.batch.config_source }}
+          触发时间 {{ fmtTime(ov.batch.created_at) }} · 配置来源 {{ ov.batch.config_source }}<template v-if="ov.batch.group_name"> · 对比范围：分组「{{ ov.batch.group_name }}」</template>
         </div>
         <div v-if="ov.batch.no_rule_files && ov.batch.no_rule_files.length" class="no-rule" style="margin-top:10px;">
           ⚠ 无对应对比规则（未对比）：{{ ov.batch.no_rule_files.join('、') }}
@@ -3937,11 +3938,13 @@ const ConfigManagePage = {
 
     const cfgModal = reactive({ open: false, mode: "new", err: "",
       form: { nickname: "", file_glob: "*", key_seq: "", omit_seq: "", delimiter: " | ",
-              trailer_prefix: "|||||", encoding_a: "auto", encoding_b: "auto", pri_seq: "", addmod: "" } });
+              trailer_prefix: "|||||", encoding_a: "auto", encoding_b: "auto",
+              source_a: "A", source_b: "B", pri_seq: "", addmod: "" } });
     function newConfig() {
       cfgModal.mode = "new"; cfgModal.err = "";
       Object.assign(cfgModal.form, { nickname: "", file_glob: "*", key_seq: "", omit_seq: "",
-        delimiter: " | ", trailer_prefix: "|||||", encoding_a: "auto", encoding_b: "auto", pri_seq: "", addmod: "" });
+        delimiter: " | ", trailer_prefix: "|||||", encoding_a: "auto", encoding_b: "auto",
+        source_a: "A", source_b: "B", pri_seq: "", addmod: "" });
       cfgModal.open = true;
     }
     function editConfig(c) {
@@ -3952,19 +3955,20 @@ const ConfigManagePage = {
         delimiter: c.delimiter != null ? c.delimiter : " | ",
         trailer_prefix: c.trailer_prefix || "|||||",
         encoding_a: c.encoding_a || "auto", encoding_b: c.encoding_b || "auto",
+        source_a: c.source_a || "A", source_b: c.source_b || "B",
         pri_seq: c.pri_seq || "", addmod: c.addmod || "" });
       cfgModal.open = true;
     }
     async function saveConfig() {
       cfgModal.err = "";
       if (!cfgModal.form.nickname.trim()) { cfgModal.err = "昵称不能为空"; return; }
-      if (!cfgModal.form.key_seq.trim()) { cfgModal.err = "主键序列不能为空"; return; }
       try {
         await jpost("/api/configs", {
           nickname: cfgModal.form.nickname, file_glob: cfgModal.form.file_glob || "*",
-          key_seq: cfgModal.form.key_seq, omit_seq: cfgModal.form.omit_seq || null,
+          key_seq: cfgModal.form.key_seq || null, omit_seq: cfgModal.form.omit_seq || null,
           delimiter: cfgModal.form.delimiter, trailer_prefix: cfgModal.form.trailer_prefix,
           encoding_a: cfgModal.form.encoding_a, encoding_b: cfgModal.form.encoding_b,
+          source_a: cfgModal.form.source_a || null, source_b: cfgModal.form.source_b || null,
           pri_seq: cfgModal.form.pri_seq || null, addmod: cfgModal.form.addmod || null,
         });
         cfgModal.open = false; loadConfigs();
@@ -3982,6 +3986,9 @@ const ConfigManagePage = {
 
     // ---- 对比配置分组 ----
     const groups = ref([]); const grpErr = ref(""); const grpBusy = ref(false);
+    // 分组成员 ↔ 现有配置昵称对照：未命中的成员标红提示（避免清单写错昵称后批次静默漏文本）
+    const configNicks = computed(() => new Set(configs.value.map(c => c.nickname)));
+    function missCount(g) { return (g.members || []).filter(m => !configNicks.value.has(m)).length; }
     async function loadGroups() {
       grpBusy.value = true;
       try { const r = await api("/api/compare-groups"); groups.value = r.groups || []; grpErr.value = ""; }
@@ -4034,7 +4041,7 @@ const ConfigManagePage = {
     }
 
     return { cfgQuery, configs, badLines, cfgErr, busy, loadConfigs, cfgPg,
-             cfgModal, newConfig, editConfig, saveConfig, deleteConfig,
+             cfgModal, newConfig, editConfig, saveConfig, deleteConfig, configNicks, missCount,
              groups, grpErr, grpBusy, loadGroups, grpModal, newGroup, editGroup, saveGroup,
              deleteGroup, importGroups, fmtTime };
   },
@@ -4100,8 +4107,8 @@ const ConfigManagePage = {
             <tbody>
               <tr v-for="g in groups" :key="g.name">
                 <td><b>{{ g.name }}</b></td>
-                <td>{{ g.count }}</td>
-                <td class="vals">{{ (g.members || []).join('、') }}</td>
+                <td>{{ g.count }}<span v-if="missCount(g)" class="miss-hint" :title="'其中 ' + missCount(g) + ' 个昵称未命中现有对比配置（目录对比时将被跳过）'"> ⚠{{ missCount(g) }} 未命中</span></td>
+                <td class="vals"><template v-for="(m, mi) in g.members" :key="m"><span v-if="mi">、</span><span :class="{ miss: !configNicks.has(m) }" :title="configNicks.has(m) ? '' : '未命中现有对比配置（目录对比时该文本将被跳过）'">{{ m }}</span></template></td>
                 <td>{{ g.source_file || '—' }}</td>
                 <td>{{ g.imported_at ? fmtTime(g.imported_at) : '—' }}</td>
                 <td>
@@ -4123,9 +4130,10 @@ const ConfigManagePage = {
           <button class="modal-x" @click="cfgModal.open=false">✕</button></div>
         <div class="modal-body">
           <div class="form-grid">
-            <div class="field"><label>昵称</label><input v-model="cfgModal.form.nickname" :disabled="cfgModal.mode==='edit' && false" /></div>
+            <div class="field"><label>昵称{{ cfgModal.mode === 'edit' ? '（修改=另存新配置，昵称不可改）' : '' }}</label>
+              <input v-model="cfgModal.form.nickname" :disabled="cfgModal.mode==='edit'" /></div>
             <div class="field mono"><label>文件名通配</label><input v-model="cfgModal.form.file_glob" /></div>
-            <SeqField label="主键序列 KEYSEQ (1-based)" v-model="cfgModal.form.key_seq" placeholder="如 3/4/5" />
+            <SeqField label="主键序列 KEYSEQ (1-based，留空 = 整行对比)" v-model="cfgModal.form.key_seq" placeholder="如 3/4/5" />
             <SeqField label="跳过序列 OMITSEQ" v-model="cfgModal.form.omit_seq" placeholder="如 1/2/10" />
             <div class="field mono"><label>分隔符</label><input v-model="cfgModal.form.delimiter" /></div>
             <div class="field mono"><label>尾部前缀</label><input v-model="cfgModal.form.trailer_prefix" /></div>
@@ -4133,6 +4141,8 @@ const ConfigManagePage = {
               <select v-model="cfgModal.form.encoding_a"><option v-for="e in encodings" :key="e" :value="e">{{ e }}</option></select></div>
             <div class="field"><label>B 编码</label>
               <select v-model="cfgModal.form.encoding_b"><option v-for="e in encodings" :key="e" :value="e">{{ e }}</option></select></div>
+            <div class="field"><label>来源A名称（结果页/导出的 A 侧命名）</label><input v-model="cfgModal.form.source_a" /></div>
+            <div class="field"><label>来源B名称（结果页/导出的 B 侧命名）</label><input v-model="cfgModal.form.source_b" /></div>
             <div class="field"><label>对比优先级 PRISEQ</label>
               <select v-model="cfgModal.form.pri_seq">
                 <option value="">默认（5）</option>
@@ -4141,6 +4151,7 @@ const ConfigManagePage = {
             <div class="field mono"><label>增量过滤 ADDMOD（栏位，逗号分隔）</label>
               <input v-model="cfgModal.form.addmod" placeholder="留空 = 全量" /></div>
           </div>
+          <p class="hint" style="margin:10px 0 0;">保存写入 {昵称}.conf；同昵称旧配置行（current/default 等聚合文件）自动被其覆盖生效。修改/新增仅动此配置，已有替换规则与列名映射保留。</p>
           <div class="error-box" v-if="cfgModal.err">{{ cfgModal.err }}</div>
         </div>
         <div class="modal-foot">

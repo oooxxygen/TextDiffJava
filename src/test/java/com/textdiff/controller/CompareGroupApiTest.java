@@ -9,6 +9,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -30,6 +31,88 @@ class CompareGroupApiTest {
             base = Path.of(System.getProperty("textdiff.base.dir"));
         }
         return base;
+    }
+
+    @Test
+    void groupScopeRecordedAndConfigManageSupplements() throws Exception {
+        Path root = baseDir().resolve("scope-it-" + System.nanoTime());
+        Path dirA = root.resolve("a");
+        Path dirB = root.resolve("b");
+        Files.createDirectories(dirA);
+        Files.createDirectories(dirB);
+        Files.writeString(dirA.resolve("f1.txt"), "k1 | 1\n", StandardCharsets.UTF_8);
+        Files.writeString(dirB.resolve("f1.txt"), "k1 | 1\n", StandardCharsets.UTF_8);
+
+        // 配置落盘：单配置文件 + current/default 聚合（同昵称同通配，内容更旧）+ 其他 txt 文件
+        Path cfg = baseDir().resolve("configs");
+        Files.createDirectories(cfg);
+        Path own = cfg.resolve("SCOPENICK.conf");
+        Path current = cfg.resolve("current.conf");
+        Path defaultC = cfg.resolve("default.conf");
+        Path extra = cfg.resolve("extra_rules.txt");
+        Files.writeString(own, "SCOPENICK:f*.txt:KEYSEQ=1:ENCA=utf-8:ENCB=utf-8\r\n", StandardCharsets.UTF_8);
+        Files.writeString(current, "SCOPENICK:f*.txt:KEYSEQ=1:OMITSEQ=9:ENCA=utf-8:ENCB=utf-8\r\n", StandardCharsets.UTF_8);
+        Files.writeString(defaultC, "SCOPENICK:f*.txt:KEYSEQ=1:ENCA=utf-8:ENCB=utf-8\r\n", StandardCharsets.UTF_8);
+        Files.writeString(extra, "EXTRANICK:x*.txt:KEYSEQ=2:ENCA=utf-8:ENCB=utf-8\r\n", StandardCharsets.UTF_8);
+        try {
+            // manage 生效去重：同（昵称+通配）只显示生效那条（单配置文件优先于 current/default）
+            String manage = mvc.perform(get("/api/configs/manage"))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+            assertEquals(1, count(manage, "\"nickname\":\"SCOPENICK\""), manage);
+            assertTrue(manage.contains("\"_source\":\"SCOPENICK.conf\""), manage);
+            assertFalse(manage.contains("\"_source\":\"current.conf\""), manage);
+
+            // 分组批次：group_name 落库，批次详情与总结均可见
+            mvc.perform(post("/api/compare-groups").contentType("application/json")
+                            .content("{\"name\":\"范围组\",\"members\":[\"SCOPENICK\"]}"))
+                    .andExpect(status().isOk());
+            String resp = mvc.perform(post("/api/batch-compare").contentType("application/json")
+                            .content(body(dirA, dirB, ",\"use_all\":true,\"group\":\"范围组\"")))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+            String batchId = resp.replaceAll(".*\"batch_id\":\"([^\"]+)\".*", "$1");
+            String meta = null;
+            for (int i = 0; i < 150; i++) {
+                meta = mvc.perform(get("/api/batches/" + batchId))
+                        .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+                if (meta.contains("\"status\":\"done\"") || meta.contains("\"status\":\"error\"")) break;
+                Thread.sleep(200);
+            }
+            assertTrue(meta.contains("\"status\":\"done\""), meta);
+            assertTrue(meta.contains("\"group_name\":\"范围组\""), meta);
+            mvc.perform(get("/api/batches/" + batchId + "/summary-report"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.group_name").value("范围组"));
+            mvc.perform(delete("/api/batches/" + batchId)).andExpect(status().isOk());
+            mvc.perform(delete("/api/compare-groups").param("name", "范围组")).andExpect(status().isOk());
+
+            // 无主键配置（整行对比）可保存；来源命名缺省 A/B（非 auto）
+            mvc.perform(post("/api/configs").contentType("application/json")
+                            .content("{\"nickname\":\"NOKEY_X\",\"file_glob\":\"n*.txt\","
+                                    + "\"delimiter\":\" | \",\"trailer_prefix\":\"|||||\"}"))
+                    .andExpect(status().isOk());
+            String raw = mvc.perform(get("/api/configs/raw").param("file", "NOKEY_X.conf"))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+            assertFalse(raw.contains("KEYSEQ"), raw);
+            assertTrue(raw.contains("SRCA=A") && raw.contains("SRCB=B"), raw);
+            mvc.perform(delete("/api/configs").param("nickname", "NOKEY_X")).andExpect(status().isOk());
+
+            // 删除配置支持任意配置文件（extra_rules.txt 中的行被移除）
+            mvc.perform(delete("/api/configs").param("nickname", "EXTRANICK"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.files[0]").value("extra_rules.txt"));
+            assertFalse(Files.readString(extra, StandardCharsets.UTF_8).contains("EXTRANICK"));
+        } finally {
+            for (Path p : List.of(own, current, defaultC, extra)) Files.deleteIfExists(p);
+        }
+    }
+
+    private static int count(String s, String sub) {
+        int n = 0;
+        for (int i = s.indexOf(sub); i >= 0; i = s.indexOf(sub, i + sub.length())) n++;
+        return n;
     }
 
     private static String q(String s) {
