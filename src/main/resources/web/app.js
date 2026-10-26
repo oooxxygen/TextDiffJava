@@ -705,14 +705,25 @@ const DiscardTable = {
       if (side === "a" ? r.truncated_a : r.truncated_b) s += "…（超出上限已截断）";
       return s;
     }
-    return { pg, vals };
+    // 是否匹配：B 侧（新线）取值 ⊆ A 侧（旧线）取值 → 正常；否则不为子集；无法判定 —
+    function matchText(r) {
+      if (r.matched === true) return "新线输出正常";
+      if (r.matched === false) return "新线不为旧线子集";
+      return "—";
+    }
+    function matchCls(r) {
+      if (r.matched === true) return "ok";
+      if (r.matched === false) return "severe";
+      return "";
+    }
+    return { pg, vals, matchText, matchCls };
   },
   template: `
   <div style="overflow-x:auto;">
     <table class="discard-table" v-if="rows.length">
       <thead><tr>
         <th>昵称</th><th>归属组</th><th>实际文件名</th><th>字段序号</th><th>字段名</th><th>字段含义</th>
-        <th>{{ srcA }} 的所有取值</th><th>{{ srcB }} 的所有取值</th>
+        <th>{{ srcA }} 的所有取值</th><th>{{ srcB }} 的所有取值</th><th>是否匹配</th>
       </tr></thead>
       <tbody>
         <tr v-for="(r, i) in pg.paged" :key="i">
@@ -724,6 +735,8 @@ const DiscardTable = {
           <td>{{ r.field_meaning }}</td>
           <td class="vals" :class="{ bad: r.file_missing }">{{ vals(r, 'a') }}</td>
           <td class="vals" :class="{ bad: r.file_missing }">{{ vals(r, 'b') }}</td>
+          <td><span class="badge-grade" :class="matchCls(r)"
+                    :title="r.matched === true ? (srcB + ' 侧取值为 ' + srcA + ' 侧取值的子集或相等') : (r.matched === false ? (srcB + ' 侧存在超出 ' + srcA + ' 侧的取值，需人工核查') : '原文不可采集，无法判定')">{{ matchText(r) }}</span></td>
         </tr>
       </tbody>
     </table>

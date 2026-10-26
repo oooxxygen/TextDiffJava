@@ -95,7 +95,7 @@ public final class BatchSummaryHtml {
             searchBox(sb, "discTable", rows == null ? 0 : rows.size());
             sb.append("<table id=\"discTable\"><thead><tr><th>昵称</th><th>归属组</th><th>实际文件名</th><th>字段序号</th><th>字段名</th><th>字段含义</th><th>")
                     .append(esc(srcA)).append("的所有取值</th><th>")
-                    .append(esc(srcB)).append("的所有取值</th></tr></thead><tbody>\n");
+                    .append(esc(srcB)).append("的所有取值</th><th>是否匹配</th></tr></thead><tbody>\n");
             for (Map<String, Object> r : rows) {
                 sb.append("<tr data-nick=\"").append(esc(str(r.get("nickname")))).append("\" data-group=\"")
                         .append(esc(str(r.get("group")))).append("\"><td>")
@@ -106,11 +106,15 @@ public final class BatchSummaryHtml {
                         .append(esc(str(r.get("field_name")))).append("</td><td>")
                         .append(esc(str(r.get("field_meaning")))).append("</td><td class=\"vals\">")
                         .append(esc(valuesHtml(r, true, srcA))).append("</td><td class=\"vals\">")
-                        .append(esc(valuesHtml(r, false, srcB))).append("</td></tr>\n");
+                        .append(esc(valuesHtml(r, false, srcB))).append("</td><td>")
+                        .append(matchBadge(r)).append("</td></tr>\n");
             }
             sb.append("</tbody></table>\n");
             sb.append("<p class=\"note\">取值按首次出现顺序去重（每侧上限 ").append(DiscardColsService.MAX_VALUES)
-                    .append(" 个）；（空）= 栏位存在但值为空；两侧取值范围最终应一致，不一致需人工核查。</p>\n");
+                    .append(" 个）；（空）= 栏位存在但值为空。是否匹配：")
+                    .append(esc(str(p.get("src_b"), "B"))).append("侧取值为")
+                    .append(esc(str(p.get("src_a"), "A")))
+                    .append("侧取值的子集或相等 → 新线输出正常，否则 → 新线不为旧线子集；— = 原文不可采集无法判定。</p>\n");
         }
         sb.append("</section>\n");
 
@@ -177,6 +181,14 @@ public final class BatchSummaryHtml {
 
     private static String badge(String grade) {
         return "<span class=\"badge " + Deviation.badgeClass(grade) + "\">" + esc(grade) + "</span>";
+    }
+
+    /** 是否匹配徽章：true 绿（新线输出正常）/ false 红（新线不为旧线子集）/ null 灰（无法判定）。 */
+    private static String matchBadge(Map<String, Object> r) {
+        Object m = r.get("matched");
+        if (m == null) return "—";
+        String cls = Boolean.TRUE.equals(m) ? "b-green" : "b-red";
+        return "<span class=\"badge " + cls + "\">" + esc(DiscardColsService.matchText(r)) + "</span>";
     }
 
     private static String statusText(String s) {

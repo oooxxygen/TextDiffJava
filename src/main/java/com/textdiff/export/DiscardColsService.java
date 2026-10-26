@@ -38,6 +38,8 @@ public final class DiscardColsService {
     public static final int MAX_VALUES = 1000;
     public static final String CSV_NAME = "DISCARD_COLS.csv";
     public static final String CACHE_JSON = "DISCARD_COLS.json";
+    /** 缓存结构版本：行内字段变化（如新增 matched）时递增，旧缓存自动失效重生成。 */
+    static final int CACHE_SCHEMA = 2;
 
     private final JobStore store;
     private final DiscardFieldStore discardFields;
@@ -149,13 +151,14 @@ public final class DiscardColsService {
         }
     }
 
-    /** 缓存读取：文件存在且未失效（作业 finishedAt / 监测配置 imported_at 均不晚于生成）才复用。 */
+    /** 缓存读取：结构版本一致且未失效（作业 finishedAt / 监测配置 imported_at 均不晚于生成）才复用。 */
     @SuppressWarnings("unchecked")
     private Map<String, Object> loadCache(String batchId, List<JobRecord> jobs) {
         Path file = exportDir(batchId).resolve(CACHE_JSON);
         if (!Files.isRegularFile(file)) return null;
         try {
             Map<String, Object> cached = Json.read(Files.readString(file, StandardCharsets.UTF_8), Map.class);
+            if (((Number) cached.getOrDefault("schema", 0)).intValue() != CACHE_SCHEMA) return null;
             long importedAt = ((Number) cached.getOrDefault("imported_at", 0L)).longValue();
             if (importedAt != discardFields.lastImportedAt()) return null;
             long maxFinished = jobs.stream().mapToLong(j -> j.finishedAt).max().orElse(0);
@@ -169,6 +172,7 @@ public final class DiscardColsService {
     private void writeJsonCache(Path file, Map<String, Object> view, long importedAt) {
         Map<String, Object> cached = new LinkedHashMap<>(view);
         cached.put("imported_at", importedAt);
+        cached.put("schema", CACHE_SCHEMA);
         writeAtomicText(file, Json.write(cached));
     }
 
@@ -224,6 +228,10 @@ public final class DiscardColsService {
             m.put("truncated_b", b != null && b.truncated);
             m.put("file_missing", error != null);
             m.put("error", error);
+            // 是否匹配：B 侧（新线）取值 ⊆ A 侧（旧线）取值（相等视为子集）；采集失败无法判定为 null
+            m.put("matched", error != null ? null
+                    : new java.util.HashSet<>(a == null ? List.of() : a.values())
+                            .containsAll(b == null ? List.of() : b.values()));
             rows.add(m);
         }
     }
@@ -274,6 +282,7 @@ public final class DiscardColsService {
             m.put("truncated_b", false);
             m.put("file_missing", true);
             m.put("error", error);
+            m.put("matched", null);
             rows.add(m);
         }
         return rows;
@@ -350,7 +359,7 @@ public final class DiscardColsService {
             try (BufferedWriter w = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8)) {
                 w.write('\ufeff');
                 w.write("昵称,归属组,实际文件名,字段序号,字段名,字段含义,"
-                        + csv(srcA + "的所有取值") + "," + csv(srcB + "的所有取值") + "\r\n");
+                        + csv(srcA + "的所有取值") + "," + csv(srcB + "的所有取值") + ",是否匹配\r\n");
                 for (Map<String, Object> row : rowsOf(view)) {
                     w.write(csv(str(row.get("nickname"), "")));
                     w.write(',' + csv(str(row.get("group"), "")));
@@ -360,6 +369,7 @@ public final class DiscardColsService {
                     w.write(',' + csv(str(row.get("field_meaning"), "")));
                     w.write(',' + csv(valuesCell(row, true, srcA)));
                     w.write(',' + csv(valuesCell(row, false, srcB)));
+                    w.write(',' + csv(matchText(row)));
                     w.write("\r\n");
                 }
             }
@@ -367,6 +377,16 @@ public final class DiscardColsService {
         } catch (IOException e) {
             throw new UncheckedIOException("DISCARD_COLS.csv 写入失败: " + file + " (" + e + ")", e);
         }
+    }
+
+    /**
+     * 是否匹配结果文案（行级 matched 字段 → 展示文本，CSV/HTML/Excel/前端共用）：
+     * true = B 侧（新线）取值 ⊆ A 侧（旧线）取值；false = 存在超出旧线的取值；null = 无法判定。
+     */
+    public static String matchText(Map<String, Object> row) {
+        Object m = row.get("matched");
+        if (m == null) return "—";
+        return Boolean.TRUE.equals(m) ? "新线输出正常" : "新线不为旧线子集";
     }
 
     /** 取值单元格：空值显示 (空)、顿号连接、截断标注、文件缺失标注。 */

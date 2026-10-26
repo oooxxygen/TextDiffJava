@@ -111,7 +111,7 @@ public final class BatchSummaryExcel {
         String srcA = str(discard.get("src_a"), str(p.get("src_a"), "A"));
         String srcB = str(discard.get("src_b"), str(p.get("src_b"), "B"));
         String[] heads = {"昵称", "归属组", "实际文件名", "字段序号", "字段名", "字段含义",
-                srcA + "的所有取值", srcB + "的所有取值"};
+                srcA + "的所有取值", srcB + "的所有取值", "是否匹配"};
         Row r0 = sh.createRow(0);
         for (int c = 0; c < heads.length; c++) cell(r0, c, heads[c], head);
         List<Map<String, Object>> rows = (List<Map<String, Object>>) discard.getOrDefault("rows", List.of());
@@ -126,13 +126,14 @@ public final class BatchSummaryExcel {
             cell(row, 5, str(d.get("field_meaning")));
             cell(row, 6, DiscardColsService.valuesCell(d, true, srcA));
             cell(row, 7, DiscardColsService.valuesCell(d, false, srcB));
+            cell(row, 8, DiscardColsService.matchText(d));
         }
         widths(sh, heads.length);
         sh.setColumnWidth(6, 60 * 256);
         sh.setColumnWidth(7, 60 * 256);
         note(sh, r, Boolean.TRUE.equals(discard.get("hit"))
                 ? "取值按首次出现顺序去重（每侧上限 " + DiscardColsService.MAX_VALUES
-                        + " 个）；（空）= 栏位存在但值为空；两侧取值范围最终应一致，不一致需人工核查。"
+                        + " 个）；（空）= 栏位存在但值为空。是否匹配：新线取值为旧线取值的子集或相等 → 新线输出正常，否则 → 新线不为旧线子集。"
                 : "本批次无可监测命中文本。");
     }
 

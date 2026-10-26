@@ -49,7 +49,8 @@ class BatchSummaryExcelTest {
                                 "nickname", "INCT0101", "group", "卡中心", "file_name", "01A3020D.v01",
                                 "col_seq", 27, "field_name", "MERCH_COUNTRY_CODE", "field_meaning", "国家码",
                                 "values_a", List.of("CN", "", "US"), "values_b", List.of("CN", "US"),
-                                "truncated_a", false, "truncated_b", false, "file_missing", false))));
+                                "truncated_a", false, "truncated_b", false, "file_missing", false,
+                                "matched", true))));
     }
 
     @Test
@@ -86,8 +87,10 @@ class BatchSummaryExcelTest {
             Sheet disc = wb.getSheet("关注字段监测");
             assertEquals("旧线的所有取值", disc.getRow(0).getCell(6).getStringCellValue());
             assertEquals("新线的所有取值", disc.getRow(0).getCell(7).getStringCellValue());
+            assertEquals("是否匹配", disc.getRow(0).getCell(8).getStringCellValue());
             assertEquals("CN、（空）、US", disc.getRow(1).getCell(6).getStringCellValue());
             assertEquals("27", disc.getRow(1).getCell(3).getStringCellValue());
+            assertEquals("新线输出正常", disc.getRow(1).getCell(8).getStringCellValue());
         }
     }
 

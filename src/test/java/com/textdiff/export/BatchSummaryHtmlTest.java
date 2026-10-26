@@ -63,13 +63,15 @@ class BatchSummaryHtmlTest {
                                 "values_a", List.of("CN", "", "US"),
                                 "values_b", List.of("CN", "US"),
                                 "truncated_a", false, "truncated_b", false,
-                                "file_missing", false))));
+                                "file_missing", false,
+                                "matched", true))));
         String html = BatchSummaryHtml.render(p);
 
         List<String> missing = new java.util.ArrayList<>(List.of(
                 "批次情况总结", "批次概览", "文本偏离度（全部文本）", "内容偏离度", "条数偏离度",
                 "对比范围", "分组「日常对比配置」（仅分组成员命中的文本）",
                 "关注字段取值监测", "旧线的所有取值", "新线的所有取值", "CN、（空）、US",
+                "是否匹配", "新线输出正常", "b-green",
                 "25.0%", "50.0%", "务必关注", "严重问题", "微量偏移",
                 "data-nick=\"INCT0101\"", "data-group=\"卡中心\"",
                 "国家码&lt;script&gt;"));

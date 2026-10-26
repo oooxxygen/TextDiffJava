@@ -66,8 +66,9 @@ class DiscardColsServiceTest {
         assertEquals(List.of("A1", "A2"), r.get("values_a"));   // 去重 + trailer 行剔除
         assertEquals(List.of("B1", "", "B2"), r.get("values_b")); // 空值计入、短行计空
         assertFalse((Boolean) r.get("file_missing"));
+        assertEquals(Boolean.FALSE, r.get("matched"));           // B 含 A 没有的 B1/B2 → 不为子集
 
-        // CSV 落盘：BOM + A/B 命名表头 + 取值单元格
+        // CSV 落盘：BOM + A/B 命名表头 + 取值单元格 + 是否匹配列
         Path csv = dir.resolve("results/b1/export/DISCARD_COLS.csv");
         assertTrue(Files.isRegularFile(csv));
         String text = Files.readString(csv, java.nio.charset.StandardCharsets.UTF_8);
@@ -76,6 +77,8 @@ class DiscardColsServiceTest {
         assertTrue(text.contains("新线的所有取值"));
         assertTrue(text.contains("A1、A2"));
         assertTrue(text.contains("B1、（空）、B2"));
+        assertTrue(text.contains(",是否匹配"));
+        assertTrue(text.contains("新线不为旧线子集"));
 
         // 缓存复用：同 finishedAt 不重生成（mtime 不变）
         long before = csv.toFile().lastModified();
@@ -118,6 +121,7 @@ class DiscardColsServiceTest {
         assertEquals(DiscardColsService.MAX_VALUES, ((List<?>) r.get("values_a")).size());
         assertEquals(Boolean.TRUE, r.get("truncated_a"));
         assertEquals(Boolean.FALSE, r.get("truncated_b"));
+        assertEquals(Boolean.TRUE, r.get("matched"));            // v1 ∈ A 侧取值 → B ⊆ A（截断不误判）
         String cell = DiscardColsService.valuesCell(r, true, "A");
         assertTrue(cell.endsWith("…（超出 " + DiscardColsService.MAX_VALUES + " 个已截断）"));
         store.close();
@@ -152,6 +156,7 @@ class DiscardColsServiceTest {
         assertEquals("RPTNICK", r.get("nickname"), "复合昵称应按 configLine 裸昵称匹配");
         assertEquals(List.of("v1"), r.get("values_a"));
         assertEquals(List.of("v2"), r.get("values_b"));
+        assertEquals(Boolean.FALSE, r.get("matched"));           // v2 ∉ {v1}
 
         store.close();
         rs.close();
@@ -186,6 +191,8 @@ class DiscardColsServiceTest {
         Map<String, Object> r = row0(view2);
         assertEquals(Boolean.TRUE, r.get("file_missing"));
         assertTrue(DiscardColsService.valuesCell(r, false, "B").contains("原文不可采集"));
+        assertNull(r.get("matched"));                            // 采集失败无法判定
+        assertEquals("—", DiscardColsService.matchText(r));
 
         store.close();
         fields.close();
