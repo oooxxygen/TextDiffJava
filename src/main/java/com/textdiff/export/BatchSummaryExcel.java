@@ -46,6 +46,8 @@ public final class BatchSummaryExcel {
                 {"批次类型", batchTypeText(p.get("batch_type"))},
                 {"状态", statusText(p.get("status"))},
                 {"对比范围", BatchSummaryHtml.scopeText(p.get("group_name"))},
+                {"对比批次", str(p.get("cmp_batch"), "")},
+                {"轮次", str(p.get("cmp_round"), "")},
                 {srcA + " 目录", str(p.get("dir_a"))},
                 {srcB + " 目录", str(p.get("dir_b"))},
                 {"开始时间", fmtTime(p.get("started_at"))},

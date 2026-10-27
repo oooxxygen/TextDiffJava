@@ -186,6 +186,8 @@ public class DiscardController {
         out.put("label", b.get("label"));
         out.put("batch_type", b.get("batch_type"));
         out.put("group_name", b.get("group_name"));
+        out.put("cmp_batch", b.get("cmp_batch"));
+        out.put("cmp_round", b.get("cmp_round"));
         out.put("dir_a", b.get("dir_a"));
         out.put("dir_b", b.get("dir_b"));
         out.put("status", stats.get("status"));

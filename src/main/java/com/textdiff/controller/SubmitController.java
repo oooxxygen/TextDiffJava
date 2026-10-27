@@ -131,8 +131,12 @@ public class SubmitController {
         // 异步建档：立即返回批次，配对与作业落盘在后台进行（万级文本提交不再阻塞 HTTP 请求），
         // 批次页/任务页轮询可见 prepare_state=preparing → ready 与作业数动态增长
         String group = str(body.get("group"));
+        String cmpBatch = str(body.get("cmp_batch"));
+        String cmpRound = str(body.get("cmp_round"));
         BatchRecord batch = jobs.createBatchAsync(Path.of(dirA), Path.of(dirB), lines, str(body.get("kind")), conds,
-                group == null || group.isBlank() ? null : group.strip());
+                group == null || group.isBlank() ? null : group.strip(),
+                cmpBatch == null || cmpBatch.isBlank() ? null : cmpBatch.strip(),
+                cmpRound == null || cmpRound.isBlank() ? null : cmpRound.strip());
         return Map.of("batch_id", batch.id);
     }
 

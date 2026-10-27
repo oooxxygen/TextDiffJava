@@ -46,6 +46,7 @@ public final class BatchSummaryHtml {
         kv(sb, "A 目录（" + str(p.get("src_a"), "A") + "）", str(p.get("dir_a")));
         kv(sb, "B 目录（" + str(p.get("src_b"), "B") + "）", str(p.get("dir_b")));
         kv(sb, "对比范围", scopeText(p.get("group_name")));
+        kv(sb, "对比批次 / 轮次", str(p.get("cmp_batch"), "—") + " / " + str(p.get("cmp_round"), "—"));
         sb.append("</section>\n");
 
         // 偏离度（全部文本，双指标 + 搜索）

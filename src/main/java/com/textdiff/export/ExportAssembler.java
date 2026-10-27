@@ -168,7 +168,8 @@ public final class ExportAssembler {
         }
     }
 
-    private static String base(JobRecord job) {
+    /** 下载文件名基名：优先用户标签，其次昵称；非法文件名字符替换为 _。 */
+    public static String base(JobRecord job) {
         String name = job.label != null && !job.label.isEmpty() ? job.label : job.nickname;
         return name.replaceAll("[\\\\/:*?\"<>|]", "_");
     }

@@ -202,8 +202,17 @@ public final class JobManager implements AutoCloseable {
     /** 分组圈定版：groupName 非空时记录对比范围（配置行已由调用方按分组过滤），供批次详情/总结展示。 */
     public BatchRecord createBatchAsync(Path dirA, Path dirB, List<String> configLines, String kind,
                                         List<List<String>> incrConds, String groupName) throws IOException {
+        return createBatchAsync(dirA, dirB, configLines, kind, incrConds, groupName, null, null);
+    }
+
+    /** 对比批次/轮次版：cmpBatch/cmpRound 为提交界面指定的对比批次（如 P2703）与轮次（如 1~4），可空。 */
+    public BatchRecord createBatchAsync(Path dirA, Path dirB, List<String> configLines, String kind,
+                                        List<List<String>> incrConds, String groupName,
+                                        String cmpBatch, String cmpRound) throws IOException {
         BatchRecord batch = newBatch(dirA, dirB, configLines, kind);
         if (groupName != null && !groupName.isBlank()) batch.groupName = groupName.strip();
+        if (cmpBatch != null && !cmpBatch.isBlank()) batch.cmpBatch = cmpBatch.strip();
+        if (cmpRound != null && !cmpRound.isBlank()) batch.cmpRound = cmpRound.strip();
         batch.prepareState = BatchRecord.PREPARING;
         store.saveBatch(batch);
         preparePool.submit(() -> {
@@ -228,8 +237,17 @@ public final class JobManager implements AutoCloseable {
     /** 分组圈定版（同步建档）。 */
     public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines, String kind,
                                    List<List<String>> incrConds, String groupName) throws IOException {
+        return createBatch(dirA, dirB, configLines, kind, incrConds, groupName, null, null);
+    }
+
+    /** 对比批次/轮次版（同步建档）。 */
+    public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines, String kind,
+                                   List<List<String>> incrConds, String groupName,
+                                   String cmpBatch, String cmpRound) throws IOException {
         BatchRecord batch = newBatch(dirA, dirB, configLines, kind);
         if (groupName != null && !groupName.isBlank()) batch.groupName = groupName.strip();
+        if (cmpBatch != null && !cmpBatch.isBlank()) batch.cmpBatch = cmpBatch.strip();
+        if (cmpRound != null && !cmpRound.isBlank()) batch.cmpRound = cmpRound.strip();
         materializeBatch(batch, dirA, dirB, configLines, kind, incrConds);
         return batch;
     }

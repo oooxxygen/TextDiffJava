@@ -110,6 +110,8 @@ final class ApiViews {
         b.put("locked", batch.locked);
         b.put("batch_type", batch.batchType == null || batch.batchType.isEmpty() ? "file" : batch.batchType);
         b.put("group_name", batch.groupName);
+        b.put("cmp_batch", batch.cmpBatch);
+        b.put("cmp_round", batch.cmpRound);
         b.put("template_dir", batch.templateDir);
         b.put("prepare_state", batch.prepareState == null ? BatchRecord.READY : batch.prepareState);
         if (batch.prepareError != null) b.put("prepare_error", batch.prepareError);

@@ -1,6 +1,7 @@
 package com.textdiff.controller;
 
 import com.textdiff.engine.Status;
+import com.textdiff.export.CollectCaseExcel;
 import com.textdiff.export.ExportAssembler;
 import com.textdiff.store.JobRecord;
 import com.textdiff.store.JobStore;
@@ -37,17 +38,30 @@ public class ExportController {
         this.fieldMaps = fieldMaps;
     }
 
-    /** mode=full|diff；zone 过滤（trailer 仅在 full 模式有字段意义）。超 2 万条分片，多文件自动打 zip。 */
+    /**
+     * mode=full|diff；zone 过滤仅 full 模式有意义（trailer 仅在 full 有字段意义）。full 超 2 万条分片，多文件自动打 zip。
+     * diff 模式 = 差异采集对比案例 xlsx（CollectComparisonCaseTemplate 20 列）：主键匹配但存在差异逐栏位一行
+     * （栏位索引=列号、错误类型=A:'..' B:'..'），单方存在 H=0；B/C 列取提交时指定的对比批次/轮次。
+     */
     @GetMapping("/jobs/{id}/export")
     public ResponseEntity<byte[]> exportJob(@PathVariable String id,
                                             @RequestParam(defaultValue = "all") String zone,
                                             @RequestParam(defaultValue = "full") String mode) {
         JobRecord job = require(id);
+        if ("diff".equals(mode)) {
+            var batch = job.batchId == null || job.batchId.isBlank() ? null : store.getBatch(job.batchId);
+            var t = fieldMaps == null ? null
+                    : fieldMaps.typeByReport(com.textdiff.export.DiscardColsService.monitorKey(job));
+            String parmType = t == null || t.parmReportType() == null ? "" : t.parmReportType();
+            String team = t == null || t.ownershipGroup() == null ? "" : t.ownershipGroup();
+            Path dir = tmpDir().resolve("jobdiff_" + id + "_" + System.nanoTime());
+            Path out = CollectCaseExcel.write(dir.resolve(ExportAssembler.base(job) + "_差异.xlsx"),
+                    job, batch, parmType, team);
+            return fileDownload(out, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        }
         Predicate<com.textdiff.engine.RowDiff> filter = zoneFilter(zone);
         Path dir = tmpDir().resolve("job_" + id + "_" + System.nanoTime());
-        List<Path> parts = "diff".equals(mode)
-                ? ExportAssembler.writeDiffCsv(dir, job, filter)
-                : ExportAssembler.writeFullCsv(dir, job, filter);
+        List<Path> parts = ExportAssembler.writeFullCsv(dir, job, filter);
         if (parts.size() == 1) return csvDownload(parts.get(0), parts.get(0).getFileName().toString());
         Path zip = dir.resolve(parts.get(0).getFileName().toString().replace(".csv", "") + "等"
                 + parts.size() + "个文件.zip");

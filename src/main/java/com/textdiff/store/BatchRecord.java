@@ -29,6 +29,9 @@ public final class BatchRecord {
     public String prepareError;
     /** 目录对比圈定的对比配置分组名（null = 未选分组，对比全部文本）。 */
     public String groupName;
+    /** 提交时指定的对比批次（如 P2703/P2711，可空）与轮次（如 1~4，可空）；贯穿差异采集表导出与结果展示。 */
+    public String cmpBatch;
+    public String cmpRound;
 
     public static final String PREPARING = "preparing";
     public static final String READY = "ready";
@@ -59,6 +62,8 @@ public final class BatchRecord {
         c.prepareState = prepareState;
         c.prepareError = prepareError;
         c.groupName = groupName;
+        c.cmpBatch = cmpBatch;
+        c.cmpRound = cmpRound;
         return c;
     }
 }

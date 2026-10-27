@@ -531,7 +531,7 @@ const RecordRow = {
 const ZonePanel = {
   components: { RecordRow },
   props: ["jobId", "zone", "label", "total", "skipSet", "columnNames", "sourceA", "sourceB",
-          "openByDefault", "recordsOpen", "pageSize", "exportUrl", "dynCols",
+          "openByDefault", "recordsOpen", "pageSize", "exportUrl", "exportLabel", "dynCols",
           "supportsNote", "notes", "noteCount", "extQuery", "extQueryNonce", "notesNonce"],
   emits: ["save-note"],
   setup(props, { emit }) {
@@ -624,7 +624,7 @@ const ZonePanel = {
       <span class="count">{{ rows.length }} / {{ total }}{{ active ? ' (筛选)' : '' }}</span>
       <div class="actions" @click.stop>
         <button class="mini-btn" @click="toggleExpand">{{ allOpen ? '收起本页' : '展开本页' }}</button>
-        <a v-if="exportUrl" class="mini-btn" :href="exportUrl">导出 Excel</a>
+        <a v-if="exportUrl" class="mini-btn" :href="exportUrl">{{ exportLabel || '导出 Excel' }}</a>
       </div>
     </div>
     <!-- 分区工具行：搜索 / 评议筛选 / 分页 / 页大小（独立于分区头，不再拥挤） -->
@@ -1401,7 +1401,7 @@ const ResultView = {
       <!-- 三分区 + trailer -->
       <template v-if="summary">
         <ZonePanel :job-id="jobId" zone="diff" label="🔴 匹配但有差异" :total="zoneCounts.diff||0"
-                   :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="true" :records-open="false" :page-size="10" :export-url="exportUrl('diff')"
+                   :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="true" :records-open="false" :page-size="10" :export-url="'/api/jobs/' + jobId + '/export?mode=diff'" export-label="⬇ 差异采集表(xlsx)"
                    :supports-note="true" :notes="notes" :note-count="zoneNoteCounts.diff||0" :ext-query="globalQ" :ext-query-nonce="globalNonce" :notes-nonce="notesNonce" @save-note="onSaveNote" />
         <ZonePanel :job-id="jobId" zone="unmatched" label="⬛ 未匹配（仅单侧存在）" :total="zoneCounts.unmatched||0"
                    :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="false" :records-open="false" :page-size="10" :export-url="exportUrl('unmatched')"
@@ -1519,6 +1519,36 @@ const SubmitForm = {
     }
     function onIncrConfirm(conds) { incrModal.open = false; if (incrModal.resolve) incrModal.resolve(conds); incrModal.resolve = null; }
     function onIncrCancel() { incrModal.open = false; if (incrModal.resolve) incrModal.resolve(null); incrModal.resolve = null; }
+
+    // 对比批次/轮次输入框（目录对比提交前弹出）：可留空；下拉默认 P2703/P2711 与 1~4，新输入值记忆到 localStorage
+    const CMP_BATCH_KEY = "td_cmp_batches"; const CMP_ROUND_KEY = "td_cmp_rounds";
+    function loadOpts(key, dft) {
+      try { return [...new Set([...dft, ...(JSON.parse(localStorage.getItem(key) || "[]") || [])])]; }
+      catch (e) { return [...dft]; }
+    }
+    const caseModal = reactive({ open: false, batch: "", round: "", resolve: null,
+      batches: loadOpts(CMP_BATCH_KEY, ["P2703", "P2711"]), rounds: loadOpts(CMP_ROUND_KEY, ["1", "2", "3", "4"]) });
+    function openCaseModal() {
+      caseModal.batch = ""; caseModal.round = "";
+      return new Promise(resolve => { caseModal.open = true; caseModal.resolve = resolve; });
+    }
+    function onCaseConfirm() {
+      caseModal.open = false;
+      const val = (s) => (s || "").trim();
+      try { // 新批次/轮次记忆（本地，最多各存 20 个）
+        if (val(caseModal.batch) && !caseModal.batches.includes(val(caseModal.batch))) {
+          caseModal.batches.push(val(caseModal.batch));
+          localStorage.setItem(CMP_BATCH_KEY, JSON.stringify(caseModal.batches.slice(-20)));
+        }
+        if (val(caseModal.round) && !caseModal.rounds.includes(val(caseModal.round))) {
+          caseModal.rounds.push(val(caseModal.round));
+          localStorage.setItem(CMP_ROUND_KEY, JSON.stringify(caseModal.rounds.slice(-20)));
+        }
+      } catch (e) {}
+      if (caseModal.resolve) caseModal.resolve({ batch: val(caseModal.batch), round: val(caseModal.round) });
+      caseModal.resolve = null;
+    }
+    function onCaseCancel() { caseModal.open = false; if (caseModal.resolve) caseModal.resolve(null); caseModal.resolve = null; }
     // 配置选择/搜索
     const cfgQuery = ref(""); const cfgResults = ref([]); const cfgFiles = ref([]);
     const saved = reactive({ open: false, nickname: "", files: [], viewing: "", content: "" });
@@ -1632,12 +1662,16 @@ const SubmitForm = {
       err.value = ""; busy.value = true;
       try {
         if (form.mode === "dirs") {
+          // 对比批次/轮次输入框（可留空）：确认后才继续拉起对比任务
+          const caseInfo = await openCaseModal();
+          if (caseInfo === null) { busy.value = false; return; }
           // 目录对比 → 批次：选配置文件(多规则) 或 用下方内联单规则
           const p = { dir_a: form.dir_a, dir_b: form.dir_b,
                       delimiter: form.delimiter, encoding_a: form.encoding_a, encoding_b: form.encoding_b,
                       source_a: form.source_a || null, source_b: form.source_b || null,
                       label: form.label || null,
-                      kind: props.ctis ? "ctis" : null };
+                      kind: props.ctis ? "ctis" : null,
+                      cmp_batch: caseInfo.batch || null, cmp_round: caseInfo.round || null };
           if (form.batch_group) p.group = form.batch_group;
           if (form.batch_config_file === "__all__") p.use_all = true;   // 全部生效配置(current.conf)
           else if (form.batch_config_file) p.config_file = form.batch_config_file;
@@ -1681,6 +1715,7 @@ const SubmitForm = {
 
     return { form, uploadsA, uploadsB, busy, err, toast, parseConfig, uploadFiles, submit,
              incrModal, onIncrConfirm, onIncrCancel,
+             caseModal, onCaseConfirm, onCaseCancel,
              cfgQuery, cfgResults, cfgFiles, cmpGroups, saved, searchConfigs, pickConfig, saveConfig, viewSavedFile };
   },
   template: `
@@ -1802,6 +1837,33 @@ const SubmitForm = {
     <!-- 增量条件模态框（ADDMOD 提交前确认） -->
     <IncrCondModal v-if="incrModal.open" :rows="incrModal.rows"
                    @confirm="onIncrConfirm" @cancel="onIncrCancel" />
+
+    <!-- 对比批次/轮次输入框（目录对比确认前弹出；可留空，下拉可输可选） -->
+    <div class="modal-mask" v-if="caseModal.open" @click.self="onCaseCancel">
+      <div class="modal" role="dialog" aria-modal="true" style="max-width:440px;">
+        <div class="modal-head">📋 对比批次与轮次
+          <button class="modal-x" @click="onCaseCancel" title="取消" aria-label="关闭">✕</button></div>
+        <div class="modal-body">
+          <p class="hint" style="margin-top:0;">指定本次对比的<b>批次</b>与<b>轮次</b>（可留空不填），确认后开始对比。取值将随批次记录并显示在批次详情，同时写入每个文本差异导出的采集对比案例 Excel（批次/轮次列）。</p>
+          <div class="field"><label>对比批次</label>
+            <input v-model="caseModal.batch" list="td-cmp-batch-opts" placeholder="如 P2703 / P2711，可输入新批次" />
+            <datalist id="td-cmp-batch-opts">
+              <option v-for="b in caseModal.batches" :key="b" :value="b" />
+            </datalist>
+          </div>
+          <div class="field"><label>轮次</label>
+            <input v-model="caseModal.round" list="td-cmp-round-opts" placeholder="如 1~4，可输入新轮次" />
+            <datalist id="td-cmp-round-opts">
+              <option v-for="r in caseModal.rounds" :key="r" :value="r" />
+            </datalist>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn ghost" @click="onCaseCancel">取消</button>
+          <button class="btn primary" @click="onCaseConfirm">确认并开始对比</button>
+        </div>
+      </div>
+    </div>
 
     <!-- 保存成功弹框：列出已写入文件，可点击查看 -->
     <div class="modal-mask" v-if="saved.open" @click.self="saved.open=false">
@@ -2172,7 +2234,7 @@ const BatchView = {
         </div>
         <div style="margin-top:12px;font-size:12px;color:var(--text-soft);">
           {{ sourceA }}：{{ ov.batch.dir_a }}<br/>{{ sourceB }}：{{ ov.batch.dir_b }}<br/>
-          触发时间 {{ fmtTime(ov.batch.created_at) }} · 配置来源 {{ ov.batch.config_source }}<template v-if="ov.batch.group_name"> · 对比范围：分组「{{ ov.batch.group_name }}」</template>
+          触发时间 {{ fmtTime(ov.batch.created_at) }} · 配置来源 {{ ov.batch.config_source }}<template v-if="ov.batch.group_name"> · 对比范围：分组「{{ ov.batch.group_name }}」</template> · 对比批次 <b>{{ ov.batch.cmp_batch || '—' }}</b> · 轮次 <b>{{ ov.batch.cmp_round || '—' }}</b>
         </div>
         <div v-if="ov.batch.no_rule_files && ov.batch.no_rule_files.length" class="no-rule" style="margin-top:10px;">
           ⚠ 无对应对比规则（未对比）：{{ ov.batch.no_rule_files.join('、') }}
