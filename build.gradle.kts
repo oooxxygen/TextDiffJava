@@ -49,7 +49,7 @@ tasks.startScripts {
             lines[idx] = lines[idx].replace("\$DEFAULT_JVM_OPTS", "\$DEFAULT_JVM_OPTS \$CONFIG_JVM_OPTS")
             val block = """
                 |CONFIG_JVM_OPTS=""
-                |for INI_FILE in "${'$'}PWD/config.ini "${'$'}APP_HOME/config.ini"; do
+                |for INI_FILE in "${'$'}PWD/config.ini" "${'$'}APP_HOME/config.ini"; do
                 |  if [ -f "${'$'}INI_FILE" ]; then
                 |    CONFIG_JVM_OPTS=${'$'}(sed -n 's/^[[:space:]]*jvm_opts[[:space:]]*=[[:space:]]*//p' "${'$'}INI_FILE" | tail -n 1 | tr -d '\r')
                 |    [ -n "${'$'}CONFIG_JVM_OPTS" ] && break
