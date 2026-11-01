@@ -22,7 +22,7 @@ import java.util.Map;
  * 关注字段监测配置存储：JSONL 事实来源 + H2 镜像（禁用/失败自动降级），与 CtisDynFieldStore 同构。
  *
  * H2 schema：
- *   discard_field(nickname + col_seq PK, field_name, field_meaning, source_file, imported_at)
+ *   discard_field(nickname + col_seq PK, field_name, field_meaning, field_type, source_file, imported_at)
  *
  * 查询主链路：对比作业昵称精确匹配（忽略大小写）→ 监测栏位清单 → 批次/单文本采集 A/B 去重取值。
  */
@@ -55,10 +55,13 @@ public final class DiscardFieldStore implements AutoCloseable {
                           col_seq INT NOT NULL,
                           field_name VARCHAR(256),
                           field_meaning VARCHAR(512),
+                          field_type INT DEFAULT 0,
                           source_file VARCHAR(256),
                           imported_at BIGINT,
                           PRIMARY KEY (nickname, col_seq))
                         """);
+                // 旧镜像库补列（加列一律 IF NOT EXISTS，幂等）
+                st.execute("ALTER TABLE discard_field ADD COLUMN IF NOT EXISTS field_type INT DEFAULT 0");
             }
             this.h2 = c;
             mirrorReset();
@@ -80,7 +83,7 @@ public final class DiscardFieldStore implements AutoCloseable {
         fields.clear();
         for (DiscardField r : list) {
             fields.add(new DiscardField(r.nickname(), r.colSeq(), r.fieldName(), r.fieldMeaning(),
-                    sourceFile, now));
+                    r.fieldType(), sourceFile, now));
         }
         rewrite("discard_fields.jsonl", fields);
         mirrorReset();
@@ -206,15 +209,16 @@ public final class DiscardFieldStore implements AutoCloseable {
             return;
         }
         try (PreparedStatement ps = h2.prepareStatement(
-                "MERGE INTO discard_field(nickname, col_seq, field_name, field_meaning, source_file, imported_at) "
-                        + "KEY(nickname, col_seq) VALUES (?, ?, ?, ?, ?, ?)")) {
+                "MERGE INTO discard_field(nickname, col_seq, field_name, field_meaning, field_type, source_file, imported_at) "
+                        + "KEY(nickname, col_seq) VALUES (?, ?, ?, ?, ?, ?, ?)")) {
             for (DiscardField r : fields) {
                 ps.setString(1, r.nickname());
                 ps.setInt(2, r.colSeq());
                 ps.setString(3, r.fieldName());
                 ps.setString(4, r.fieldMeaning());
-                ps.setString(5, r.sourceFile());
-                ps.setLong(6, r.importedAt());
+                ps.setInt(5, r.fieldType());
+                ps.setString(6, r.sourceFile());
+                ps.setLong(7, r.importedAt());
                 ps.addBatch();
             }
             ps.executeBatch();

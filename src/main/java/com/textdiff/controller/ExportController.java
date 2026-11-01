@@ -1,7 +1,6 @@
 package com.textdiff.controller;
 
 import com.textdiff.engine.Status;
-import com.textdiff.export.CollectCaseExcel;
 import com.textdiff.export.ExportAssembler;
 import com.textdiff.store.JobRecord;
 import com.textdiff.store.JobStore;
@@ -20,7 +19,8 @@ import java.util.function.Predicate;
 
 /**
  * 导出端点（CSV，UTF-8 BOM）：
- * 全量=所有记录所有字段；差异=仅差异记录一条字段差异一行。批次导出打 ZIP。
+ * 全量=所有记录所有字段；差异=一条差异记录一行（全部差异栏位整合格式 + 关注栏位 [X-YYYY @N] 前缀）；
+ * 仅差异栏位=一条字段差异一行。批次导出打 ZIP。
  */
 @RestController
 @RequestMapping("/api")
@@ -29,44 +29,72 @@ public class ExportController {
     private final JobManager jobs;
     private final com.textdiff.config.AppPaths paths;
     private final com.textdiff.store.FieldMapStore fieldMaps; // 批次明细 Excel 的列名解析
+    private final com.textdiff.store.DiscardFieldStore discardFields; // 差异导出 [X-YYYY] 前缀的监测类型
 
     public ExportController(JobStore store, JobManager jobs, com.textdiff.config.AppPaths paths,
-                            com.textdiff.store.FieldMapStore fieldMaps) {
+                            com.textdiff.store.FieldMapStore fieldMaps,
+                            com.textdiff.store.DiscardFieldStore discardFields) {
         this.store = store;
         this.jobs = jobs;
         this.paths = paths;
         this.fieldMaps = fieldMaps;
+        this.discardFields = discardFields;
     }
 
     /**
-     * mode=full|diff；zone 过滤仅 full 模式有意义（trailer 仅在 full 有字段意义）。full 超 2 万条分片，多文件自动打 zip。
-     * diff 模式 = 差异采集对比案例 xlsx（CollectComparisonCaseTemplate 20 列）：主键匹配但存在差异逐栏位一行
-     * （栏位索引=列号、错误类型=A:'..' B:'..'），单方存在 H=0；B/C 列取提交时指定的对比批次/轮次。
+     * mode=full|diff|fields|collect；zone 过滤仅对 CSV 模式有意义（trailer 仅在 full 有字段意义）。
+     * full 超 2 万条分片，多文件自动打 zip。
+     * diff（默认差异导出）= 恢复的差异 CSV（整合格式）：一条差异记录一行，全部差异栏位合并进
+     * 「差异明细」（[栏位不一致 @N] A:'..' B:'..'；关注栏位 [X-YYYY @N] 前缀；单方存在写存在侧主键）。
+     * fields = 仅差异栏位 CSV：一条字段差异一行（键值/栏位号/栏位名/A 值/B 值）。
+     * collect = 差异采集对比案例 xlsx（CollectComparisonCaseTemplate 20 列）。
      */
     @GetMapping("/jobs/{id}/export")
     public ResponseEntity<byte[]> exportJob(@PathVariable String id,
                                             @RequestParam(defaultValue = "all") String zone,
                                             @RequestParam(defaultValue = "full") String mode) {
         JobRecord job = require(id);
+        Predicate<com.textdiff.engine.RowDiff> filter = zoneFilter(zone);
+        Path dir = tmpDir().resolve("job_" + id + "_" + System.nanoTime());
         if ("diff".equals(mode)) {
+            List<Path> parts = ExportAssembler.writeDiffCsv(dir, job, filter, monitorMap(job));
+            return csvOrZip(dir, parts);
+        }
+        if ("fields".equals(mode)) {
+            List<Path> parts = ExportAssembler.writeDiffFieldsCsv(dir, job, filter);
+            return csvOrZip(dir, parts);
+        }
+        if ("collect".equals(mode)) {
             var batch = job.batchId == null || job.batchId.isBlank() ? null : store.getBatch(job.batchId);
             var t = fieldMaps == null ? null
                     : fieldMaps.typeByReport(com.textdiff.export.DiscardColsService.monitorKey(job));
             String parmType = t == null || t.parmReportType() == null ? "" : t.parmReportType();
             String team = t == null || t.ownershipGroup() == null ? "" : t.ownershipGroup();
-            Path dir = tmpDir().resolve("jobdiff_" + id + "_" + System.nanoTime());
-            Path out = CollectCaseExcel.write(dir.resolve(ExportAssembler.base(job) + "_差异.xlsx"),
+            Path out = com.textdiff.export.CollectCaseExcel.write(dir.resolve(ExportAssembler.base(job) + "_差异.xlsx"),
                     job, batch, parmType, team);
             return fileDownload(out, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         }
-        Predicate<com.textdiff.engine.RowDiff> filter = zoneFilter(zone);
-        Path dir = tmpDir().resolve("job_" + id + "_" + System.nanoTime());
         List<Path> parts = ExportAssembler.writeFullCsv(dir, job, filter);
+        return csvOrZip(dir, parts);
+    }
+
+    /** 单片直接返回 CSV，多片打 ZIP（共享临时目录，下载后统一清理）。 */
+    private ResponseEntity<byte[]> csvOrZip(Path dir, List<Path> parts) {
         if (parts.size() == 1) return csvDownload(parts.get(0), parts.get(0).getFileName().toString());
         Path zip = dir.resolve(parts.get(0).getFileName().toString().replace(".csv", "") + "等"
                 + parts.size() + "个文件.zip");
         ExportAssembler.zip(zip, parts);
         return zipDownload(zip);
+    }
+
+    /** 监测栏位类型表（1-based 栏位序号 → 配置条目）：未导入/未命中返回 null（差异明细全部 [栏位不一致 @N]）。 */
+    private java.util.Map<Integer, com.textdiff.store.DiscardField> monitorMap(JobRecord job) {
+        if (discardFields == null || discardFields.isEmpty()) return null;
+        var fields = discardFields.forNickname(com.textdiff.export.DiscardColsService.monitorKey(job));
+        if (fields.isEmpty()) return null;
+        java.util.Map<Integer, com.textdiff.store.DiscardField> m = new java.util.LinkedHashMap<>();
+        for (var f : fields) m.put(f.colSeq(), f);
+        return m;
     }
 
     /** 单作业合并包：全量 + 差异（各含分片）。 */
@@ -75,7 +103,7 @@ public class ExportController {
         JobRecord job = require(id);
         Path dir = tmpDir().resolve("joball_" + id + "_" + System.nanoTime());
         List<Path> files = new ArrayList<>(ExportAssembler.writeFullCsv(dir, job, ExportAssembler.DATA));
-        files.addAll(ExportAssembler.writeDiffCsv(dir, job, ExportAssembler.DATA));
+        files.addAll(ExportAssembler.writeDiffCsv(dir, job, ExportAssembler.DATA, monitorMap(job)));
         Path zip = dir.resolve("导出_" + job.id + ".zip");
         ExportAssembler.zip(zip, files);
         return zipDownload(zip);
@@ -129,7 +157,7 @@ public class ExportController {
             if (includeFull) {
                 files.addAll(ExportAssembler.writeFullCsv(dir, j, ExportAssembler.DATA));
             }
-            files.addAll(ExportAssembler.writeDiffCsv(dir, j, ExportAssembler.DATA));
+            files.addAll(ExportAssembler.writeDiffCsv(dir, j, ExportAssembler.DATA, monitorMap(j)));
         }
         if (files.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "无可导出的子作业");
         Path zip = dir.resolve("批次_" + id + ".zip");

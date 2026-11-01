@@ -67,4 +67,39 @@ class DiscardExcelTest {
         assertEquals("X1", p.fields().get(0).nickname());
         assertEquals(2, p.fields().get(0).colSeq());
     }
+
+    /** 字段类型列：数字/文案均可解析；非法值告警按 0；缺列 = 0 未指定。 */
+    @Test
+    void fieldTypeColumnParsedWithFallback() throws Exception {
+        DiscardExcel.Parsed p = DiscardExcel.parse(xlsx(new Object[][]{
+                {"文本名称", "栏位", "栏位名", "含义", "字段类型"},
+                {"N1", 1, "F1", "M1", 1},
+                {"N1", 2, "F2", "M2", "功能未实施"},
+                {"N1", 3, "F3", "M3", "无法对比"},   // 真实文案（含「对」字，防前缀误匹配）
+                {"N1", 4, "F4", "M4", "数据治理"},
+                {"N1", 5, "F5", "M5", " nonsense "},   // 非法 → 告警 + 0
+                {"N1", 6, "F6", "M6", null},            // 空白 → 0 不告警
+        }), "DISCARD.xlsx");
+        assertEquals(6, p.fields().size());
+        assertEquals(1, p.fields().get(0).fieldType());
+        assertEquals(2, p.fields().get(1).fieldType());
+        assertEquals(3, p.fields().get(2).fieldType());
+        assertEquals(4, p.fields().get(3).fieldType());
+        assertEquals(0, p.fields().get(4).fieldType());
+        assertEquals(0, p.fields().get(5).fieldType());
+        assertEquals(1, p.warnings().size());
+        assertTrue(p.warnings().get(0).contains("字段类型无法识别"));
+    }
+
+    /** 无字段类型列（旧 4 列格式）兼容：类型全部 0。 */
+    @Test
+    void legacyFourColumnStillWorks() throws Exception {
+        DiscardExcel.Parsed p = DiscardExcel.parse(xlsx(new Object[][]{
+                {"文本名称", "栏位", "栏位名", "含义"},
+                {"N1", 1, "F1", "M1"},
+        }), "DISCARD.xlsx");
+        assertEquals(1, p.fields().size());
+        assertEquals(0, p.fields().get(0).fieldType());
+        assertTrue(p.warnings().isEmpty());
+    }
 }

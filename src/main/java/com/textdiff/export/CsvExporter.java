@@ -177,6 +177,87 @@ public final class CsvExporter {
         w.write("键值,栏位号,栏位名,A值,B值\r\n");
     }
 
+    // ---- 差异 CSV（整合格式）：一条差异记录一行，全部差异栏位合并进差异明细 ----
+
+    /** 差异 CSV（整合版）表头：键值,状态,差异明细。 */
+    public static void writeDiffRecHeader(BufferedWriter w) throws IOException {
+        w.write("键值,状态,差异明细\r\n");
+    }
+
+    /**
+     * 差异 CSV（整合版）单行：一条差异记录一行。
+     * <ul>
+     *   <li>主键匹配但有差异 → 全部差异栏位整合进一条记录，逐栏位一行拼接进「差异明细」单元格：
+     *       {@code [栏位不一致 @3] A:'x' B:'y'}；关注栏位（monitor 命中且类型 1~4）前缀
+     *       {@code [X-YYYY @3]}（X=类型序号，如 [1-废弃字段 @3]），非关注栏位默认 [栏位不一致 @3]。</li>
+     *   <li>单方存在（仅 A/仅 B）→ 差异明细写存在侧主键、另一侧留空：{@code [仅A存在] A:'k' B:''}。</li>
+     * </ul>
+     * monitor 可空（未导入监测配置 → 全部 [栏位不一致 @N]）；非差异记录不产出，返回是否写出了内容。
+     */
+    public static boolean writeDiffRecRow(BufferedWriter w, RowDiff r, List<String> colNames,
+                                          List<com.textdiff.store.JobMeta.DynCol> dyn,
+                                          java.util.Map<Integer, com.textdiff.store.DiscardField> monitor)
+            throws IOException {
+        if (Status.SECTION_TRAILER.equals(r.section)) return false;
+        List<String> names = colNames == null ? List.of() : colNames;
+        String key = displayKey(r.key);
+        if (Status.DIFF.equals(r.status)) {
+            StringBuilder sb = new StringBuilder();
+            for (int col : r.diffCols) {
+                if (sb.length() > 0) sb.append('\n');
+                sb.append(recPrefix(monitor, col)).append(" @").append(col + 1).append("] A:'")
+                        .append(recVal(r, col, names, dyn, true)).append("' B:'")
+                        .append(recVal(r, col, names, dyn, false)).append("'");
+            }
+            if (sb.length() == 0) return false;
+            w.write(escape(key));
+            w.write(",差异,");
+            w.write(escape(sb.toString()));
+            w.write("\r\n");
+            return true;
+        }
+        if (Status.UNMATCHED_A.equals(r.status) || Status.UNMATCHED_B.equals(r.status)) {
+            boolean sideA = Status.UNMATCHED_A.equals(r.status);
+            String pk = pkOf(r, sideA);
+            w.write(escape(key.isEmpty() ? pk : key));
+            w.write(sideA ? ",仅A存在," : ",仅B存在,");
+            w.write(escape(sideA ? "[仅A存在] A:'" + pk + "' B:''"
+                                 : "[仅B存在] A:'' B:'" + pk + "'"));
+            w.write("\r\n");
+            return true;
+        }
+        return false;
+    }
+
+    /** 差异明细行前缀：关注栏位（类型 1~4）→ [X-YYYY，否则 [栏位不一致（与 @N 在调用处拼接）。 */
+    private static String recPrefix(java.util.Map<Integer, com.textdiff.store.DiscardField> monitor, int col) {
+        if (monitor != null) {
+            com.textdiff.store.DiscardField f = monitor.get(col + 1);
+            if (f != null) {
+                String p = com.textdiff.store.DiscardField.prefix(f.fieldType());
+                if (!p.isEmpty()) return p.substring(0, p.length() - 1); // [1-废弃字段 → 拼 " @N]"
+            }
+        }
+        return "[栏位不一致";
+    }
+
+    /** 差异明细行的 A/B 值：虚拟子列取行级 dyn 子值；真实列取 aCols/bCols（缺列空串）。 */
+    private static String recVal(RowDiff r, int col, List<String> names,
+                                 List<com.textdiff.store.JobMeta.DynCol> dyn, boolean sideA) {
+        if (col >= VBASE) return dynVal(r, col, sideA);
+        String[] cols = sideA ? r.aCols : r.bCols;
+        return cols != null && col < cols.length && cols[col] != null ? cols[col] : "";
+    }
+
+    /** 单方存在行的主键：优先引擎解析键（仅 A 侧取 key/aCols，仅 B 侧取 key/bCols），缺省回退整行原貌。 */
+    private static String pkOf(RowDiff r, boolean sideA) {
+        if (r.key != null && !r.key.isBlank()) return displayKey(r.key);
+        String[] cols = sideA ? r.aCols : r.bCols;
+        if (cols != null && cols.length > 0 && cols[0] != null && !cols[0].isBlank()) return cols[0];
+        String raw = sideA ? r.aRaw : r.bRaw;
+        return raw == null ? "" : raw.replace("\n", "\\n");
+    }
+
     /** 差异 CSV 单行：非 diff 记录不产出；返回是否写出了内容（空批判断用）。 */
     public static boolean writeDiffRow(BufferedWriter w, RowDiff r, List<String> colNames) throws IOException {
         return writeDiffRow(w, r, colNames, null);

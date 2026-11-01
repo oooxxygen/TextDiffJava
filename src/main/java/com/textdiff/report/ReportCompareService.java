@@ -353,17 +353,21 @@ public final class ReportCompareService implements AutoCloseable {
         return out;
     }
 
-    /** 本次对比配置：昵称/文件名/主键跳过序列（来自提交时 conf 解析结果）+ conf 规则当前状态（重跑参考）。 */
+    /** 本次对比配置：昵称/文件名/主键跳过序列（来自提交时 conf 解析结果）+ A/B 分区命名 + conf 规则当前状态（重跑参考）。 */
     private Map<String, Object> configView(JobRecord job) {
         Map<String, Object> config = new LinkedHashMap<>();
         String nick = "";
         String keySeq = "";
         String omitSeq = "";
+        String srcA = "A";
+        String srcB = "B";
         try {
             CompareConfig cfg = Rules.parseLegacy(job.configLine, "|", "|||||");
             nick = cfg.nickname == null ? "" : cfg.nickname;
             keySeq = seq1based(cfg.keyColumns);
             omitSeq = skipSeq(cfg.skipSet());
+            if (cfg.sourceA != null && !cfg.sourceA.isBlank()) srcA = cfg.sourceA.strip();
+            if (cfg.sourceB != null && !cfg.sourceB.isBlank()) srcB = cfg.sourceB.strip();
         } catch (RuntimeException ignored) {
             // 旧作业 configLine 解析失败：保持空（默认为空）
         }
@@ -373,6 +377,8 @@ public final class ReportCompareService implements AutoCloseable {
         config.put("file_name", fileName(job.fileA));
         config.put("key_seq", keySeq);
         config.put("omit_seq", omitSeq);
+        config.put("source_a", srcA);
+        config.put("source_b", srcB);
         config.put("conf_hit", !(conf[0].isEmpty() && conf[1].isEmpty()));
         config.put("conf_key_seq", conf[0]);
         config.put("conf_omit_seq", conf[1]);
@@ -406,9 +412,20 @@ public final class ReportCompareService implements AutoCloseable {
             String name = fileName(job.fileA);
             String nick = resolveNickname(name);
             String[] tokens = confKeyTokens(nick);
+            // 保留原提交时的 A/B 分区命名（SRCA/SRCB），否则重跑后结果页命名回退为默认 A/B
+            String srcA = "A";
+            String srcB = "B";
+            try {
+                CompareConfig old = Rules.parseLegacy(job.configLine, "|", "|||||");
+                if (old.sourceA != null && !old.sourceA.isBlank()) srcA = old.sourceA.strip();
+                if (old.sourceB != null && !old.sourceB.isBlank()) srcB = old.sourceB.strip();
+            } catch (RuntimeException ignored) {
+                // 原 configLine 解析失败按默认命名处理
+            }
             job.configLine = nick + ":" + name
                     + (tokens[0].isEmpty() ? "" : ":KEYSEQ=" + tokens[0])
-                    + (tokens[1].isEmpty() ? "" : ":OMITSEQ=" + tokens[1]);
+                    + (tokens[1].isEmpty() ? "" : ":OMITSEQ=" + tokens[1])
+                    + srcToken("SRCA", srcA, "A") + srcToken("SRCB", srcB, "B");
         }
         job.status = JobRecord.PENDING;
         job.error = null;

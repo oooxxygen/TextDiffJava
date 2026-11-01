@@ -79,13 +79,20 @@ public class DiscardController {
         return out;
     }
 
-    /** 当前监测配置概览（设置页状态行）。 */
+    /** 当前监测配置概览（设置页状态行）。type_counts = 按字段类型的条数（0~4）。 */
     @GetMapping("/discard-fields/status")
     public Map<String, Object> status() {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("count", discardFields.all().size());
         out.put("nickname_count", discardFields.nicknames().size());
         out.put("nicknames", discardFields.nicknames());
+        Map<String, Integer> typeCounts = new LinkedHashMap<>();
+        for (int t = 0; t <= 4; t++) typeCounts.put(String.valueOf(t), 0);
+        for (com.textdiff.store.DiscardField f : discardFields.all()) {
+            String k = String.valueOf(f.fieldType());
+            typeCounts.merge(k, 1, Integer::sum);
+        }
+        out.put("type_counts", typeCounts);
         out.put("source_file", discardFields.lastSourceFile());
         out.put("imported_at", discardFields.lastImportedAt());
         out.put("db_available", discardFields.dbAvailable());

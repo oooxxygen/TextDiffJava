@@ -38,8 +38,8 @@ public final class DiscardColsService {
     public static final int MAX_VALUES = 1000;
     public static final String CSV_NAME = "DISCARD_COLS.csv";
     public static final String CACHE_JSON = "DISCARD_COLS.json";
-    /** 缓存结构版本：行内字段变化（如新增 matched）时递增，旧缓存自动失效重生成。 */
-    static final int CACHE_SCHEMA = 2;
+    /** 缓存结构版本：行内字段变化（如新增 field_type）时递增，旧缓存自动失效重生成。 */
+    static final int CACHE_SCHEMA = 3;
 
     private final JobStore store;
     private final DiscardFieldStore discardFields;
@@ -228,10 +228,18 @@ public final class DiscardColsService {
             m.put("truncated_b", b != null && b.truncated);
             m.put("file_missing", error != null);
             m.put("error", error);
-            // 是否匹配：B 侧（新线）取值 ⊆ A 侧（旧线）取值（相等视为子集）；采集失败无法判定为 null
-            m.put("matched", error != null ? null
-                    : new java.util.HashSet<>(a == null ? List.of() : a.values())
-                            .containsAll(b == null ? List.of() : b.values()));
+            // 是否匹配按字段类型分派（采集失败无法判定为 null）：
+            //   1 废弃字段 / 4 数据治理 → B 侧（新线）取值 ⊆ A 侧（旧线）取值（相等视为子集）
+            //   2 功能未实施 → 新旧线取值集合完全一致；3 无法对比 → 不监控（null，值不展示）
+            if (!DiscardField.monitored(f.fieldType())) {
+                m.put("matched", null);
+            } else if (error != null) {
+                m.put("matched", null);
+            } else {
+                java.util.Set<String> sa = new java.util.HashSet<>(a == null ? List.of() : a.values());
+                java.util.Set<String> sb = new java.util.HashSet<>(b == null ? List.of() : b.values());
+                m.put("matched", f.fieldType() == 2 ? sa.equals(sb) : sa.containsAll(sb));
+            }
             rows.add(m);
         }
     }
@@ -296,6 +304,8 @@ public final class DiscardColsService {
         m.put("col_seq", f.colSeq());
         m.put("field_name", f.fieldName() == null ? "" : f.fieldName());
         m.put("field_meaning", f.fieldMeaning() == null ? "" : f.fieldMeaning());
+        m.put("field_type", f.fieldType());
+        m.put("type_label", DiscardField.label(f.fieldType()));
         return m;
     }
 
@@ -358,8 +368,8 @@ public final class DiscardColsService {
             Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
             try (BufferedWriter w = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8)) {
                 w.write('\ufeff');
-                w.write("昵称,归属组,实际文件名,字段序号,字段名,字段含义,"
-                        + csv(srcA + "的所有取值") + "," + csv(srcB + "的所有取值") + ",是否匹配\r\n");
+                w.write("昵称,归属组,实际文件名,字段序号,字段名,字段含义,字段类型,"
+                        + csv(srcA + "的所有取值") + "," + csv(srcB + "的所有取值") + ",判定结果\r\n");
                 for (Map<String, Object> row : rowsOf(view)) {
                     w.write(csv(str(row.get("nickname"), "")));
                     w.write(',' + csv(str(row.get("group"), "")));
@@ -367,6 +377,7 @@ public final class DiscardColsService {
                     w.write(',' + csv(String.valueOf(row.getOrDefault("col_seq", ""))));
                     w.write(',' + csv(str(row.get("field_name"), "")));
                     w.write(',' + csv(str(row.get("field_meaning"), "")));
+                    w.write(',' + csv(str(row.get("type_label"), "")));
                     w.write(',' + csv(valuesCell(row, true, srcA)));
                     w.write(',' + csv(valuesCell(row, false, srcB)));
                     w.write(',' + csv(matchText(row)));
@@ -380,18 +391,34 @@ public final class DiscardColsService {
     }
 
     /**
-     * 是否匹配结果文案（行级 matched 字段 → 展示文本，CSV/HTML/Excel/前端共用）：
-     * true = B 侧（新线）取值 ⊆ A 侧（旧线）取值；false = 存在超出旧线的取值；null = 无法判定。
+     * 判定结果文案（行级 matched + field_type → 展示文本，CSV/HTML/Excel/前端共用）：
+     * 1 废弃字段 / 4 数据治理 = B 侧（新线）取值是否 ⊆ A 侧（旧线）取值；
+     * 2 功能未实施 = 新旧线取值集合是否完全一致；3 无法对比 = 不监控；无法判定 = —。
      */
     public static String matchText(Map<String, Object> row) {
         Object m = row.get("matched");
+        int type = row.get("field_type") instanceof Number n ? n.intValue() : 0;
+        if (!DiscardField.monitored(type)) return "不监控";
         if (m == null) return "—";
+        if (type == 2) return Boolean.TRUE.equals(m) ? "新旧线一致" : "新旧线不一致";
         return Boolean.TRUE.equals(m) ? "新线输出正常" : "新线不为旧线子集";
     }
 
-    /** 取值单元格：空值显示 (空)、顿号连接、截断标注、文件缺失标注。 */
+    /** 判定徽标色级（前端 badge-grade class 同名）：true=ok、false=severe、类型 3 与无法判定=无色。 */
+    public static String matchCls(Map<String, Object> row) {
+        Object m = row.get("matched");
+        int type = row.get("field_type") instanceof Number n ? n.intValue() : 0;
+        if (!DiscardField.monitored(type) || m == null) return "";
+        return Boolean.TRUE.equals(m) ? "ok" : "severe";
+    }
+
+    /** 取值单元格：类型 3 不监控不列具体值；空值显示 (空)、顿号连接、截断标注、文件缺失标注。 */
     @SuppressWarnings("unchecked")
     static String valuesCell(Map<String, Object> row, boolean sideA, String src) {
+        int type = row.get("field_type") instanceof Number n ? n.intValue() : 0;
+        if (!DiscardField.monitored(type)) {
+            return "（不监控：" + DiscardField.label(type) + "，仅报表展示）";
+        }
         if (Boolean.TRUE.equals(row.get("file_missing"))) {
             String err = str(row.get("error"), "");
             return "（" + src + " 原文不可采集" + (err.isBlank() ? "" : "：" + err) + "）";

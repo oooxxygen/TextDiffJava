@@ -85,12 +85,13 @@ class BatchSummaryExcelTest {
             assertEquals("8", r1.getCell(11).getStringCellValue());
 
             Sheet disc = wb.getSheet("关注字段监测");
-            assertEquals("旧线的所有取值", disc.getRow(0).getCell(6).getStringCellValue());
-            assertEquals("新线的所有取值", disc.getRow(0).getCell(7).getStringCellValue());
-            assertEquals("是否匹配", disc.getRow(0).getCell(8).getStringCellValue());
-            assertEquals("CN、（空）、US", disc.getRow(1).getCell(6).getStringCellValue());
+            assertEquals("字段类型", disc.getRow(0).getCell(6).getStringCellValue());
+            assertEquals("旧线的所有取值", disc.getRow(0).getCell(7).getStringCellValue());
+            assertEquals("新线的所有取值", disc.getRow(0).getCell(8).getStringCellValue());
+            assertEquals("判定结果", disc.getRow(0).getCell(9).getStringCellValue());
+            assertEquals("CN、（空）、US", disc.getRow(1).getCell(7).getStringCellValue());
             assertEquals("27", disc.getRow(1).getCell(3).getStringCellValue());
-            assertEquals("新线输出正常", disc.getRow(1).getCell(8).getStringCellValue());
+            assertEquals("新线输出正常", disc.getRow(1).getCell(9).getStringCellValue());
         }
     }
 

@@ -17,8 +17,8 @@ class DiscardFieldStoreTest {
     void importAllReplacesAndMatchesCaseInsensitive() {
         try (DiscardFieldStore s = new DiscardFieldStore(dir, false)) {
             s.importAll(List.of(
-                    new DiscardField("INCT0101", 27, "MERCH_COUNTRY_CODE", "国家码", null, 0),
-                    new DiscardField("INCT0101", 44, "BREAK_RULE_IND_BEF_IMG", "银行信息", null, 0)), "a.xlsx");
+                    new DiscardField("INCT0101", 27, "MERCH_COUNTRY_CODE", "国家码", 0, null, 0),
+                    new DiscardField("INCT0101", 44, "BREAK_RULE_IND_BEF_IMG", "银行信息", 0, null, 0)), "a.xlsx");
             assertEquals(2, s.all().size());
             assertEquals(List.of("INCT0101"), s.nicknames());
             assertEquals("a.xlsx", s.lastSourceFile());
@@ -32,7 +32,7 @@ class DiscardFieldStoreTest {
             assertTrue(s.forNickname("OTHER").isEmpty());
 
             // 全量替换：第二次导入整体覆盖
-            s.importAll(List.of(new DiscardField("CRDD0020", 3, "X", "Y", null, 0)), "b.xlsx");
+            s.importAll(List.of(new DiscardField("CRDD0020", 3, "X", "Y", 0, null, 0)), "b.xlsx");
             assertEquals(1, s.all().size());
             assertEquals("b.xlsx", s.lastSourceFile());
             assertTrue(s.forNickname("INCT0101").isEmpty());
@@ -42,7 +42,7 @@ class DiscardFieldStoreTest {
     @Test
     void clearAndPersistenceReload() {
         try (DiscardFieldStore s = new DiscardFieldStore(dir, false)) {
-            s.importAll(List.of(new DiscardField("N1", 1, "F", "M", null, 0)), "a.xlsx");
+            s.importAll(List.of(new DiscardField("N1", 1, "F", "M", 0, null, 0)), "a.xlsx");
             s.clear();
             assertEquals(0, s.all().size());
             assertTrue(s.isEmpty());
@@ -51,7 +51,7 @@ class DiscardFieldStoreTest {
         try (DiscardFieldStore s2 = new DiscardFieldStore(dir, false)) {
             // 重载后仍为空
             assertTrue(s2.isEmpty());
-            s2.importAll(List.of(new DiscardField("N1", 5, "F", "M", null, 0)), "a.xlsx");
+            s2.importAll(List.of(new DiscardField("N1", 5, "F", "M", 0, null, 0)), "a.xlsx");
         }
         try (DiscardFieldStore s3 = new DiscardFieldStore(dir, false)) {
             // JSONL 真相源重启重载
@@ -64,7 +64,7 @@ class DiscardFieldStoreTest {
     void h2MirrorAvailable() {
         try (DiscardFieldStore s = new DiscardFieldStore(dir, true)) {
             assertTrue(s.dbAvailable());
-            s.importAll(List.of(new DiscardField("N1", 1, "F", "M", null, 0)), "a.xlsx");
+            s.importAll(List.of(new DiscardField("N1", 1, "F", "M", 0, null, 0)), "a.xlsx");
             assertTrue(s.dbAvailable(), "正常导入不应触发降级");
         }
     }

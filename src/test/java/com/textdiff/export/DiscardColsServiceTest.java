@@ -45,7 +45,7 @@ class DiscardColsServiceTest {
                 "k1 | B1 | x\nk2 |  | y\nk3 | B2\n");   // 短行：第2栏缺失计空
         FileJobStore store = new FileJobStore(dir.resolve("jobs"));
         DiscardFieldStore fields = new DiscardFieldStore(dir.resolve("store"), false);
-        fields.importAll(List.of(new DiscardField("TESTNICK", 2, "栏位2", "测试", null, 0)), "DISCARD.xlsx");
+        fields.importAll(List.of(new DiscardField("TESTNICK", 2, "栏位2", "测试", 0, null, 0)), "DISCARD.xlsx");
         store.saveBatch(new BatchRecord("b1", "测试批次", "A", "B", "t", 1));
         JobRecord job = new JobRecord("j1", "b1", "TESTNICK",
                 "TESTNICK:TESTNICK.dat:SRCA=旧线:SRCB=新线",
@@ -77,7 +77,8 @@ class DiscardColsServiceTest {
         assertTrue(text.contains("新线的所有取值"));
         assertTrue(text.contains("A1、A2"));
         assertTrue(text.contains("B1、（空）、B2"));
-        assertTrue(text.contains(",是否匹配"));
+        assertTrue(text.contains(",判定结果"));
+        assertTrue(text.contains(",字段类型,"));
         assertTrue(text.contains("新线不为旧线子集"));
 
         // 缓存复用：同 finishedAt 不重生成（mtime 不变）
@@ -108,7 +109,7 @@ class DiscardColsServiceTest {
         Path fb = write("data/B2/TESTNICK.dat", "k | v1\n");
         FileJobStore store = new FileJobStore(dir.resolve("jobs2"));
         DiscardFieldStore fields = new DiscardFieldStore(dir.resolve("store2"), false);
-        fields.importAll(List.of(new DiscardField("TESTNICK", 2, "F", "M", null, 0)), "d.xlsx");
+        fields.importAll(List.of(new DiscardField("TESTNICK", 2, "F", "M", 0, null, 0)), "d.xlsx");
         store.saveBatch(new BatchRecord("b2", "t", "A", "B", "t", 1));
         JobRecord job = new JobRecord("j2", "b2", "TESTNICK", "TESTNICK:*.dat",
                 fa.toString(), fb.toString(), dir.resolve("results2/j2").toString());
@@ -139,7 +140,7 @@ class DiscardColsServiceTest {
         ReportCompareService rs = new ReportCompareService(
                 store, dir.resolve("res3"), dir.resolve("no-cfg"), null, 1);
         DiscardFieldStore fields = new DiscardFieldStore(dir.resolve("store3"), false);
-        fields.importAll(List.of(new DiscardField("RPTNICK", 3, "F", "M", null, 0)), "d.xlsx");
+        fields.importAll(List.of(new DiscardField("RPTNICK", 3, "F", "M", 0, null, 0)), "d.xlsx");
         store.saveBatch(new BatchRecord("b3", "报表", "A", "B", "t", 1));
         // 报表作业 nickname 为复合串「昵称 · 文件名」；监测匹配键 = configLine 首段裸昵称
         JobRecord job = new JobRecord("j3", "b3", "RPTNICK · X.dat", "RPTNICK:X.dat",
@@ -168,7 +169,7 @@ class DiscardColsServiceTest {
         Path fa = write("data/A4/X.dat", "k | 1\n");
         FileJobStore store = new FileJobStore(dir.resolve("jobs4"));
         DiscardFieldStore fields = new DiscardFieldStore(dir.resolve("store4"), false);
-        fields.importAll(List.of(new DiscardField("OTHER", 1, "F", "M", null, 0)), "d.xlsx");
+        fields.importAll(List.of(new DiscardField("OTHER", 1, "F", "M", 0, null, 0)), "d.xlsx");
         store.saveBatch(new BatchRecord("b4", "t", "A", "B", "t", 1));
         JobRecord job = new JobRecord("j4", "b4", "TESTNICK", "TESTNICK:X.dat",
                 fa.toString(), dir.resolve("data/B4/不存在.dat").toString(),
@@ -185,7 +186,7 @@ class DiscardColsServiceTest {
         assertFalse(Files.exists(dir.resolve("results4/b4/export/DISCARD_COLS.csv")));
 
         // 加入命中昵称但 B 文件缺失 → 行保留并标注原文不可采集
-        fields.importAll(List.of(new DiscardField("TESTNICK", 1, "F", "M", null, 0)), "d.xlsx");
+        fields.importAll(List.of(new DiscardField("TESTNICK", 1, "F", "M", 0, null, 0)), "d.xlsx");
         Map<String, Object> view2 = svc.batchView("b4");
         assertEquals(Boolean.TRUE, view2.get("hit"));
         Map<String, Object> r = row0(view2);
@@ -196,5 +197,58 @@ class DiscardColsServiceTest {
 
         store.close();
         fields.close();
+    }
+
+    /** 字段类型判定分派：2 功能未实施=集合一致；3 无法对比=不监控（值不展示、判定为 —）；1/4=子集。 */
+    @Test
+    void fieldTypeAwareCheckDispatch() throws Exception {
+        Path fa = write("data/A5/T.dat", "k1 | A1 | T1 | S1\n");
+        Path fb = write("data/B5/T.dat", "k1 | B1 | T1 | S2\n");
+        FileJobStore store = new FileJobStore(dir.resolve("jobs5"));
+        DiscardFieldStore fields = new DiscardFieldStore(dir.resolve("store5"), false);
+        // 栏位2 类型1（废弃，B1∉{A1} → 不为子集）；栏位3 类型2（{T1}={T1} → 一致）；
+        // 栏位4 类型3（无法对比，S1≠S2 也不监控）
+        fields.importAll(List.of(
+                new DiscardField("T", 2, "F1", "M", 1, null, 0),
+                new DiscardField("T", 3, "F2", "M", 2, null, 0),
+                new DiscardField("T", 4, "F3", "M", 3, null, 0)), "d.xlsx");
+        store.saveBatch(new BatchRecord("b5", "t", "A", "B", "t", 1));
+        JobRecord job = new JobRecord("j5", "b5", "T", "T:*.dat",
+                fa.toString(), fb.toString(), dir.resolve("results5/j5").toString());
+        job.status = JobRecord.DONE;
+        job.finishedAt = System.currentTimeMillis() / 1000;
+        store.saveJob(job);
+        DiscardColsService svc = new DiscardColsService(store, fields,
+                new FieldMapStore(dir.resolve("fmx5"), false), null, dir.resolve("results5"));
+        List<Map<String, Object>> rows = rowsOf(svc.batchView("b5"));
+        assertEquals(3, rows.size());
+        Map<String, Object> f1 = rows.get(0);
+        assertEquals(1, f1.get("field_type"));
+        assertEquals("废弃字段", f1.get("type_label"));
+        assertEquals(Boolean.FALSE, f1.get("matched"));
+        assertEquals("新线不为旧线子集", DiscardColsService.matchText(f1));
+        Map<String, Object> f2 = rows.get(1);
+        assertEquals(Boolean.TRUE, f2.get("matched"));
+        assertEquals("新旧线一致", DiscardColsService.matchText(f2));
+        Map<String, Object> f3 = rows.get(2);
+        assertNull(f3.get("matched"));
+        assertEquals("不监控", DiscardColsService.matchText(f3));
+        assertEquals("（不监控：无法对比，仅报表展示）", DiscardColsService.valuesCell(f3, true, "A"));
+        assertEquals("", DiscardColsService.matchCls(f3));
+
+        // CSV：字段类型列 + 类型 3 取值被抑制
+        Path csv = dir.resolve("results5/b5/export/DISCARD_COLS.csv");
+        assertTrue(Files.isRegularFile(csv));
+        String text = Files.readString(csv, java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(text.contains(",废弃字段,"));
+        assertTrue(text.contains(",功能未实施,"));
+        assertTrue(text.contains("（不监控：无法对比，仅报表展示）"));
+        store.close();
+        fields.close();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> rowsOf(Map<String, Object> view) {
+        return (List<Map<String, Object>>) view.get("rows");
     }
 }

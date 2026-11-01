@@ -79,11 +79,40 @@ public final class ExportAssembler {
                 });
     }
 
-    /** 差异 CSV 导出（分片，流式）：一条字段差异一行，≤2 万行单文件，超出切 {base}_差异_001.csv…。 */
-    public static List<Path> writeDiffCsv(Path dir, JobRecord job, Predicate<RowDiff> filter) {
+    /**
+     * 差异 CSV 导出（分片，流式，<b>整合格式</b>）：一条差异记录一行，全部差异栏位合并进
+     * 「差异明细」单元格（{@code [栏位不一致 @N] A:'..' B:'..'} / 关注栏位 {@code [X-YYYY @N] …}；
+     * 单方存在写存在侧主键、另一侧留空）。monitor 可空（未导入监测配置）。
+     * ≤2 万行单文件，超出切 {base}_差异_001.csv…。
+     */
+    public static List<Path> writeDiffCsv(Path dir, JobRecord job, Predicate<RowDiff> filter,
+                                          java.util.Map<Integer, com.textdiff.store.DiscardField> monitor) {
         List<String> names = columnNames(job);
         List<com.textdiff.store.JobMeta.DynCol> dyn = dynCols(job);
         return streamCsv(dir, base(job), "_差异.csv", job, filter,
+                new PartedRowWriter() {
+                    @Override public void header(java.io.BufferedWriter w) throws java.io.IOException {
+                        CsvExporter.writeDiffRecHeader(w);
+                    }
+                    @Override public boolean row(java.io.BufferedWriter w, RowDiff r) throws java.io.IOException {
+                        return CsvExporter.writeDiffRecRow(w, r, names, dyn, monitor);
+                    }
+                });
+    }
+
+    /** 兼容入口：无监测前缀的差异 CSV（整合格式，全部 [栏位不一致 @N]）。 */
+    public static List<Path> writeDiffCsv(Path dir, JobRecord job, Predicate<RowDiff> filter) {
+        return writeDiffCsv(dir, job, filter, null);
+    }
+
+    /**
+     * 仅差异栏位 CSV 导出（分片，流式）：一条字段差异一行（键值/栏位号/栏位名/A 值/B 值）。
+     * ≤2 万行单文件，超出切 {base}_仅差异栏位_001.csv…。
+     */
+    public static List<Path> writeDiffFieldsCsv(Path dir, JobRecord job, Predicate<RowDiff> filter) {
+        List<String> names = columnNames(job);
+        List<com.textdiff.store.JobMeta.DynCol> dyn = dynCols(job);
+        return streamCsv(dir, base(job), "_仅差异栏位.csv", job, filter,
                 new PartedRowWriter() {
                     @Override public void header(java.io.BufferedWriter w) throws java.io.IOException {
                         CsvExporter.writeDiffHeader(w);

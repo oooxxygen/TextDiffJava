@@ -19,9 +19,11 @@ import java.util.regex.Pattern;
 /**
  * 关注字段监测 Excel 解析（DISCARD.xlsx）。
  *
- * 列结构（表头行自动识别，同义表头容错；无表头时按列序 A~D 处理）：
- *   文本名称/昵称 | 栏位/字段序号/序号 | 栏位名/字段名 | 含义/字段含义/说明
+ * 列结构（表头行自动识别，同义表头容错；无表头时按列序 A~D 处理；字段类型列可选）：
+ *   文本名称/昵称 | 栏位/字段序号/序号 | 栏位名/字段名 | 含义/字段含义/说明 | 字段类型（可选）
  *
+ * 字段类型：1 废弃字段 / 2 功能未实施 / 3 无法对比 / 4 数据治理（数字或文案均可；
+ * 缺列/空白 = 0 未指定，非法值告警后按 0 处理）。
  * 栏位序号必须为 ≥1 整数（1-based，同 KEYSEQ 语义）；非法行告警跳过不阻断导入。
  */
 public final class DiscardExcel {
@@ -33,6 +35,7 @@ public final class DiscardExcel {
     private static final Pattern SEQ_HINT = Pattern.compile("(?i)栏位序号|字段序号|^栏位$|^序号$");
     private static final Pattern NAME_HINT = Pattern.compile("(?i)栏位名|字段名");
     private static final Pattern MEANING_HINT = Pattern.compile("(?i)含义|说明");
+    private static final Pattern TYPE_HINT = Pattern.compile("(?i)字段类型|栏位类型|^类型$");
 
     public record Parsed(List<DiscardField> fields, List<String> warnings) {}
 
@@ -51,6 +54,7 @@ public final class DiscardExcel {
         List<String> warnings = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
         int nickCol = 0, seqCol = 1, nameCol = 2, meaningCol = 3;
+        int typeCol = -1; // 字段类型列可选：缺省无
         for (Row row : sheet) {
             String c0 = cellText(row.getCell(0));
             if (c0 == null || c0.isBlank()) continue;
@@ -61,6 +65,7 @@ public final class DiscardExcel {
                     seqCol = cols[1];
                     nameCol = cols[2];
                     meaningCol = cols[3];
+                    typeCol = cols[4];
                 }
                 continue;
             }
@@ -68,6 +73,7 @@ public final class DiscardExcel {
             String seq = cellText(row.getCell(seqCol));
             String name = cellText(row.getCell(nameCol));
             String meaning = cellText(row.getCell(meaningCol));
+            String type = typeCol < 0 ? null : cellText(row.getCell(typeCol));
             int line = row.getRowNum() + 1;
             if (nick == null || nick.isBlank()) {
                 warnings.add("第 " + line + " 行文本名称为空，已跳过");
@@ -79,27 +85,35 @@ public final class DiscardExcel {
                         + (seq == null ? "（空）" : seq) + "（需 ≥1 整数），已跳过");
                 continue;
             }
+            int fieldType = DiscardField.parseType(type);
+            if (fieldType == 0 && type != null && !type.isBlank()) {
+                warnings.add("第 " + line + " 行（" + nick.strip() + "）字段类型无法识别: " + type.strip()
+                        + "（可用 1~4 或：废弃字段/功能未实施/无法对比/数据治理），按未指定处理");
+            }
             String key = nick.strip().toLowerCase() + "#" + colSeq;
             if (!seen.add(key)) continue; // 同昵称同栏位重复行去重
             out.add(new DiscardField(nick.strip(), colSeq,
                     name == null ? "" : name.strip(),
-                    meaning == null ? "" : meaning.strip(), null, 0));
+                    meaning == null ? "" : meaning.strip(), fieldType, null, 0));
         }
-        if (out.isEmpty()) warnings.add("无有效监测行（需：文本名称 / 栏位序号 / 栏位名 / 含义）");
+        if (out.isEmpty()) warnings.add("无有效监测行（需：文本名称 / 栏位序号 / 栏位名 / 含义[/ 字段类型]）");
         return new Parsed(out, warnings);
     }
 
-    /** 表头列定位：四类提示词各归其位；定位不出四列时返回 null（沿用默认列序）。 */
+    /** 表头列定位：五类提示词各归其位（字段类型可缺，-1）；定位不出前四列时返回 null（沿用默认列序）。 */
     private static int[] mapHeader(Row row) {
         int nick = findCol(row, NICK_HINT);
         int seq = findCol(row, SEQ_HINT);
         int name = findCol(row, NAME_HINT);
         int meaning = findCol(row, MEANING_HINT);
+        int type = findCol(row, TYPE_HINT);
         if (nick < 0 || seq < 0) return null;
         if (name < 0) name = firstFree(nick, seq, meaning, row.getLastCellNum());
         if (meaning < 0) meaning = firstFree(nick, seq, name, row.getLastCellNum());
         if (name < 0 || meaning < 0) return null;
-        return new int[]{nick, seq, name, meaning};
+        // 类型列若与已定位列冲突（如"类型"被含义提示误吞）按未提供处理
+        if (type == nick || type == seq || type == name || type == meaning) type = -1;
+        return new int[]{nick, seq, name, meaning, type};
     }
 
     private static int findCol(Row row, Pattern hint) {

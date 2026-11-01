@@ -351,7 +351,7 @@ const SeqField = {
 
 /* ---------- 记录行组件 ---------- */
 const RecordRow = {
-  props: ["row", "skipSet", "columnNames", "sourceA", "sourceB", "forceOpen", "forceCollapse", "defaultOpen", "note", "supportsNote", "dynCols"],
+  props: ["row", "skipSet", "columnNames", "sourceA", "sourceB", "forceOpen", "forceCollapse", "defaultOpen", "note", "supportsNote", "dynCols", "monitorMap"],
   emits: ["save-note"],
   setup(props, { emit }) {
     const localOpen = ref(!!props.defaultOpen);
@@ -390,10 +390,21 @@ const RecordRow = {
       return segments(side === "a" ? a : b, computeOpcodes(a, b), side);
     }
     const dynDiffOf = (i) => dynSubs(i).some(v => diffSet.value.has(v.idx));
-    // 差异列标签：虚拟子列 → 107-1B；真实列 → N·名称
+    // 差异列标签：虚拟子列 → 107-1B；真实列 → N·名称；关注栏位（字段类型 1~4）加 [X-YYYY] 前缀
+    function monitorPrefix(c) {
+      const f = (props.monitorMap || {})[c + 1];
+      return (f && f.field_type >= 1 && f.field_type <= 4) ? "[" + f.field_type + "-" + (f.type_label || "") + "]" : "";
+    }
     function diffColLabel(c) {
       if (c >= VBASE) return dynSubLabel(c);
-      return colName(c) ? (c + 1) + '·' + colName(c) : String(c + 1);
+      const base = colName(c) ? (c + 1) + '·' + colName(c) : String(c + 1);
+      return monitorPrefix(c) + base;
+    }
+    // 明细网格字段名：差异栏位且为关注栏位时同样加前缀（未参与差异的关注栏位不加）
+    function gridFieldName(i) {
+      const c = i - 1;
+      const name = colName(c) || "";
+      return diffSet.value.has(c) ? monitorPrefix(c) + name : name;
     }
 
     // ---- 记录评议(note) ----
@@ -445,7 +456,7 @@ const RecordRow = {
     }
 
     const hasNames = computed(() => Array.isArray(props.columnNames) && props.columnNames.some(n => n));
-    return { isOpen, toggle, sideCols, lineClass, cellSegs, maxLen, colName, hasNames,
+    return { isOpen, toggle, sideCols, lineClass, cellSegs, maxLen, colName, gridFieldName, hasNames,
              isDynCol, dynSubs, dynSegs, dynSubLabel, dynTitle, dynDiffOf, diffColLabel,
              noteEditing, noteDraft, hasNote, openNote, cancel, saveNote, delNote };
   },
@@ -478,7 +489,7 @@ const RecordRow = {
         <div class="ghdr" :class="sideClass('b')">{{ sourceB || 'B' }}<span class="absent-note" v-if="!sideCols('b')"> · {{ sourceB || 'B' }} 中无此键</span></div>
         <template v-for="i in maxLen" :key="i">
           <div class="gcell field" v-if="hasNames" :class="{ diff: lineClass('a', i-1).includes('diff') }">
-            <span class="ci">{{ i }}</span><span class="nm">{{ colName(i-1) }}</span>
+            <span class="ci">{{ i }}</span><span class="nm">{{ gridFieldName(i) }}</span>
             <span class="dyn-mark" v-if="isDynCol(i-1)" title="CTIS 动态栏位：已按 ~~ 编号展开为子栏位">⧉</span>
           </div>
           <div class="gcell" :class="[lineClass('a', i-1), sideClass('a')]">
@@ -532,7 +543,7 @@ const ZonePanel = {
   components: { RecordRow },
   props: ["jobId", "zone", "label", "total", "skipSet", "columnNames", "sourceA", "sourceB",
           "openByDefault", "recordsOpen", "pageSize", "exportUrl", "exportLabel", "dynCols",
-          "supportsNote", "notes", "noteCount", "extQuery", "extQueryNonce", "notesNonce"],
+          "supportsNote", "notes", "noteCount", "extQuery", "extQueryNonce", "notesNonce", "monitorMap", "extraExports"],
   emits: ["save-note"],
   setup(props, { emit }) {
     const open = ref(!!props.openByDefault);
@@ -624,6 +635,8 @@ const ZonePanel = {
       <span class="count">{{ rows.length }} / {{ total }}{{ active ? ' (筛选)' : '' }}</span>
       <div class="actions" @click.stop>
         <button class="mini-btn" @click="toggleExpand">{{ allOpen ? '收起本页' : '展开本页' }}</button>
+        <a v-for="x in (extraExports || [])" :key="x.url" class="mini-btn" :href="x.url"
+           :title="x.title || x.label">{{ x.label }}</a>
         <a v-if="exportUrl" class="mini-btn" :href="exportUrl">{{ exportLabel || '导出 Excel' }}</a>
       </div>
     </div>
@@ -652,7 +665,8 @@ const ZonePanel = {
       <div class="empty" v-if="total === 0">{{ active ? '无匹配记录' : '无记录' }}</div>
       <RecordRow v-for="(r, idx) in rows" :key="idx" :row="r" :skip-set="skipSet" :column-names="columnNames"
                  :source-a="sourceA" :source-b="sourceB" :force-open="allOpen" :force-collapse="collapseNonce"
-                 :default-open="recordsOpen" :supports-note="supportsNote" :note="noteOf(r.key)" :dyn-cols="dynCols" @save-note="onSaveNote" />
+                 :default-open="recordsOpen" :supports-note="supportsNote" :note="noteOf(r.key)" :dyn-cols="dynCols"
+                 :monitor-map="monitorMap" @save-note="onSaveNote" />
       <div class="load-more" v-if="loading">
         <span class="muted">加载中…</span>
       </div>
@@ -699,31 +713,47 @@ const DiscardTable = {
     const pg = usePager(() => props.rows || [], 100);
     function vals(r, side) {
       const src = side === "a" ? props.srcA : props.srcB;
+      if (r.field_type === 3) return "（不监控：无法对比，仅报表展示）";
       if (r.file_missing) return "（" + src + " 原文不可采集" + (r.error ? "：" + r.error : "") + "）";
       const list = side === "a" ? r.values_a : r.values_b;
       let s = !list || !list.length ? "（无数据行）" : list.map(v => !v ? "（空）" : v).join("、");
       if (side === "a" ? r.truncated_a : r.truncated_b) s += "…（超出上限已截断）";
       return s;
     }
-    // 是否匹配：B 侧（新线）取值 ⊆ A 侧（旧线）取值 → 正常；否则不为子集；无法判定 —
+    // 判定结果按字段类型：1 废弃字段 / 4 数据治理 = 新线取值应为旧线子集；2 功能未实施 = 新旧线应完全一致；3 无法对比 = 不监控
     function matchText(r) {
-      if (r.matched === true) return "新线输出正常";
-      if (r.matched === false) return "新线不为旧线子集";
+      if (r.field_type === 3) return "不监控";
+      if (r.matched === true) return r.field_type === 2 ? "新旧线一致" : "新线输出正常";
+      if (r.matched === false) return r.field_type === 2 ? "新旧线不一致" : "新线不为旧线子集";
       return "—";
     }
     function matchCls(r) {
-      if (r.matched === true) return "ok";
-      if (r.matched === false) return "severe";
+      if (r.matched === true && r.field_type !== 3) return "ok";
+      if (r.matched === false && r.field_type !== 3) return "severe";
       return "";
     }
-    return { pg, vals, matchText, matchCls };
+    function typeTip(r) {
+      const t = r.field_type;
+      if (t === 1) return "废弃字段：新线取值应为旧线子集，超出即提示（出报表）";
+      if (t === 2) return "功能未实施：新旧线取值应完全一致，不一致即提示（出报表）";
+      if (t === 3) return "无法对比：时间戳/内部序号类栏位，仅报表展示，不监控不列具体值";
+      if (t === 4) return "数据治理：新线取值应为旧线子集，超出即提示（出报表）";
+      return "未指定类型：按子集要求判定（新线取值应为旧线子集）";
+    }
+    function matchTip(r) {
+      if (r.field_type === 3) return "无法对比栏位不参与监控";
+      if (r.matched === true) return props.srcB + " 侧取值符合该字段类型要求";
+      if (r.matched === false) return props.srcB + " 侧取值不符合该字段类型要求，需人工核查";
+      return "原文不可采集，无法判定";
+    }
+    return { pg, vals, matchText, matchCls, typeTip, matchTip };
   },
   template: `
   <div style="overflow-x:auto;">
     <table class="discard-table" v-if="rows.length">
       <thead><tr>
-        <th>昵称</th><th>归属组</th><th>实际文件名</th><th>字段序号</th><th>字段名</th><th>字段含义</th>
-        <th>{{ srcA }} 的所有取值</th><th>{{ srcB }} 的所有取值</th><th>是否匹配</th>
+        <th>昵称</th><th>归属组</th><th>实际文件名</th><th>字段序号</th><th>字段名</th><th>字段含义</th><th>字段类型</th>
+        <th>{{ srcA }} 的所有取值</th><th>{{ srcB }} 的所有取值</th><th>判定结果</th>
       </tr></thead>
       <tbody>
         <tr v-for="(r, i) in pg.paged" :key="i">
@@ -733,10 +763,11 @@ const DiscardTable = {
           <td>{{ r.col_seq }}</td>
           <td>{{ r.field_name }}</td>
           <td>{{ r.field_meaning }}</td>
-          <td class="vals" :class="{ bad: r.file_missing }">{{ vals(r, 'a') }}</td>
-          <td class="vals" :class="{ bad: r.file_missing }">{{ vals(r, 'b') }}</td>
+          <td><span class="group-badge" :title="typeTip(r)">{{ r.type_label || '未指定' }}</span></td>
+          <td class="vals" :class="{ bad: r.file_missing && r.field_type !== 3 }">{{ vals(r, 'a') }}</td>
+          <td class="vals" :class="{ bad: r.file_missing && r.field_type !== 3 }">{{ vals(r, 'b') }}</td>
           <td><span class="badge-grade" :class="matchCls(r)"
-                    :title="r.matched === true ? (srcB + ' 侧取值为 ' + srcA + ' 侧取值的子集或相等') : (r.matched === false ? (srcB + ' 侧存在超出 ' + srcA + ' 侧的取值，需人工核查') : '原文不可采集，无法判定')">{{ matchText(r) }}</span></td>
+                    :title="matchTip(r)">{{ matchText(r) }}</span></td>
         </tr>
       </tbody>
     </table>
@@ -1128,6 +1159,7 @@ const ResultView = {
     const skipSet = ref(new Set());
     const columnNames = ref([]);
     const dynCols = ref([]);          // CTIS 动态栏位虚拟子列描述（meta.dyn_cols）
+    const monitorMap = ref({});       // 关注栏位类型映射（col_seq → {field_type,type_label,…}）：差异栏位 [X-YYYY] 前缀
     const DYN_VBASE = 1000000;
     const ai = reactive({ enabled: false, model: "", loading: false, content: "", error: "" });
     // 记录评议(note) + 全局搜索
@@ -1152,6 +1184,16 @@ const ResultView = {
           timer = setTimeout(load, 600);
         }
       } catch (e) { error.value = e.message; }
+      loadMonitor();
+    }
+    // 关注栏位类型映射（col_seq → 行）：差异栏位详情 [X-YYYY] 前缀用；未导入/未命中为空
+    async function loadMonitor() {
+      try {
+        const d = await api(`/api/jobs/${props.jobId}/discard-cols`);
+        const m = {};
+        for (const row of (d.rows || [])) m[row.col_seq] = row;
+        monitorMap.value = m;
+      } catch (e) { /* 作业不存在/未完成等：前缀静默缺失 */ }
     }
     async function loadAi() {
       try { const r = await api("/api/ai/status"); ai.enabled = r.enabled; ai.model = r.model; }
@@ -1167,6 +1209,7 @@ const ResultView = {
     watch(() => props.jobId, () => {
       meta.value = null; summary.value = null; ai.content = ""; ai.error = "";
       notes.value = {}; zoneNoteCounts.value = {}; globalQ.value = ""; globalApplied.value = false;
+      monitorMap.value = {};
       load(); loadNotes();
     });
 
@@ -1263,7 +1306,7 @@ const ResultView = {
       catch (e) { notify(e.message, "error"); }
     }
 
-    return { meta, summary, zoneCounts, error, skipSet, columnNames, dynCols, trailerChips,
+    return { meta, summary, zoneCounts, error, skipSet, columnNames, dynCols, trailerChips, monitorMap,
              diffConcentration, concList, concShown, loadMoreConc,
              dupTopA, dupTopB, incrText,
              ai, aiHtml, runAnalyze, exportUrl, onRerun, fmtTime, fmtDur, editLabel, backText,
@@ -1401,13 +1444,20 @@ const ResultView = {
       <!-- 三分区 + trailer -->
       <template v-if="summary">
         <ZonePanel :job-id="jobId" zone="diff" label="🔴 匹配但有差异" :total="zoneCounts.diff||0"
-                   :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="true" :records-open="false" :page-size="10" :export-url="'/api/jobs/' + jobId + '/export?mode=diff'" export-label="⬇ 差异采集表(xlsx)"
+                   :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="true" :records-open="false" :page-size="10"
+                   :export-url="'/api/jobs/' + jobId + '/export?mode=diff'" export-label="⬇ 差异CSV"
+                   :extra-exports="[
+                     { url: '/api/jobs/' + jobId + '/export?mode=fields', label: '⬇ 仅差异栏位', title: '仅差异栏位导出：一条字段差异一行（键值/栏位号/栏位名/A值/B值）' },
+                     { url: '/api/jobs/' + jobId + '/export?mode=collect', label: '⬇ 差异采集表(xlsx)', title: '差异采集对比案例 Excel（CollectComparisonCaseTemplate 20 列）' }]"
+                   :monitor-map="monitorMap"
                    :supports-note="true" :notes="notes" :note-count="zoneNoteCounts.diff||0" :ext-query="globalQ" :ext-query-nonce="globalNonce" :notes-nonce="notesNonce" @save-note="onSaveNote" />
         <ZonePanel :job-id="jobId" zone="unmatched" label="⬛ 未匹配（仅单侧存在）" :total="zoneCounts.unmatched||0"
                    :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="false" :records-open="false" :page-size="10" :export-url="exportUrl('unmatched')"
+                   :monitor-map="monitorMap"
                    :supports-note="true" :notes="notes" :note-count="zoneNoteCounts.unmatched||0" :ext-query="globalQ" :ext-query-nonce="globalNonce" :notes-nonce="notesNonce" @save-note="onSaveNote" />
         <ZonePanel :job-id="jobId" zone="equal" label="🟢 完全匹配（默认折叠）" :total="zoneCounts.equal||0"
                    :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="false" :records-open="false" :page-size="10" :export-url="exportUrl('equal')"
+                   :monitor-map="monitorMap"
                    :supports-note="true" :notes="notes" :note-count="zoneNoteCounts.equal||0" :ext-query="globalQ" :ext-query-nonce="globalNonce" :notes-nonce="notesNonce" @save-note="onSaveNote" />
         <ZonePanel :job-id="jobId" zone="trailer" label="🔵 尾部信息对比" :total="zoneCounts.trailer||0"
                    :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="true" :records-open="false" :page-size="10" :export-url="exportUrl('trailer')" />
@@ -2465,8 +2515,7 @@ const SettingsPage = {
         if (r.warnings && r.warnings.length) {
           discard.msg += "；告警：" + r.warnings.join("；");
         }
-        loadDiscardStatus();
-      } catch (e) { discard.ok = false; discard.msg = "导入失败: " + e.message; }
+        loadDiscardStatus();      } catch (e) { discard.ok = false; discard.msg = "导入失败: " + e.message; }
       finally { discard.busy = false; }
     }
     async function loadDiscardStatus() {
@@ -2650,8 +2699,8 @@ const SettingsPage = {
     <div class="card">
       <div class="card-head">🔍 关注字段监测导入（DISCARD_COLS）</div>
       <div class="card-body">
-        <p class="ai-hint" style="margin-top:0;">上传<b>关注字段监测 Excel</b>（列：文本名称 / 栏位 / 栏位名 / 含义；栏位为 ≥1 整数，1-based 同 KEYSEQ 语义），落库 H2 表 <code>discard_field</code>。批次对比、单文本对比、报表对比时按<b>昵称命中</b>自动采集这些栏位在 A/B 两侧数据行的<b>去重取值</b>（每侧上限 1000 个），批次完成后生成 <code>DISCARD_COLS.csv</code> 于 <code>results/{批次ID}/export/</code>，并在批次详情与批次情况总结中展示。适用于理论上取值范围固定的新旧线枚举型栏位监控。导入为全量替换。</p>
-        <div class="field"><label>关注字段监测 Excel（.xlsx：文本名称 / 栏位 / 栏位名 / 含义）</label>
+        <p class="ai-hint" style="margin-top:0;">上传<b>关注字段监测 Excel</b>（列：文本名称 / 栏位 / 栏位名 / 含义 / <b>字段类型</b>（可选）；栏位为 ≥1 整数 1-based 同 KEYSEQ 语义；字段类型 = <b>1 废弃字段</b> / <b>2 功能未实施</b> / <b>3 无法对比</b> / <b>4 数据治理</b>，数字或文案均可，缺省按未指定处理），落库 H2 表 <code>discard_field</code>。批次对比、单文本对比、报表对比时按<b>昵称命中</b>自动采集这些栏位在 A/B 两侧数据行的<b>去重取值</b>（每侧上限 1000 个），批次完成后生成 <code>DISCARD_COLS.csv</code> 于 <code>results/{批次ID}/export/</code>，并在批次详情与批次情况总结中展示。<b>判定语义</b>：1 废弃字段 / 4 数据治理 = 新线（B）取值应为旧线（A）子集，超出即出报表；2 功能未实施 = 新旧线应完全一致，不一致即出报表；3 无法对比（时间戳/内部序号类）= 仅报表展示、不监控不列具体值。差异结果页对类型 1~4 的差异栏位显示 <code>[X-YYYY]</code> 前缀（如 <code>[1-废弃字段]</code>）。导入为全量替换。</p>
+        <div class="field"><label>关注字段监测 Excel（.xlsx：文本名称 / 栏位 / 栏位名 / 含义 [/ 字段类型]）</label>
           <input type="file" accept=".xlsx" @change="onDiscardFile" /></div>
         <div class="btn-row">
           <button class="btn" @click="importDiscard" :disabled="discard.busy">{{ discard.busy ? '导入中…' : '导入监测配置' }}</button>
@@ -2659,6 +2708,8 @@ const SettingsPage = {
                   title="清空全部关注字段监测配置">清空监测配置</button>
           <span v-if="discard.status" style="font-size:13px;color:var(--text-soft);"
                 >已导入：{{ discard.status.count }} 条 / {{ discard.status.nickname_count }} 个昵称{{ discard.status.source_file ? '（' + discard.status.source_file + '）' : '' }}{{ discard.status.db_available ? ' · H2 镜像正常' : ' · 纯文件模式' }}</span>
+          <span v-if="discard.status && discard.status.count" class="type-counts"
+                title="按字段类型分布：未指定 / 废弃字段 / 功能未实施 / 无法对比 / 数据治理">类型分布：未指定 {{ (discard.status.type_counts||{})['0'] || 0 }} · 废弃 {{ (discard.status.type_counts||{})['1'] || 0 }} · 未实施 {{ (discard.status.type_counts||{})['2'] || 0 }} · 无法对比 {{ (discard.status.type_counts||{})['3'] || 0 }} · 治理 {{ (discard.status.type_counts||{})['4'] || 0 }}</span>
           <span v-if="discard.msg" :style="{ color: discard.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ discard.msg }}</span>
         </div>
       </div>
@@ -3270,7 +3321,7 @@ const REPORT_STATUS = { pending: "待开始", running: "进行中", done: "已�
 
 /* 报表行渲染：业务行按栏位双栏对照（差异栏位字符级高亮），表头/表尾整行对照。 */
 const ReportRowRec = {
-  props: ["row", "sourceA", "sourceB", "section", "fieldNames"],
+  props: ["row", "sourceA", "sourceB", "section", "fieldNames", "monitorMap"],
   setup(props) {
     const isOpen = ref(false); // 条目一律默认收起，点击展开（含表头/表尾块）
     const toggle = () => { isOpen.value = !isOpen.value; };
@@ -3287,9 +3338,17 @@ const ReportRowRec = {
     const diffSet = computed(() => new Set(props.row.diff_cols || []));
     const showLcol = computed(() => isLine.value && props.section === 'data'
         && props.row.status === 'diff' && diffSet.value.size > 0); // 差异栏位左列仅业务区展示
-    // 差异位标签：折行记录/表头表尾块差异位 = 物理行号「第N行」；业务行 = 导出映射「列号·列名」
+    // 差异位标签：折行记录/表头表尾块差异位 = 物理行号「第N行」；业务行 = 导出映射「列号·列名」；
+    // 关注栏位（字段类型 1~4）加 [X-YYYY] 前缀（需求 1.3）
     const colName = (c) => ((props.fieldNames || [])[c]) || ('栏位' + (c + 1));
-    const colLabel = (c) => isFolded.value ? '第' + (c + 1) + '行' : (c + 1) + '·' + colName(c);
+    const monitorPrefix = (c) => {
+      const f = (props.monitorMap || {})[c + 1];
+      return (f && f.field_type >= 1 && f.field_type <= 4) ? "[" + f.field_type + "-" + (f.type_label || "") + "]" : "";
+    };
+    const colLabel = (c) => {
+      const base = isFolded.value ? '第' + (c + 1) + '行' : (c + 1) + '·' + colName(c);
+      return monitorPrefix(c) + base;
+    };
     const diffLabelText = computed(() => (props.row.diff_cols || []).map(colLabel).join(', '));
     function segs(side, i) {
       if (!diffSet.value.has(i)) {
@@ -3351,7 +3410,7 @@ const ReportRowRec = {
 /* 报表分区面板：懒加载分页读取某一 section/zone（base 可换 custom-jobs 等同构端点）。 */
 const ReportZone = {
   components: { ReportRowRec },
-  props: ["jobId", "section", "zone", "title", "tone", "defaultOpen", "sourceA", "sourceB", "base", "fieldNames"],
+  props: ["jobId", "section", "zone", "title", "tone", "defaultOpen", "sourceA", "sourceB", "base", "fieldNames", "monitorMap"],
   setup(props) {
     const apiBase = computed(() => props.base || "report-jobs");
     const open = ref(!!props.defaultOpen);
@@ -3381,7 +3440,7 @@ const ReportZone = {
     </div>
     <div class="zone-body" v-if="open">
       <div class="empty" v-if="!loading && !rows.length">（无记录）</div>
-      <ReportRowRec v-for="r in rows" :key="r.key + r.status" :row="r" :sourceA="sourceA" :sourceB="sourceB" :section="section" :field-names="fieldNames" />
+      <ReportRowRec v-for="r in rows" :key="r.key + r.status" :row="r" :sourceA="sourceA" :sourceB="sourceB" :section="section" :field-names="fieldNames" :monitor-map="monitorMap" />
       <div class="zone-pager" v-if="total > pageSize" @click.stop>
         <button class="mini-btn" :disabled="page<=1" @click="loadPage(page-1)">上一页</button>
         <span>{{ page }} / {{ totalPages }}</span>
@@ -3618,6 +3677,21 @@ const ReportResultView = {
       finally { busyRerun.value = false; }
     }
     const fileName = (p) => (p || "").split(/[\\/]/).pop();
+    // A/B 分区命名：读本次配置的 SRCA/SRCB（提交表单输入），缺省回退 A/B（需求 3.1：结果页需用用户命名）
+    const sourceA = computed(() => srcA(cfg.value));
+    const sourceB = computed(() => srcB(cfg.value));
+    // 关注栏位类型映射（col_seq → 行）：差异栏位 [X-YYYY] 前缀用
+    const monitorMap = ref({});
+    async function loadMonitor() {
+      try {
+        const d = await api(`/api/jobs/${props.jobId}/discard-cols`);
+        const m = {};
+        for (const row of (d.rows || [])) m[row.col_seq] = row;
+        monitorMap.value = m;
+      } catch (e) { /* 未命中/未完成：前缀静默缺失 */ }
+    }
+    onMounted(loadMonitor);
+    watch(() => props.jobId, () => { monitorMap.value = {}; loadMonitor(); });
     /* 条数核对展示：相符项收敛为汇总一行，仅逐条列出不符项（避免多段报表平铺几十行）。 */
     const countCheckText = computed(() => {
       if (!s.value || !s.value.count_checks || !s.value.count_checks.length) return [];
@@ -3631,7 +3705,7 @@ const ReportResultView = {
       return lines;
     });
     const exportHref = computed(() => `/api/report-jobs/${props.jobId}/export`);
-    return { sum, s, cfg, confHit, confHint, busyRerun, rerunErr, doRerun, fileName, countCheckText, exportHref, REPORT_STATUS, goBack: () => emit("back") };
+    return { sum, s, cfg, confHit, confHint, busyRerun, rerunErr, doRerun, fileName, countCheckText, exportHref, REPORT_STATUS, sourceA, sourceB, monitorMap, goBack: () => emit("back") };
   },
   template: `
   <div v-if="sum">
@@ -3656,12 +3730,14 @@ const ReportResultView = {
         </div>
       </div>
       <div class="card-body">
-        <div class="cfg-files">A: <code>{{ sum.file_a }}</code> &nbsp;↔&nbsp; B: <code>{{ sum.file_b }}</code></div>
+        <div class="cfg-files">{{ sourceA }}: <code>{{ sum.file_a }}</code> &nbsp;↔&nbsp; {{ sourceB }}: <code>{{ sum.file_b }}</code></div>
         <div class="form-grid" style="margin-top:12px;">
           <div class="field"><label>昵称</label><input :value="cfg.nickname" readonly /></div>
           <div class="field mono"><label>文件名</label><input :value="cfg.file_name" readonly /></div>
           <div class="field mono"><label>主键序列 KEYSEQ</label><input :value="cfg.key_seq" readonly placeholder="（空 = 整行对比）" /></div>
           <div class="field mono"><label>跳过序列 OMITSEQ</label><input :value="cfg.omit_seq" readonly placeholder="（空 = 不跳过）" /></div>
+          <div class="field"><label>{{ sourceA }} 来源名称（A 分区显示名）</label><input :value="cfg.source_a || 'A'" readonly /></div>
+          <div class="field"><label>{{ sourceB }} 来源名称（B 分区显示名）</label><input :value="cfg.source_b || 'B'" readonly /></div>
         </div>
         <div style="margin-top:10px;font-size:12px;color:var(--text-soft);">{{ confHint }}</div>
         <div class="error-box" v-if="rerunErr" style="margin-top:10px;">{{ rerunErr }}</div>
@@ -3709,15 +3785,15 @@ const ReportResultView = {
 
       <!-- key 含 finished_at：就地重跑完成后强制分区重挂载重新取数 -->
       <ReportZone :job-id="jobId" section="header" zone="all" title="报表头 · 全部行对照（差异字符高亮）" tone="diff"
-                  :default-open="true" sourceA="A" sourceB="B" :field-names="s.field_names || []" :key="'h' + jobId + '-' + (sum.finished_at || 0)" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :field-names="s.field_names || []" :monitor-map="monitorMap" :key="'h' + jobId + '-' + (sum.finished_at || 0)" />
       <ReportZone :job-id="jobId" section="footer" zone="all" title="报表尾 · 全部行对照（差异字符高亮）" tone="diff"
-                  :default-open="true" sourceA="A" sourceB="B" :field-names="s.field_names || []" :key="'f' + jobId + '-' + (sum.finished_at || 0)" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :field-names="s.field_names || []" :monitor-map="monitorMap" :key="'f' + jobId + '-' + (sum.finished_at || 0)" />
       <ReportZone :job-id="jobId" section="data" zone="diff" title="业务内容 · 部分匹配" tone="diff"
-                  :default-open="true" sourceA="A" sourceB="B" :field-names="s.field_names || []" :key="'d1' + jobId + '-' + (sum.finished_at || 0)" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :field-names="s.field_names || []" :monitor-map="monitorMap" :key="'d1' + jobId + '-' + (sum.finished_at || 0)" />
       <ReportZone :job-id="jobId" section="data" zone="unmatched" title="业务内容 · 单侧不匹配" tone="unmatched"
-                  :default-open="true" sourceA="A" sourceB="B" :key="'d2' + jobId + '-' + (sum.finished_at || 0)" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :monitor-map="monitorMap" :key="'d2' + jobId + '-' + (sum.finished_at || 0)" />
       <ReportZone :job-id="jobId" section="data" zone="equal" title="业务内容 · 完全匹配（已按字段排序对齐）" tone="equal"
-                  :default-open="false" sourceA="A" sourceB="B" :key="'d3' + jobId + '-' + (sum.finished_at || 0)" />
+                  :default-open="false" :source-a="sourceA" :source-b="sourceB" :monitor-map="monitorMap" :key="'d3' + jobId + '-' + (sum.finished_at || 0)" />
     </template>
   </div>
   <div v-else class="loading">加载中…</div>`,

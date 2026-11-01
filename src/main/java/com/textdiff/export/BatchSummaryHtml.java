@@ -94,9 +94,9 @@ public final class BatchSummaryHtml {
             String srcB = str(discard.get("src_b"), str(p.get("src_b"), "B"));
             List<Map<String, Object>> rows = (List<Map<String, Object>>) discard.get("rows");
             searchBox(sb, "discTable", rows == null ? 0 : rows.size());
-            sb.append("<table id=\"discTable\"><thead><tr><th>昵称</th><th>归属组</th><th>实际文件名</th><th>字段序号</th><th>字段名</th><th>字段含义</th><th>")
+            sb.append("<table id=\"discTable\"><thead><tr><th>昵称</th><th>归属组</th><th>实际文件名</th><th>字段序号</th><th>字段名</th><th>字段含义</th><th>字段类型</th><th>")
                     .append(esc(srcA)).append("的所有取值</th><th>")
-                    .append(esc(srcB)).append("的所有取值</th><th>是否匹配</th></tr></thead><tbody>\n");
+                    .append(esc(srcB)).append("的所有取值</th><th>判定结果</th></tr></thead><tbody>\n");
             for (Map<String, Object> r : rows) {
                 sb.append("<tr data-nick=\"").append(esc(str(r.get("nickname")))).append("\" data-group=\"")
                         .append(esc(str(r.get("group")))).append("\"><td>")
@@ -105,17 +105,19 @@ public final class BatchSummaryHtml {
                         .append(esc(str(r.get("file_name")))).append("</td><td>")
                         .append(str(r.get("col_seq"))).append("</td><td>")
                         .append(esc(str(r.get("field_name")))).append("</td><td>")
-                        .append(esc(str(r.get("field_meaning")))).append("</td><td class=\"vals\">")
+                        .append(esc(str(r.get("field_meaning")))).append("</td><td>")
+                        .append(esc(str(r.get("type_label")))).append("</td><td class=\"vals\">")
                         .append(esc(valuesHtml(r, true, srcA))).append("</td><td class=\"vals\">")
                         .append(esc(valuesHtml(r, false, srcB))).append("</td><td>")
                         .append(matchBadge(r)).append("</td></tr>\n");
             }
             sb.append("</tbody></table>\n");
             sb.append("<p class=\"note\">取值按首次出现顺序去重（每侧上限 ").append(DiscardColsService.MAX_VALUES)
-                    .append(" 个）；（空）= 栏位存在但值为空。是否匹配：")
-                    .append(esc(str(p.get("src_b"), "B"))).append("侧取值为")
+                    .append(" 个）；（空）= 栏位存在但值为空。判定结果按字段类型：1 废弃字段 / 4 数据治理 = ")
+                    .append(esc(str(p.get("src_b"), "B"))).append("侧取值应为")
                     .append(esc(str(p.get("src_a"), "A")))
-                    .append("侧取值的子集或相等 → 新线输出正常，否则 → 新线不为旧线子集；— = 原文不可采集无法判定。</p>\n");
+                    .append("侧子集（新线输出正常 / 新线不为旧线子集）；2 功能未实施 = 新旧线取值应完全一致")
+                    .append("（新旧线一致 / 新旧线不一致）；3 无法对比 = 不监控不列具体值；— = 原文不可采集无法判定。</p>\n");
         }
         sb.append("</section>\n");
 
@@ -184,9 +186,13 @@ public final class BatchSummaryHtml {
         return "<span class=\"badge " + Deviation.badgeClass(grade) + "\">" + esc(grade) + "</span>";
     }
 
-    /** 是否匹配徽章：true 绿（新线输出正常）/ false 红（新线不为旧线子集）/ null 灰（无法判定）。 */
+    /** 判定结果徽章：类型 3 = 不监控（无色）；true 绿 / false 红 / null 灰（无法判定）。 */
     private static String matchBadge(Map<String, Object> r) {
         Object m = r.get("matched");
+        int type = r.get("field_type") instanceof Number n ? n.intValue() : 0;
+        if (!com.textdiff.store.DiscardField.monitored(type)) {
+            return "<span class=\"badge\">" + esc(DiscardColsService.matchText(r)) + "</span>";
+        }
         if (m == null) return "—";
         String cls = Boolean.TRUE.equals(m) ? "b-green" : "b-red";
         return "<span class=\"badge " + cls + "\">" + esc(DiscardColsService.matchText(r)) + "</span>";
@@ -208,9 +214,13 @@ public final class BatchSummaryHtml {
         return g.isBlank() ? "全部文本（未选分组）" : "分组「" + g + "」（仅分组成员命中的文本）";
     }
 
-    /** 监测取值展示（HTML 转义前）：与 CSV 同语义（(空)/顿号连接/截断标注/原文缺失标注）。 */
+    /** 监测取值展示（HTML 转义前）：与 CSV 同语义（类型 3 不监控不列值/(空)/顿号连接/截断标注/原文缺失标注）。 */
     @SuppressWarnings("unchecked")
     static String valuesHtml(Map<String, Object> row, boolean sideA, String src) {
+        int type = row.get("field_type") instanceof Number n ? n.intValue() : 0;
+        if (!com.textdiff.store.DiscardField.monitored(type)) {
+            return "（不监控：" + com.textdiff.store.DiscardField.label(type) + "，仅报表展示）";
+        }
         if (Boolean.TRUE.equals(row.get("file_missing"))) {
             String err = str(row.get("error"), "");
             return "（" + src + " 原文不可采集" + (err.isBlank() ? "" : "：" + err) + "）";
