@@ -226,4 +226,52 @@ class JobManagerTest {
             assertTrue(meta.configLine.contains("COLS="), meta.configLine);
         }
     }
+
+    /** 压缩文件（*.gz.九位数字）按解压后逻辑名查字段映射：COLS 注入 configLine（前端/导出全链路可见）。 */
+    @Test
+    void gzFileInjectsColumnNamesByLogicalName(@TempDir Path dir) throws Exception {
+        Path dirA = dir.resolve("a");
+        Path dirB = dir.resolve("b");
+        Files.createDirectories(dirA);
+        Files.createDirectories(dirB);
+        gz(dirA.resolve("f1.txt.gz.202611061"), "k1 | 1\nk2 | 2\n");
+        gz(dirB.resolve("f1.txt.gz.202611061"), "k1 | 1\nk2 | 9\n");
+        try (DualJobStore store = new DualJobStore(dir.resolve("store"), false);
+             com.textdiff.store.FieldMapStore maps = new com.textdiff.store.FieldMapStore(
+                     dir.resolve("fieldmaps"), false);
+             JobManager mgr = new JobManager(store, dir.resolve("results"),
+                     new EngineConfig(2, EngineConfig.DEFAULT_MAX_IN_MEMORY_BYTES, "./temp", 4), maps);
+             ExtractService svc = new ExtractService(store, mgr,
+                     new com.textdiff.config.AppPaths(dir, dir), fakeAppConfig())) {
+            mgr.extractService = svc;
+            maps.importAll(
+                    List.of(new com.textdiff.store.FieldMaps.ReportType("R1", "f1.txt", "对公", "", "t.csv", 1L)),
+                    List.of(new com.textdiff.store.FieldMaps.ReportField("R1", 0, "客户号", "CHAR", ""),
+                            new com.textdiff.store.FieldMaps.ReportField("R1", 1, "余额", "DECIMAL", "")),
+                    List.of("t.csv"));
+            // 作业文件是 .gz 原文件，配置 glob 按逻辑名 f1.txt 命中；字段映射若按原始 .gz 名查询则注入不到
+            var batch = mgr.createBatch(dirA, dirB, List.of("NICK:*.txt:KEYSEQ=1"));
+            assertTrue(mgr.awaitIdle(60, TimeUnit.SECONDS));
+            JobRecord job = mgr.listJobs(batch.id).get(0);
+            assertEquals(JobRecord.DONE, job.status, job.error);
+            var cfg = com.textdiff.engine.Rules.parseLegacy(job.configLine, " | ", "|||||");
+            assertEquals(List.of("客户号", "余额"), cfg.columnNames, job.configLine);
+            var meta = ResultFiles.readMeta(Path.of(job.resultDir));
+            assertTrue(meta.configLine.contains("COLS="), meta.configLine);
+        }
+    }
+
+    private static void gz(Path file, String content) throws Exception {
+        try (var out = new java.util.zip.GZIPOutputStream(Files.newOutputStream(file))) {
+            out.write(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+    }
+
+    private static com.textdiff.config.AppConfig fakeAppConfig() {
+        return new com.textdiff.config.AppConfig(
+                new com.textdiff.config.ServerConfig("127.0.0.1", 0),
+                EngineConfig.defaults(),
+                new com.textdiff.config.StoreConfig(false),
+                new com.textdiff.config.AppConfig.AiConfig(false, "", "", "", 30));
+    }
 }

@@ -23,13 +23,17 @@ import java.util.zip.ZipOutputStream;
 public final class ExportAssembler {
     private ExportAssembler() {}
 
-    public static List<String> columnNames(JobRecord job) {
+    /** 作业对比配置统一解析（列名 COLS + 来源名 SRCA/SRCB）；解析失败返回缺省配置。 */
+    public static CompareConfig compareConfig(JobRecord job) {
         try {
-            CompareConfig cfg = Rules.parseLegacy(job.configLine, " | ", "|||||");
-            return cfg.columnNames;
+            return Rules.parseLegacy(job.configLine, " | ", "|||||");
         } catch (RuntimeException e) {
-            return List.of();
+            return new CompareConfig();
         }
+    }
+
+    public static List<String> columnNames(JobRecord job) {
+        return compareConfig(job).columnNames;
     }
 
     /** CTIS 虚拟子列描述（meta.dyn_cols；无则为 null——非展开作业零开销）。 */
@@ -64,16 +68,16 @@ public final class ExportAssembler {
      * 自动生成任务的主要 OOM 源。各分片表头列宽按整批统一（先流式扫一遍取最大栏位数）。
      */
     public static List<Path> writeFullCsv(Path dir, JobRecord job, Predicate<RowDiff> filter) {
-        List<String> names = columnNames(job);
+        CompareConfig cfg = compareConfig(job);
         List<com.textdiff.store.JobMeta.DynCol> dyn = dynCols(job);
         int width = scanFullWidth(job, filter);
         return streamCsv(dir, base(job), "_全量.csv", job, filter,
                 new PartedRowWriter() {
                     @Override public void header(java.io.BufferedWriter w) throws java.io.IOException {
-                        CsvExporter.writeFullHeader(w, names, width, dyn);
+                        CsvExporter.writeFullHeader(w, cfg.columnNames, width, dyn);
                     }
                     @Override public boolean row(java.io.BufferedWriter w, RowDiff r) throws java.io.IOException {
-                        CsvExporter.writeFullRow(w, r, names, width, dyn);
+                        CsvExporter.writeFullRow(w, r, cfg.columnNames, width, dyn, cfg.sourceA, cfg.sourceB);
                         return true;
                     }
                 });
@@ -87,7 +91,7 @@ public final class ExportAssembler {
      */
     public static List<Path> writeDiffCsv(Path dir, JobRecord job, Predicate<RowDiff> filter,
                                           java.util.Map<Integer, com.textdiff.store.DiscardField> monitor) {
-        List<String> names = columnNames(job);
+        CompareConfig cfg = compareConfig(job);
         List<com.textdiff.store.JobMeta.DynCol> dyn = dynCols(job);
         return streamCsv(dir, base(job), "_差异.csv", job, filter,
                 new PartedRowWriter() {
@@ -95,7 +99,8 @@ public final class ExportAssembler {
                         CsvExporter.writeDiffRecHeader(w);
                     }
                     @Override public boolean row(java.io.BufferedWriter w, RowDiff r) throws java.io.IOException {
-                        return CsvExporter.writeDiffRecRow(w, r, names, dyn, monitor);
+                        return CsvExporter.writeDiffRecRow(w, r, cfg.columnNames, dyn, monitor,
+                                cfg.sourceA, cfg.sourceB);
                     }
                 });
     }

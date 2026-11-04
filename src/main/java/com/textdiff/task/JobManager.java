@@ -516,11 +516,13 @@ public final class JobManager implements AutoCloseable {
         try {
             CompareConfig cfg = Rules.parseLegacy(job.configLine, DEFAULT_DELIM, DEFAULT_TRAILER);
             // 字段名映射注入：配置未显式携带 COLS 时按文件名查源系统字段配置（需求：列名显示在对比界面与导出）。
+            // 压缩文件（*.gz[.9位数字]）按解压后逻辑名查询（01A3020D.v01.gz.202611061 → 01A3020D.v01）。
             // CTIS 动态配置命中的报表优先（反向匹配，规避贪婪 glob 错配），其余走宽匹配（含 #占位符 模式）。
-            String ctisReportId = ctisDynReportId(job.fileA);
+            String fieldMapFile = ExtractService.lookupName(job.fileA);
+            String ctisReportId = ctisDynReportId(fieldMapFile);
             if (cfg.columnNames.isEmpty() && fieldMaps != null) {
                 String reportId = ctisReportId != null ? ctisReportId
-                        : fieldMaps.reportIdForFileWide(job.fileA);
+                        : fieldMaps.reportIdForFileWide(fieldMapFile);
                 if (reportId != null) {
                     List<String> names = fieldMaps.fieldNamesFor(reportId);
                     if (!names.isEmpty()) {

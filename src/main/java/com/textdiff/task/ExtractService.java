@@ -96,6 +96,13 @@ public final class ExtractService implements AutoCloseable {
         return n;
     }
 
+    /** 字段映射/配置查询名：压缩文件（*.gz[.9位数字]）取解压后逻辑名，普通文件取文件名。 */
+    public static String lookupName(String path) {
+        if (path == null || path.isBlank()) return path;
+        String n = Path.of(path).getFileName().toString();
+        return isGzipName(n) ? logicalName(n) : n;
+    }
+
     /** 作业是否需要走解压队列（PENDING、任一侧为压缩文件、尚未解压完成）。 */
     public boolean shouldExtract(JobRecord job) {
         if (job == null || !JobRecord.PENDING.equals(job.status)) return false;

@@ -27,6 +27,17 @@ class ExtractNamingTest {
         assertEquals("plain.txt", ExtractService.logicalName("plain.txt"));
     }
 
+    /** 字段映射/配置查询名：压缩文件按解压后逻辑名参与匹配（含路径），普通文件取文件名。 */
+    @Test
+    void 查询名_压缩文件取逻辑名() {
+        assertEquals("01A3020D.v01", ExtractService.lookupName("/data/batch/01A3020D.v01.gz.202611061"));
+        assertEquals("01A3020D.v01", ExtractService.lookupName("01A3020D.v01.gz"));
+        assertEquals("01A3020D.v01", ExtractService.lookupName("O:\\dirs\\01A3020D.v01"));
+        assertEquals("01A3020D.v01", ExtractService.lookupName("01A3020D.v01"));
+        assertNull(ExtractService.lookupName(null));
+        assertEquals(" ", ExtractService.lookupName(" ")); // 空白原样返回
+    }
+
     @Test
     void 组内排序_最新日期最后写入生效() {
         // 模拟组内版本排序语义（ExtractService.versions 升序 → 最新最后覆盖）

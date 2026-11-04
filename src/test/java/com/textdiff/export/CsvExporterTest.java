@@ -26,18 +26,41 @@ class CsvExporterTest {
         CsvExporter.writeFull(f, rows, List.of("主键", "金额", "备注"));
 
         List<String> lines = Files.readAllLines(f, StandardCharsets.UTF_8);
-        assertTrue(lines.get(0).replace("\ufeff", "").startsWith("键值,状态,差异栏位"));
-        assertTrue(lines.get(0).contains("金额(A),金额(B)"));
-        // 5 行数据 + 表头
-        assertEquals(6, lines.size());
-        // 差异栏位列：diff 行按「列号-栏位名；」拼接，equal/unmatched 行为空
-        assertTrue(lines.get(1).startsWith("k1,equal,,"));
-        assertTrue(lines.get(2).startsWith("k2,diff,2-金额；,"));
-        // onlyA 行 B 侧留空，onlyB 行 A 侧留空（宽度 = 最宽行 3 列；差异栏位为空时第三字段留空）
-        assertTrue(lines.get(3).startsWith("k3,unmatched_a,,k3,,3,,"));
-        assertTrue(lines.get(4).startsWith("k4,unmatched_b,,,k4,,4,"));
-        // trailer 行也在全量导出中
-        assertTrue(lines.stream().anyMatch(l -> l.startsWith("T1,diff,2-金额；,")));
+        // 单栏位表头：字段名(1-based 列序号)，不再区分 A/B
+        assertEquals("键值,状态,差异栏位,主键(1),金额(2),备注(3)", lines.get(0).replace("\ufeff", ""));
+        // equal 1 行 + diff 2 行（A/B 分区各一条）+ 单方存在 2 行 + trailer diff 2 行 + 表头
+        assertEquals(8, lines.size());
+        assertTrue(lines.get(1).startsWith("k1,完全匹配,,k1,1,x"));
+        assertTrue(lines.get(2).startsWith("k2,有差异·A,2-金额；,k2,2,y"));
+        assertTrue(lines.get(3).startsWith("k2,有差异·B,2-金额；,k2,9,y"));
+        // 单方存在行：单栏位取存在侧值
+        assertTrue(lines.get(4).startsWith("k3,仅A存在,,k3,3,"));
+        assertTrue(lines.get(5).startsWith("k4,仅B存在,,k4,4,"));
+        // trailer diff 行也按 A/B 分区两条
+        assertTrue(lines.stream().anyMatch(l -> l.startsWith("T1,有差异·A,2-金额；,T1,10,")));
+        assertTrue(lines.stream().anyMatch(l -> l.startsWith("T1,有差异·B,2-金额；,T1,20,")));
+    }
+
+    /** 状态导出名与前端分区文案一致，A/B 侧用配置来源名（SRCA/SRCB）替换，缺省回退 A/B。 */
+    @Test
+    void 状态导出名按来源名替换() {
+        assertEquals("完全匹配", CsvExporter.statusText("equal", "旧线", "新线"));
+        assertEquals("有差异", CsvExporter.statusText("diff", "旧线", "新线"));
+        assertEquals("仅旧线存在", CsvExporter.statusText("unmatched_a", "旧线", "新线"));
+        assertEquals("仅新线存在", CsvExporter.statusText("unmatched_b", "旧线", "新线"));
+        assertEquals("仅A存在", CsvExporter.statusText("unmatched_a", "", null));
+        assertEquals("仅B存在", CsvExporter.statusText("unmatched_b", null, ""));
+        assertEquals("未知状态", CsvExporter.statusText("未知状态", "A", "B"));
+    }
+
+    /** 全量表头无名回退：有名列出 字段名(序号)，无名回退 栏位N。 */
+    @Test
+    void 全量表头_无名栏位回退() {
+        assertEquals("主键(1)", CsvExporter.colHeader(List.of("主键"), 0));
+        assertEquals("F28(28)", CsvExporter.colHeader(
+                java.util.stream.IntStream.rangeClosed(1, 28).mapToObj(i -> "F" + i).toList(), 27));
+        assertEquals("栏位3", CsvExporter.colHeader(List.of("主键", ""), 2));
+        assertEquals("栏位1", CsvExporter.colHeader(null, 0));
     }
 
     @Test
@@ -46,9 +69,11 @@ class CsvExporterTest {
         List<RowDiff> rows = List.of(RowDiff.diff("k1", Status.SECTION_DATA,
                 new String[]{"a", "b", "c"}, new String[]{"a", "B", "C"}, new int[]{1, 2}));
         CsvExporter.writeFull(f, rows, List.of("主键", "金额"));
-        String line = Files.readAllLines(f, StandardCharsets.UTF_8).get(1);
-        // 栏位 1 有名 → 金额；栏位 2 超出映射 → 栏位3 回退
-        assertTrue(line.startsWith("k1,diff,2-金额；3-栏位3；,"), () -> line);
+        List<String> lines = Files.readAllLines(f, StandardCharsets.UTF_8);
+        // diff → A/B 分区各一行，栏位取本侧原值；差异栏位仅列序号+栏位名（无名回退 栏位3）
+        assertEquals(3, lines.size());
+        assertTrue(lines.get(1).startsWith("k1,有差异·A,2-金额；3-栏位3；,a,b,c"), () -> lines.get(1));
+        assertTrue(lines.get(2).startsWith("k1,有差异·B,2-金额；3-栏位3；,a,B,C"), () -> lines.get(2));
     }
 
     @Test

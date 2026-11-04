@@ -54,7 +54,8 @@ class ExportAssemblerSplitTest {
         assertEquals(2, parts.size());
         assertEquals("样例表_全量_001.csv", parts.get(0).getFileName().toString());
         assertEquals("样例表_全量_002.csv", parts.get(1).getFileName().toString());
-        assertEquals(ExportAssembler.SPLIT_ROWS + 3, // 表头 ×2 + 数据 20001
+        // 数据行 = equal 10001 条 + diff 10000 条（A/B 分区各一行）= 30001，表头 ×2
+        assertEquals(ExportAssembler.SPLIT_ROWS + 10003,
                 Files.readAllLines(parts.get(0), StandardCharsets.UTF_8).size()
                         + Files.readAllLines(parts.get(1), StandardCharsets.UTF_8).size());
         // 各分片表头一致（差异栏位列名），数据行不重叠：首片含 k0，末片含 k20000

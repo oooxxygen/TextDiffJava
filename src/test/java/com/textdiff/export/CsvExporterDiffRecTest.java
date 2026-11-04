@@ -55,7 +55,7 @@ class CsvExporterDiffRecTest {
         assertEquals(2, lines.length, "表头 + 一条整合记录");
         assertTrue(lines[0].startsWith("键值,状态,差异明细"));
         // 差异明细多行（引号内换行），两个前缀都出现、顺序按 diffCols；键值/状态列无特殊字符不加引号
-        assertTrue(lines[1].startsWith("k1,差异,\"[1-废弃字段 @2]"));
+        assertTrue(lines[1].startsWith("k1,有差异,\"[1-废弃字段 @2]"));
         assertTrue(lines[1].contains("[1-废弃字段 @2] A:'a2' B:'b2'"));
         assertTrue(lines[1].contains("[栏位不一致 @4] A:'a4' B:'b4'"));
         assertTrue(lines[1].indexOf("[1-废弃字段") < lines[1].indexOf("[栏位不一致"));

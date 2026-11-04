@@ -76,9 +76,11 @@ class CsvExporterCtisTest {
             CsvExporter.writeFullRow(w, r, List.of("键", "动态"), 2, dynCols);
         }
         List<String> lines = stripBom(f);
-        assertEquals(2, lines.size());
-        assertTrue(lines.get(0).endsWith(",107-1B（交易真实日期）(A),107-1B（交易真实日期）(B)"));
-        assertTrue(lines.get(1).endsWith(",1,2"));
+        // 单栏位表头（真实列 字段名(序号) + 虚拟子列完整列名）；diff → A/B 分区各一行
+        assertEquals(3, lines.size());
+        assertTrue(lines.get(0).endsWith(",键(1),动态(2),107-1B（交易真实日期）"));
+        assertTrue(lines.get(1).endsWith("k1,有差异·A,107-1B（交易真实日期）；,k1,~~1B1,1"));
+        assertTrue(lines.get(2).endsWith("k1,有差异·B,107-1B（交易真实日期）；,k1,~~1B2,2"));
     }
 
     @Test
