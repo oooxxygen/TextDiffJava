@@ -2351,7 +2351,8 @@ const BatchView = {
 
 /* ---------- 设置页（AI 接入配置） ---------- */
 const SettingsPage = {
-  setup() {
+  emits: ["edit-split-config"],
+  setup(props, { emit }) {
     const providers = AI_PROVIDERS;
     const form = reactive({ provider: "custom", protocol: "openai", base_url: "", api_key: "", model: "", timeout: 60, enabled: false, max_concurrency: 2 });
     const apiKeySet = ref(false);
@@ -2590,7 +2591,22 @@ const SettingsPage = {
     }
     onMounted(loadJvm);
 
+    // ---- 拆分规则管理（文本拆分规则在此查看/修改/删除，编辑跳转拆分页） ----
+    const splitCfgs = ref([]);
+    async function loadSplitConfigs() {
+      try { splitCfgs.value = (await api("/api/split-configs")).configs || []; } catch (e) {}
+    }
+    onMounted(loadSplitConfigs);
+    async function delSplitConfig(nick) {
+      const go = await askConfirm("确认删除拆分规则配置「" + nick + "」？", { danger: true, okText: "删除" });
+      if (!go) return;
+      try { await api("/api/split-configs/" + encodeURIComponent(nick), { method: "DELETE" });
+            await loadSplitConfigs(); notify("已删除「" + nick + "」", "ok"); }
+      catch (e) { notify(e.message, "error"); }
+    }
+
     return { providers, form, apiKeySet, busy, toast, test, curModels, pickProvider, save, testConn,
+             splitCfgs, loadSplitConfigs, delSplitConfig,
              rt, saveRuntime, imp, onImpFiles, importStructure,
              base, onBaseFiles, importBaseline, exportConfigs,
              cs, onCsFile, importCharset,
@@ -2711,6 +2727,25 @@ const SettingsPage = {
           <span v-if="discard.status && discard.status.count" class="type-counts"
                 title="按字段类型分布：未指定 / 废弃字段 / 功能未实施 / 无法对比 / 数据治理">类型分布：未指定 {{ (discard.status.type_counts||{})['0'] || 0 }} · 废弃 {{ (discard.status.type_counts||{})['1'] || 0 }} · 未实施 {{ (discard.status.type_counts||{})['2'] || 0 }} · 无法对比 {{ (discard.status.type_counts||{})['3'] || 0 }} · 治理 {{ (discard.status.type_counts||{})['4'] || 0 }}</span>
           <span v-if="discard.msg" :style="{ color: discard.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ discard.msg }}</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">🪓 拆分规则管理（文本拆分）</div>
+      <div class="card-body">
+        <p class="ai-hint" style="margin-top:0;">文本拆分的分组规则配置（按配置昵称持久化）：<b>规则 = 分组</b>，按序求值、首条命中即归属，未命中归「其他」；规则内多条件支持 <b>且/或</b> 组合，条件类型：定值 / 包含 / 前缀 / 后缀 / <b>栏位正则</b> / <b>范围（起~止）</b>。<b>新增与修改</b>在「文本拆分」页编辑后保存；此处统一查看、修改（跳转）与删除。</p>
+        <div class="btn-row">
+          <button class="btn ghost" @click="emit('edit-split-config', '')">＋ 新增拆分规则</button>
+          <button class="btn ghost" @click="loadSplitConfigs">刷新</button>
+        </div>
+        <div v-if="!splitCfgs.length" class="hint" style="color:var(--muted);font-size:13px;">暂无已保存的拆分规则配置。</div>
+        <div class="job-row" v-for="c in splitCfgs" :key="c.nickname">
+          <span class="jid">{{ c.nickname }}</span>
+          <span class="count">{{ (c.rules||[]).length }} 条规则 · 分隔符「{{ c.delimiter }}」</span>
+          <span class="row-actions" @click.stop>
+            <button class="mini-btn" @click="emit('edit-split-config', c.nickname)">修改</button>
+            <button class="mini-btn danger" @click="delSplitConfig(c.nickname)">删除</button>
+          </span>
         </div>
       </div>
     </div>
@@ -3072,18 +3107,23 @@ const TaskManagerPage = {
 /* ---------- 根组件 ---------- */
 /* ---------- 文本拆分：算符中文映射 ---------- */
 const SPLIT_OPS = [
-  { v: "eq", t: "等于" },
+  { v: "eq", t: "等于（定值）" },
   { v: "contains", t: "包含" },
   { v: "prefix", t: "前缀（以…开头）" },
   { v: "suffix", t: "后缀（以…结尾）" },
-  { v: "regex", t: "正则" },
+  { v: "regex", t: "栏位正则" },
+  { v: "range", t: "范围（起~止）" },
 ];
-const OP_TEXT = { eq: "等于", contains: "包含", prefix: "以…开头", suffix: "以…结尾", regex: "匹配正则" };
+const OP_TEXT = { eq: "等于", contains: "包含", prefix: "以…开头", suffix: "以…结尾", regex: "匹配正则", range: "范围" };
 function condText(c) { return "列" + c.col + " " + (OP_TEXT[c.op] || c.op) + " " + JSON.stringify(c.value); }
-function ruleText(r) { return (r.conditions || []).map(condText).join(" 且 "); }
+function ruleText(r) {
+  const join = r.logic === "any" ? " 或 " : " 且 ";
+  return (r.conditions || []).map(condText).join(join);
+}
 
 /* ---------- 文本拆分：配置编辑 + 输入 + 提交 ---------- */
 const SplitPage = {
+  props: ["editNick"],
   emits: ["open-split"],
   setup(props, { emit }) {
     const cfg = reactive({ nickname: "", delimiter: " | ", encoding: "auto",
@@ -3102,20 +3142,23 @@ const SplitPage = {
     }
     onMounted(loadConfigs);
 
-    function addRule() { cfg.rules.push({ name: "", conditions: [{ col: 1, op: "eq", value: "" }] }); }
+    function addRule() { cfg.rules.push({ name: "", logic: "all", conditions: [{ col: 1, op: "eq", value: "" }] }); }
     function removeRule(i) { cfg.rules.splice(i, 1); }
     function addCond(r) { r.conditions.push({ col: 1, op: "eq", value: "" }); }
     function removeCond(r, j) { r.conditions.splice(j, 1); }
 
-    async function pickConfig() {
-      if (!pickNick.value) return;
+    async function pickConfigByNick(nick) {
+      if (!nick) return;
       try {
-        const c = await api("/api/split-configs/get?nickname=" + encodeURIComponent(pickNick.value));
+        const c = await api("/api/split-configs/get?nickname=" + encodeURIComponent(nick));
         cfg.nickname = c.nickname; cfg.delimiter = c.delimiter; cfg.encoding = c.encoding;
-        cfg.trailer_prefix = c.trailer_prefix; cfg.rules = c.rules || [];
-        err.value = "";
+        cfg.trailer_prefix = c.trailer_prefix;
+        cfg.rules = (c.rules || []).map(r => ({ ...r, logic: r.logic || "all" }));
+        pickNick.value = nick; err.value = "";
       } catch (e) { err.value = e.message; }
     }
+    async function pickConfig() { await pickConfigByNick(pickNick.value); }
+    watch(() => props.editNick, (n) => pickConfigByNick(n), { immediate: true });
 
     async function saveConfig() {
       err.value = "";
@@ -3142,7 +3185,7 @@ const SplitPage = {
       const ins = {};
       if (inputs.a_path) ins.a = inputs.a_path;
       if (inputs.b_path) ins.b = inputs.b_path;
-      if (!ins.a && !ins.b) { err.value = "至少需要一个输入（A 或 B）"; return; }
+      if (!ins.a) { err.value = "A 区文件必填（B 区可选）"; return; }
       busy.value = true;
       try {
         const r = await jpost("/api/split", {
@@ -3187,6 +3230,10 @@ const SplitPage = {
               <div style="display:flex;gap:8px;align-items:center;">
                 <b>规则 {{ i + 1 }}</b>
                 <input v-model="r.name" placeholder="组名（如 养老）" style="flex:1;" />
+                <select v-model="r.logic" title="规则内多条件的组合方式">
+                  <option value="all">全部满足（且）</option>
+                  <option value="any">任一满足（或）</option>
+                </select>
                 <button class="mini-btn" @click="addCond(r)">+ 条件</button>
                 <button class="mini-btn danger" @click="removeRule(i)">删规则</button>
               </div>
@@ -3197,13 +3244,13 @@ const SplitPage = {
                 <select v-model="c.op">
                   <option v-for="o in ops" :key="o.v" :value="o.v">{{ o.t }}</option>
                 </select>
-                <input v-model="c.value" placeholder="值 / 正则" style="flex:1;" />
+                <input v-model="c.value" placeholder="值 / 正则 / 起~止" style="flex:1;" />
                 <button class="mini-btn danger" @click="removeCond(r, j)">×</button>
               </div>
             </div>
           </div>
           <button class="btn ghost" @click="addRule">+ 新增规则</button>
-          <span class="hint" style="margin-left:10px;color:var(--muted);">多条件为「且」关系；首条命中即归属，未命中归「其他」。</span>
+          <span class="hint" style="margin-left:10px;color:var(--muted);">规则内多条件可选「且/或」组合；多条规则按序求值，首条命中即归属，未命中归「其他」。可在【设置 → 拆分规则管理】查看与删除已存配置。</span>
         </div>
       </div>
     </div>
@@ -3257,7 +3304,8 @@ const SplitResultView = {
       } catch (e) { notify(e.message, "error"); }
     }
     const isOpen = (side, group) => !!opened[side + ":" + group];
-    const exportUrl = (fmt) => "/api/split-jobs/" + props.jobId + "/export?fmt=" + fmt;
+    const exportUrl = (fmt, bucket) => "/api/split-jobs/" + props.jobId + "/export?fmt=" + fmt
+        + (bucket ? "&bucket=" + bucket : "");
 
     return { meta, opened, openGroup, isOpen, exportUrl, ruleText, fmtTime,
              sides: ["a", "b"], back: () => emit("back") };
@@ -3284,6 +3332,8 @@ const SplitResultView = {
           <li>其他：以上规则均未命中的记录</li>
         </ul>
         <div style="margin-top:8px;">
+          <a class="btn ghost" :href="exportUrl('zip','matched')">⬇ 符合条件文本(zip)</a>
+          <a class="btn ghost" :href="exportUrl('zip','other')">⬇ 不符合条件文本(zip)</a>
           <a class="btn ghost" :href="exportUrl('zip')">⬇ 导出各组文本(zip)</a>
           <a class="btn ghost" :href="exportUrl('xlsx')">⬇ 导出汇总(xlsx)</a>
         </div>
@@ -4375,6 +4425,8 @@ const App = {
     }
     function backToJobs() { tab.value = backTab.value === "tasks" ? "tasks" : "jobs"; }
     function openSplit(id) { splitJobId.value = id; tab.value = "splitresult"; }
+    const splitEditNick = ref("");
+    function editSplitConfig(nick) { splitEditNick.value = nick || ""; tab.value = "split"; }
     // 报表对比导航（fromJobs：从结果界面进入时，返回键回作业列表而非报表对比页）
     const reportBackTab = ref("report");
     function openReportBatch(id, from) { reportBackTab.value = from === "jobs" ? "jobs" : "report"; reportBatchId.value = id; tab.value = "reportbatch"; }
@@ -4392,7 +4444,7 @@ const App = {
       tab.value = "batchreport";
     }
     const summaryBackText = computed(() => SUMMARY_BACK[summaryBackTab.value] || "返回作业列表");
-    return { tab, jobId, batchId, backBatch, backTab, resultNonce, splitJobId, encodings,
+    return { tab, jobId, batchId, backBatch, backTab, resultNonce, splitJobId, encodings, splitEditNick, editSplitConfig,
              reportBatchId, reportJobId, reportBackTab, customBatchId, customJobId,
              summaryBatchId, summaryBackTab, summaryBackText,
              onSubmitted, onBatched, openJob, openBatch, openChild, openJobFromTasks,
@@ -4432,7 +4484,7 @@ const App = {
     <JobList v-else-if="tab==='jobs'" @open="openJob" @open-batch="openBatch" @open-split="openSplit"
              @open-report-batch="openReportBatch" @open-custom-batch="openCustomBatch" />
     <TaskManagerPage v-else-if="tab==='tasks'" @open="openJobFromTasks" @open-batch="openBatchFromTasks" />
-    <SplitPage v-else-if="tab==='split'" @open-split="openSplit" />
+    <SplitPage v-else-if="tab==='split'" @open-split="openSplit" :edit-nick="splitEditNick" />
     <SplitResultView v-else-if="tab==='splitresult' && splitJobId" :job-id="splitJobId" :key="splitJobId" @back="backToJobs" />
     <BatchView v-else-if="tab==='batch' && batchId" :batch-id="batchId" :key="batchId" @open="openChild"
                @summary="openSummary(batchId, 'batch')" @back="backToJobs" />
@@ -4442,7 +4494,7 @@ const App = {
                       :key="summaryBatchId" :back-text="summaryBackText"
                       @back="tab = summaryBackTab" />
     <ConfigManagePage v-else-if="tab==='configmgr'" :encodings="encodings" />
-    <SettingsPage v-else-if="tab==='settings'" />
+    <SettingsPage v-else-if="tab==='settings'" @edit-split-config="editSplitConfig" />
     <AppDialog />
     <AppToast />
   </div>`,

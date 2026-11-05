@@ -535,6 +535,11 @@ public final class JobManager implements AutoCloseable {
             try (sink) {
                 Path inputA = resolveInput(job, job.fileA);
                 Path inputB = resolveInput(job, job.fileB);
+                // 特殊编码栏位预转码（需求：字段配置为 UTF16 格式的文件，逐行按二进制读取后按栏位转码）：
+                // 非 EBCDIC 文件且字符集映射含 UTF-16 族栏位 → 生成预转码临时文件参与对比；
+                // EBCDIC 主机文件仍走 FieldTranscoder 逐值转码（已验收路径，保持不变）。
+                inputA = normalizeSpecialCharset(inputA, cfg.encodingA, cfg.delimiter, dir, "a");
+                inputB = normalizeSpecialCharset(inputB, cfg.encodingB, cfg.delimiter, dir, "b");
                 com.textdiff.engine.FieldTranscoder transA = resolveTranscoder(inputA.toString(), cfg.encodingA, cfg.delimiter);
                 com.textdiff.engine.FieldTranscoder transB = resolveTranscoder(inputB.toString(), cfg.encodingB, cfg.delimiter);
                 // CTIS 动态栏位：parm_report_type=CTS 且适用清单命中 → 父栏位对比时按 '~~' 编号展开虚拟子列
@@ -818,6 +823,33 @@ public final class JobManager implements AutoCloseable {
      * 特殊编码字段转码器解析：文件名 → 数据表英文名 → 列字符集映射，与文件实际解析编码绑定。
      * 未导入映射 / 文件无对应表 / 文件编码非主机单字节字符集时返回 null（零开销路径）。
      */
+    /**
+     * 特殊编码栏位预转码（需求：字段配置为 UTF16 格式的对比文件 → 逐行按二进制读取、UTF-16 栏位转码）。
+     * 仅字符集映射命中该文件且含 UTF-16 族栏位、且文件编码非主机单字节字符集（EBCDIC 走
+     * {@code FieldTranscoder} 逐值转码）时生成预转码临时文件；任何失败返回原文件不阻断对比。
+     */
+    private Path normalizeSpecialCharset(Path input, String encodingCfg, String delimiter,
+                                         Path jobDir, String tag) {
+        if (charsetMaps == null || input == null) return input;
+        try {
+            String resolved = com.textdiff.engine.Encoding.resolveEncoding(input, encodingCfg, delimiter);
+            if (com.textdiff.engine.FieldCharsetNormalizer.isHostEncodingName(resolved)) return input;
+            String table = charsetMaps.tableForFile(input.toString(), fieldMaps);
+            if (table == null) return input;
+            var cols = charsetMaps.colCharsetsForTable(table);
+            if (cols == null || cols.isEmpty()
+                    || !com.textdiff.engine.FieldCharsetNormalizer.hasUtf16Field(cols)) {
+                return input;
+            }
+            return com.textdiff.engine.FieldCharsetNormalizer.normalize(
+                    input, resolved, delimiter, cols, charsetMaps.colFieldLengthsForTable(table),
+                    jobDir.resolve("tmp"), tag);
+        } catch (Exception e) {
+            System.err.println("[job] 特殊编码预转码跳过（按原文件对比）: " + e);
+            return input;
+        }
+    }
+
     private com.textdiff.engine.FieldTranscoder resolveTranscoder(String filePath, String encoding,
                                                                   String delimiter) {
         if (charsetMaps == null || filePath == null || filePath.isBlank()) return null;

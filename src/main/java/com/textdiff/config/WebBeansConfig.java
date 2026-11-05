@@ -59,6 +59,25 @@ public class WebBeansConfig {
         return new com.textdiff.store.CompareGroupStore(paths.baseDir().resolve("store"), cfg.store().enabled());
     }
 
+    /** 拆分规则配置存储（配置管理界面维护，JSONL）。 */
+    @Bean(destroyMethod = "close")
+    public com.textdiff.store.SplitConfigStore splitConfigStore(AppPaths paths) {
+        return new com.textdiff.store.SplitConfigStore(paths.baseDir().resolve("store"));
+    }
+
+    /** 拆分作业记录存储（JSONL）。 */
+    @Bean(destroyMethod = "close")
+    public com.textdiff.store.SplitJobStore splitJobStore(AppPaths paths) {
+        return new com.textdiff.store.SplitJobStore(paths.baseDir().resolve("store"));
+    }
+
+    /** 文本拆分执行器（A 必填/B 可选，单线程顺序执行）。 */
+    @Bean(destroyMethod = "close")
+    public com.textdiff.task.SplitManager splitManager(com.textdiff.store.SplitJobStore splitJobs,
+                                                       AppPaths paths) {
+        return new com.textdiff.task.SplitManager(splitJobs, paths);
+    }
+
     @Bean(destroyMethod = "close")
     public JobManager jobManager(DualJobStore store, AppPaths paths, AppConfig cfg,
                                  com.textdiff.store.FieldMapStore fieldMaps,

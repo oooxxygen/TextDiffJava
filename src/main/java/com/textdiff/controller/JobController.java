@@ -27,13 +27,16 @@ public class JobController {
     private final JobStore store;
     private final com.textdiff.ai.AiAnalyzer analyzer;
     private final com.textdiff.store.TaskStore taskStore;
+    private final com.textdiff.store.SplitJobStore splitJobs;
 
     public JobController(JobManager jobs, JobStore store, com.textdiff.ai.AiAnalyzer analyzer,
-                         com.textdiff.store.TaskStore taskStore) {
+                         com.textdiff.store.TaskStore taskStore,
+                         com.textdiff.store.SplitJobStore splitJobs) {
         this.jobs = jobs;
         this.store = store;
         this.analyzer = analyzer;
         this.taskStore = taskStore;
+        this.splitJobs = splitJobs;
     }
 
     @GetMapping("/joblist")
@@ -51,7 +54,17 @@ public class JobController {
         }
         List<Map<String, Object>> standalone = new ArrayList<>();
         for (JobRecord j : standaloneRecs) standalone.add(ApiViews.jobBrief(j, store, false));
-        return Map.of("batches", batches, "standalone", standalone, "split_jobs", List.of());
+        List<Map<String, Object>> splits = new ArrayList<>();
+        for (com.textdiff.store.SplitJob s : splitJobs.list()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("job_id", s.jobId());
+            m.put("label", s.label());
+            m.put("status", s.status());
+            m.put("created_at", s.createdAt());
+            m.put("summary", s.summary());
+            splits.add(m);
+        }
+        return Map.of("batches", batches, "standalone", standalone, "split_jobs", splits);
     }
 
     @GetMapping("/jobs/{id}/meta")

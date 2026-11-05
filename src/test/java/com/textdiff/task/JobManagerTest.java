@@ -261,6 +261,76 @@ class JobManagerTest {
         }
     }
 
+    /**
+     * 需求对抗：字符集映射配置 UTF-16 栏位、文件主体 GBK（非 EBCDIC）→ 预转码后与 UTF-8 可读文本
+     * 完全匹配（对侧正常文本不被误转）；映射未命中表名的文件不受影响。
+     */
+    @Test
+    void charsetMapUtf16FieldNormalizedBeforeCompare(@TempDir Path dir) throws Exception {
+        java.nio.charset.Charset gbk = java.nio.charset.Charset.forName("gb18030");
+        Path dirA = dir.resolve("a");
+        Path dirB = dir.resolve("b");
+        Files.createDirectories(dirA);
+        Files.createDirectories(dirB);
+        // A 侧：栏位 1（0-based）为 UTF-16BE 定宽存储（填充 NUL 至 2×10 字节）的「张三」，其余 GBK；
+        // B 侧：UTF-8 可读文本
+        byte[] lineA = concatBytes("k1 | ".getBytes(gbk),
+                utf16Fixed("张三", 10, false), " | 101".getBytes(gbk));
+        Files.write(dirA.resolve("utf16t.txt"), concatBytes(lineA, new byte[]{'\r', '\n'}));
+        Files.writeString(dirB.resolve("utf16t.txt"), "k1 | 张三 | 101\n");
+        // 对照文件（无映射命中）：A 侧 GBK 文本 vs B 侧 UTF-8 相同内容 → 正常对比
+        Files.write(dirA.resolve("plain.txt"), "p1 | 甲乙 | 9\n".getBytes(gbk));
+        Files.writeString(dirB.resolve("plain.txt"), "p1 | 甲乙 | 9\n");
+
+        try (DualJobStore store = new DualJobStore(dir.resolve("store"), false);
+             com.textdiff.store.FieldMapStore maps = new com.textdiff.store.FieldMapStore(
+                     dir.resolve("fieldmaps"), false);
+             com.textdiff.store.CharsetMapStore cmap = new com.textdiff.store.CharsetMapStore(
+                     dir.resolve("cmap"), false);
+             JobManager mgr = new JobManager(store, dir.resolve("results"),
+                     new EngineConfig(2, EngineConfig.DEFAULT_MAX_IN_MEMORY_BYTES, "./temp", 4),
+                     maps, cmap)) {
+            cmap.importAll(List.of(
+                    new com.textdiff.store.CharsetMaps.FieldCharset("utf16t", 1, "UTF16", "NAME", "10", "t", 0)));
+            // 缺省分隔符 " | "（显式 DELIM= | 的尾随空格会被配置解析剥离，此处用缺省值对齐文件实际分隔符）
+            var batch = mgr.createBatch(dirA, dirB, List.of("NICK:*.txt:KEYSEQ=1"));
+            assertTrue(mgr.awaitIdle(60, TimeUnit.SECONDS));
+            for (JobRecord j : mgr.listJobs(batch.id)) {
+                assertEquals(JobRecord.DONE, j.status, j.error);
+                String dump = "";
+                try {
+                    dump = Files.readString(Path.of(j.resultDir).resolve("result.jsonl"));
+                } catch (Exception ignored) {
+                }
+                final String dumpF = dump;
+                assertEquals(0, j.diffCount, () -> "作业 " + j.fileA + " 应完全匹配；result=" + dumpF
+                        + "\nconfigLine=" + j.configLine + "\nfileA=" + j.fileA);
+                assertEquals(1, j.totalA, j.error);
+            }
+        }
+    }
+
+    /** UTF-16 栏位定宽字节（值填充 NUL 至声明长度）。 */
+    private static byte[] utf16Fixed(String v, int declaredLen, boolean le) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(v);
+        for (int i = v.length(); i < declaredLen; i++) sb.append('\u0000');
+        return sb.toString().getBytes(le ? java.nio.charset.StandardCharsets.UTF_16LE
+                : java.nio.charset.StandardCharsets.UTF_16BE);
+    }
+
+    private static byte[] concatBytes(byte[]... parts) {
+        int len = 0;
+        for (byte[] p : parts) len += p.length;
+        byte[] out = new byte[len];
+        int off = 0;
+        for (byte[] p : parts) {
+            System.arraycopy(p, 0, out, off, p.length);
+            off += p.length;
+        }
+        return out;
+    }
+
     private static void gz(Path file, String content) throws Exception {
         try (var out = new java.util.zip.GZIPOutputStream(Files.newOutputStream(file))) {
             out.write(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));

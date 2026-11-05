@@ -104,6 +104,21 @@ public final class CharsetMapStore implements AutoCloseable {
         return out;
     }
 
+    /** 表内各栏位的声明「数据最大长度」（定宽信号：UTF-16 栏位字节宽 = 2×声明长度）；不可解析为 0。 */
+    public synchronized Map<Integer, Integer> colFieldLengthsForTable(String tableName) {
+        Map<Integer, CharsetMaps.FieldCharset> m = tableName == null ? null : tables.get(tableName);
+        if (m == null || m.isEmpty()) return Map.of();
+        Map<Integer, Integer> out = new LinkedHashMap<>();
+        for (Map.Entry<Integer, CharsetMaps.FieldCharset> e : m.entrySet()) {
+            try {
+                out.put(e.getKey(), Integer.parseInt(e.getValue().fieldLength().strip()));
+            } catch (RuntimeException ex) {
+                out.put(e.getKey(), 0);
+            }
+        }
+        return out;
+    }
+
     public synchronized boolean hasTable(String tableName) {
         return tableName != null && tables.containsKey(tableName);
     }
