@@ -171,18 +171,26 @@ public class SplitController {
 
     // ---- 导出实现 ----
 
-    /** bucket=matched → 规则组；other → 其他组；all → 全部。文件名 {侧}_{组名}.txt。 */
+    /**
+     * bucket=matched → 规则组；other → 其他组；all → 全部。
+     * zip 条目保留<b>原文件名</b>（需求：拆分文本与原文件同名，便于直接回灌对比）：
+     * {@code {A|B}/{组名}/{原文件名}}——侧别与组名进目录层级，避免两侧同名冲突。
+     */
     private ResponseEntity<byte[]> zipDownload(SplitJob job, String bucket) {
         boolean matched = "matched".equals(bucket);
         boolean other = "other".equals(bucket);
         List<String> wanted = groupNames(job, matched, other);
         Path dir = Path.of(job.resultDir());
-        List<Path> files = new ArrayList<>();
+        LinkedHashMap<Path, String> files = new LinkedHashMap<>();
         for (String side : new String[]{"a", "b"}) {
             if (sideRec(job, side) == null) continue;
+            String sideFolder = "a".equals(side) ? "A" : "B";
+            String original = originalName(job, side);
             for (String g : wanted) {
                 Path f = dir.resolve(SplitManager.sanitize(side) + "_" + SplitManager.sanitize(g) + ".txt");
-                if (Files.isRegularFile(f)) files.add(f);
+                if (Files.isRegularFile(f)) {
+                    files.put(f, sideFolder + "/" + SplitManager.sanitize(g) + "/" + original);
+                }
             }
         }
         if (files.isEmpty()) throw notFound("拆分产物尚未生成或该侧无输入");
@@ -198,9 +206,9 @@ public class SplitController {
             zip = tmp.resolve(name);
             try (ZipOutputStream z = new ZipOutputStream(Files.newOutputStream(zip),
                     java.nio.charset.Charset.forName("UTF-8"))) {
-                for (Path f : files) {
-                    z.putNextEntry(new ZipEntry(f.getFileName().toString())); // {侧}_{组名}.txt
-                    z.write(Files.readAllBytes(f));
+                for (Map.Entry<Path, String> e : files.entrySet()) {
+                    z.putNextEntry(new ZipEntry(e.getValue()));
+                    z.write(Files.readAllBytes(e.getKey()));
                     z.closeEntry();
                 }
             }
@@ -297,6 +305,15 @@ public class SplitController {
     private static String exportBase(SplitJob job) {
         String name = job.label() != null && !job.label().isBlank() ? job.label() : "拆分_" + job.jobId();
         return name.replaceAll("[\\\\/:*?\"<>|]", "_");
+    }
+
+    /** zip 条目用的原文件名（含扩展名）；输入缺失回退侧别名。 */
+    private static String originalName(SplitJob job, String side) {
+        SplitJob.Inputs inputs = job.inputs();
+        String path = inputs == null ? null : ("a".equals(side) ? inputs.a() : inputs.b());
+        if (path == null || path.isBlank()) return side;
+        String n = Path.of(path).getFileName().toString();
+        return n.isBlank() ? side : n;
     }
 
     // ---- 校验与辅助 ----

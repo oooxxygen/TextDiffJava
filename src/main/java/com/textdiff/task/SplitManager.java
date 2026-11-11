@@ -126,8 +126,9 @@ public final class SplitManager implements AutoCloseable {
                     trailer++;
                     continue;
                 }
-                if (line.isEmpty()) continue; // 空行跳过（对齐 Parser.dataRows）
-                String[] cols = Parser.splitColumns(line, cfg.delimiter());
+                String data = blankToNull(line);
+                if (data == null) continue; // 空行/纯空白/NUL 填充行（定宽提取空槽）跳过——写出后即「空行」
+                String[] cols = Parser.splitColumns(data, cfg.delimiter());
                 String group = OTHER_GROUP;
                 for (CompiledRule r : rules) {
                     if (r.match(cols)) {
@@ -139,7 +140,7 @@ public final class SplitManager implements AutoCloseable {
                 total++;
                 BufferedWriter w = writers.computeIfAbsent(group,
                         g -> openWriter(dir, side + "_" + sanitize(g) + ".txt"));
-                w.write(line);
+                w.write(data);
                 w.write("\n");
             }
         } finally {
@@ -169,6 +170,22 @@ public final class SplitManager implements AutoCloseable {
     public static String sanitize(String name) {
         String n = name == null || name.isBlank() ? "未命名" : name.strip();
         return n.replaceAll("[\\\\/:*?\"<>|]", "_");
+    }
+
+    /**
+     * 数据行清洗：剥离行尾 \r（防御性）后判空。
+     * 返回 null = 空行/纯空白行/NUL 填充行（定宽提取文件的空槽、UTF-16 填充残留）——
+     * 这些行写出后在编辑器里渲染为「空行」，一律不计组、不产出。
+     * 非 null = 去尾 \r 的原行（内容不做其他改写，保持拆分产物与原文一致）。
+     */
+    static String blankToNull(String line) {
+        if (line == null) return null;
+        String s = line.endsWith("\r") ? line.substring(0, line.length() - 1) : line;
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch != '\u0000' && ch != '\u3000' && !Character.isWhitespace(ch)) return s;
+        }
+        return null;
     }
 
     // ---- 条件编译与求值 ----

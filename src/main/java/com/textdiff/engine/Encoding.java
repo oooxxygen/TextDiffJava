@@ -29,6 +29,23 @@ public final class Encoding {
         if (startsWith(sample, BOM_UTF8)) return "utf-8-sig";
         if (startsWith(sample, BOM_UTF16_LE) || startsWith(sample, BOM_UTF16_BE)) return "utf-16";
 
+        // 无 BOM UTF-16：NUL 交错密度高（UTF-16 每 ASCII 字符伴随 1 个 0x00）且按 UTF-8 严格解码
+        // 失败或解出 NUL → 追加字节序候选参与打分（GBK 等正常多字节文本 NUL 密度≈0，不受影响；
+        // 命中与否仍由「分隔符出现次数 + 可读比例」择优决定，UTF-16 解出真实分隔符必然胜出）
+        java.util.List<String> candidates = new java.util.ArrayList<>(java.util.List.of(CANDIDATES));
+        if (sample.length >= 16) {
+            long zeros = 0;
+            for (byte b : sample) {
+                if (b == 0) zeros++;
+            }
+            String asUtf8 = tryDecodeStrict(sample, "utf-8");
+            boolean dirty8 = asUtf8 == null || asUtf8.indexOf('\u0000') >= 0;
+            if (zeros * 5 >= sample.length && dirty8) {
+                candidates.add("utf-16le");
+                candidates.add("utf-16be");
+            }
+        }
+
         String bestEnc = "utf-8";
         long bestDelim = 0;
         double bestRatio = 0.0;
@@ -36,11 +53,14 @@ public final class Encoding {
         // EBCDIC 家族空格是 0x40，不含 0x20；样本出现 0x20 即 ASCII 系文本，
         // 排除 EBCDIC（否则 ASCII 样本在 Cp037 下也能严格解码且可打印比例达标，分隔符计数偶发反超）
         boolean hasAsciiSpace = indexOfByte(sample, (byte) 0x20) >= 0;
-        for (String enc : CANDIDATES) {
+        for (String enc : candidates) {
             if (hasAsciiSpace && EBCDIC_CANDIDATES.contains(enc)) continue;
             String text = tryDecodeStrict(sample, enc);
             if (text == null) continue;            // 解码失败
-            double ratio = printableRatio(text);
+            // 可读比例按 NUL 剥离后计算：定宽/填充文件（空槽补 NUL）若按原始文本计比例会被
+            // 填充噪声拉到 0.5 以下，导致 gb18030 被过滤、检测回退 latin-1 全文乱码；
+            // 分隔符计数保持原始文本——UTF-16 误解码的 " \0|\0 " 不含真实 " | "，天然计 0 分。
+            double ratio = printableRatio(text.replace("\u0000", ""));
             if (ratio < 0.5) continue;             // 可打印比例过低 → 视为无效
             long delim = countOccurrences(text, delimiter);
             if (!any || delim > bestDelim || (delim == bestDelim && ratio > bestRatio)) {

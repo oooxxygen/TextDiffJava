@@ -101,16 +101,17 @@ class SplitApiTest {
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith("application/zip"))
                 .andReturn().getResponse().getContentAsByteArray();
-        assertTrue(entries(matched).contains("a_养老.txt"));
-        assertTrue(entries(matched).contains("a_健康.txt"));
-        assertTrue(entries(matched).contains("b_养老.txt"));
-        assertFalse(entries(matched).contains("a_其他.txt"));
+        // zip 条目保留原文件名：{A|B}/{组名}/{原文件名}（两侧同名 in.txt 靠侧别目录区分）
+        assertTrue(entries(matched).contains("A/养老/in.txt"), entries(matched).toString());
+        assertTrue(entries(matched).contains("A/健康/in.txt"));
+        assertTrue(entries(matched).contains("B/养老/in.txt"));
+        assertFalse(entries(matched).contains("A/其他/in.txt"));
 
         byte[] other = mvc.perform(get("/api/split-jobs/" + jobId + "/export")
                         .param("fmt", "zip").param("bucket", "other"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsByteArray();
-        assertEquals(java.util.List.of("a_其他.txt"), entries(other));
+        assertEquals(java.util.List.of("A/其他/in.txt"), entries(other));
 
         // xlsx 汇总
         mvc.perform(get("/api/split-jobs/" + jobId + "/export").param("fmt", "xlsx"))
