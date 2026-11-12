@@ -21,6 +21,39 @@ const jpost = (url, body) => api(url, {
 /* ---------- 工具：0-based 列数组 <-> 1-based 序列串 ---------- */
 function seqToStr(arr) { return (arr || []).map(i => i + 1).join("/"); }
 
+/* ---------- A/B 横向滚动联动 ----------
+   记录明细网格里 A、B 两侧 .cv 各自独立横向滚动（拖一侧另一侧不动）。这里在记录根元素上
+   捕获（scroll 事件不冒泡，capture 阶段才能收到子元素滚动）任一格的横向滚动，把另一侧
+   全部 .cv 同步到相同 scrollLeft——按字符位对齐（同栏位文本仅小差异，位置语义一致）。
+   互斥锁在 rAF 中解除：程序化 scrollLeft 触发的 scroll 事件先于同一帧 rAF 派发，不会回环；
+   用户同帧拖另一侧时锁内直接忽略（后写者胜）。表头/表尾块（hscroll）本身单柄整块滚动，
+   事件目标是 .rec-body 而非 .cv，天然跳过。 */
+function useScrollSync() {
+  const rootRef = ref(null);
+  let lock = false;
+  function onScroll(e) {
+    if (lock || !rootRef.value) return;
+    const t = e.target;
+    if (!t || !t.classList || !t.classList.contains("cv")) return;
+    const cell = t.closest(".col-a, .col-b");
+    if (!cell) return;
+    const other = cell.classList.contains("col-a") ? ".col-b" : ".col-a";
+    const sl = t.scrollLeft;
+    lock = true;
+    rootRef.value.querySelectorAll(other + " .cv").forEach(el => {
+      if (el.scrollLeft !== sl) el.scrollLeft = sl;
+    });
+    requestAnimationFrame(() => { lock = false; });
+  }
+  onMounted(() => {
+    if (rootRef.value) rootRef.value.addEventListener("scroll", onScroll, { capture: true, passive: true });
+  });
+  onBeforeUnmount(() => {
+    if (rootRef.value) rootRef.value.removeEventListener("scroll", onScroll, { capture: true });
+  });
+  return { rootRef };
+}
+
 /* ---------- 工具：时间戳(秒) -> 本地时间字符串 ---------- */
 function fmtTime(ts) {
   if (!ts) return "—";
@@ -359,6 +392,7 @@ const RecordRow = {
     const toggle = () => { localOpen.value = !localOpen.value; };
     // 收起全部信号：父级 bump forceCollapse 时强制收起本行
     watch(() => props.forceCollapse, () => { localOpen.value = false; });
+    const { rootRef } = useScrollSync(); // A/B 两侧 .cv 横向滚动联动
     const colName = (i) => (props.columnNames && props.columnNames[i]) ? props.columnNames[i] : "";
 
     // ---- CTIS 动态栏位（虚拟子列）----
@@ -456,12 +490,12 @@ const RecordRow = {
     }
 
     const hasNames = computed(() => Array.isArray(props.columnNames) && props.columnNames.some(n => n));
-    return { isOpen, toggle, sideCols, lineClass, cellSegs, maxLen, colName, gridFieldName, hasNames,
+    return { isOpen, toggle, rootRef, sideCols, lineClass, cellSegs, maxLen, colName, gridFieldName, hasNames,
              isDynCol, dynSubs, dynSegs, dynSubLabel, dynTitle, dynDiffOf, diffColLabel,
              noteEditing, noteDraft, hasNote, openNote, cancel, saveNote, delNote };
   },
   template: `
-  <div class="rec" :class="['s-' + row.status, isOpen ? 'open' : '', hasNote ? 'has-note' : '']">
+  <div class="rec" ref="rootRef" :class="['s-' + row.status, isOpen ? 'open' : '', hasNote ? 'has-note' : '']">
     <div class="rec-head" @click="toggle">
       <span class="caret">▶</span>
       <span class="key">{{ keyText(row.key) }}</span>
@@ -492,7 +526,7 @@ const RecordRow = {
             <span class="ci">{{ i }}</span><span class="nm">{{ gridFieldName(i) }}</span>
             <span class="dyn-mark" v-if="isDynCol(i-1)" title="CTIS 动态栏位：已按 ~~ 编号展开为子栏位">⧉</span>
           </div>
-          <div class="gcell" :class="[lineClass('a', i-1), sideClass('a')]">
+          <div class="gcell" :class="[lineClass('a', i-1), sideClass('a'), 'col-a']">
             <template v-if="sideCols('a')">
               <span class="ci">{{ i }}</span>
               <div class="dynsubs" v-if="isDynCol(i-1)">
@@ -504,7 +538,7 @@ const RecordRow = {
               <span class="cv" v-else><span v-for="(s,si) in cellSegs('a', i-1, (sideCols('a')[i-1]||''))" :key="si" :class="s.cls">{{ s.text }}</span></span>
             </template>
           </div>
-          <div class="gcell" :class="[lineClass('b', i-1), sideClass('b')]">
+          <div class="gcell" :class="[lineClass('b', i-1), sideClass('b'), 'col-b']">
             <template v-if="sideCols('b')">
               <span class="ci">{{ i }}</span>
               <div class="dynsubs" v-if="isDynCol(i-1)">
@@ -3374,6 +3408,7 @@ const ReportRowRec = {
   props: ["row", "sourceA", "sourceB", "section", "fieldNames", "monitorMap"],
   setup(props) {
     const isOpen = ref(false); // 条目一律默认收起，点击展开（含表头/表尾块）
+    const { rootRef } = useScrollSync(); // A/B 两侧 .cv 横向滚动联动
     const toggle = () => { isOpen.value = !isOpen.value; };
     // 整行原貌（报表业务行 a_raw/b_raw；折行记录含 \n，单格整体渲染）优先，缺省回退栏位切分；
     // 单侧缺失（仅对方有）不得回填对侧内容——B 侧必须显示「无此行」
@@ -3412,12 +3447,13 @@ const ReportRowRec = {
       const a = props.sourceA || "A", b = props.sourceB || "B";
       return { equal: "完全匹配", diff: "部分匹配", unmatched_a: "仅" + a + "有", unmatched_b: "仅" + b + "有" }[s] || s;
     }
-    // 表头/表尾块：整块单柄横向滚动（格内容不再各自出滚动条）；各条目独立滚动，不做跨条目联动
+    // 表头/表尾块：整块单柄横向滚动（格内容不再各自出滚动条，天然两侧联动）；
+    // 业务行/折行的 A、B 格各自滚动，经 useScrollSync 跨侧联动（拖任一侧，另一侧同步）
     const isBlock = computed(() => props.section === 'header' || props.section === 'footer');
-    return { isOpen, toggle, maxLen, isLine, isFolded, isBlock, showLcol, diffSet, segs, statusLabel, aDisp, bDisp, colName, colLabel, diffLabelText };
+    return { isOpen, rootRef, toggle, maxLen, isLine, isFolded, isBlock, showLcol, diffSet, segs, statusLabel, aDisp, bDisp, colName, colLabel, diffLabelText };
   },
   template: `
-  <div class="rec" :class="['s-' + row.status, isOpen ? 'open' : '']">
+  <div class="rec" ref="rootRef" :class="['s-' + row.status, isOpen ? 'open' : '']">
     <div class="rec-head" @click="toggle">
       <span class="caret">▶</span>
       <span class="key">{{ (row.key || '').split(String.fromCharCode(31)).join(':') }}<template v-if="isBlock && maxLen > 1">（1~{{ maxLen }}行）</template></span>
@@ -3433,10 +3469,10 @@ const ReportRowRec = {
           <div class="lcol" v-if="showLcol">
             <span class="lcol-item" v-for="c in row.diff_cols" :key="c" :title="colName(c)">{{ colLabel(c) }}</span>
           </div>
-          <div class="gcell" :class="{ diff: diffSet.has(0) }">
+          <div class="gcell col-a" :class="{ diff: diffSet.has(0) }">
             <span class="cv"><span v-for="(s,si) in segs('a', 0)" :key="si" :class="s.cls">{{ s.text }}</span></span>
           </div>
-          <div class="gcell" :class="{ diff: diffSet.has(0) }">
+          <div class="gcell col-b" :class="{ diff: diffSet.has(0) }">
             <span class="cv"><span v-for="(s,si) in segs('b', 0)" :key="si" :class="s.cls">{{ s.text }}</span></span>
           </div>
         </template>
@@ -3444,10 +3480,10 @@ const ReportRowRec = {
           <div class="ghdr">{{ sourceA || 'A' }}<span class="absent-note" v-if="!aDisp.length"> · 无此行</span></div>
           <div class="ghdr">{{ sourceB || 'B' }}<span class="absent-note" v-if="!bDisp.length"> · 无此行</span></div>
           <template v-for="i in maxLen" :key="i">
-            <div class="gcell" :class="{ diff: diffSet.has(i-1) }">
+            <div class="gcell col-a" :class="{ diff: diffSet.has(i-1) }">
               <template v-if="aDisp.length"><span class="ci">{{ i }}</span><span class="cv"><span v-if="aDisp[i-1] === undefined" class="absent-note">（无此行）</span><span v-else v-for="(s,si) in segs('a', i-1)" :key="si" :class="s.cls">{{ s.text }}</span></span></template>
             </div>
-            <div class="gcell" :class="{ diff: diffSet.has(i-1) }">
+            <div class="gcell col-b" :class="{ diff: diffSet.has(i-1) }">
               <template v-if="bDisp.length"><span class="ci">{{ i }}</span><span class="cv"><span v-if="bDisp[i-1] === undefined" class="absent-note">（无此行）</span><span v-else v-for="(s,si) in segs('b', i-1)" :key="si" :class="s.cls">{{ s.text }}</span></span></template>
             </div>
           </template>
