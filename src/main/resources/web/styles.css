@@ -799,3 +799,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .zone-head .actions { margin-left: 0; flex-basis: 100%; }
   .zone-head .actions > button.mini-btn + a.mini-btn::before { display: none; }
 }
+
+/* ---------- A/B 两侧联动滚动开关（查看页头）：关态弱化 ---------- */
+.sync-toggle.off { opacity: .55; }

@@ -27,12 +27,24 @@ function seqToStr(arr) { return (arr || []).map(i => i + 1).join("/"); }
    全部 .cv 同步到相同 scrollLeft——按字符位对齐（同栏位文本仅小差异，位置语义一致）。
    互斥锁在 rAF 中解除：程序化 scrollLeft 触发的 scroll 事件先于同一帧 rAF 派发，不会回环；
    用户同帧拖另一侧时锁内直接忽略（后写者胜）。表头/表尾块（hscroll）本身单柄整块滚动，
-   事件目标是 .rec-body 而非 .cv，天然跳过。 */
+   事件目标是 .rec-body 而非 .cv，天然跳过。
+   总开关 scrollSyncOn：查看页头按钮切换（useScrollSyncToggle，localStorage 记忆，默认联动），
+   关闭时记录两侧独立滚动。 */
+const scrollSyncOn = ref((() => {
+  try { return (localStorage.getItem("td_scroll_sync") ?? "1") === "1"; } catch (e) { return true; }
+})());
+function useScrollSyncToggle() {
+  const toggle = () => {
+    scrollSyncOn.value = !scrollSyncOn.value;
+    try { localStorage.setItem("td_scroll_sync", scrollSyncOn.value ? "1" : "0"); } catch (e) {}
+  };
+  return { scrollSyncOn, toggle };
+}
 function useScrollSync() {
   const rootRef = ref(null);
   let lock = false;
   function onScroll(e) {
-    if (lock || !rootRef.value) return;
+    if (lock || !scrollSyncOn.value || !rootRef.value) return;
     const t = e.target;
     if (!t || !t.classList || !t.classList.contains("cv")) return;
     const cell = t.closest(".col-a, .col-b");
@@ -1186,6 +1198,7 @@ const ResultView = {
   props: ["jobId", "encodings", "backBatch", "backTasks"],
   emits: ["rerun", "back"],
   setup(props, { emit }) {
+    const { scrollSyncOn, toggle: toggleScrollSync } = useScrollSyncToggle(); // A/B 滚动联动开关
     const meta = ref(null);
     const summary = ref(null);
     const zoneCounts = ref({});
@@ -1346,7 +1359,7 @@ const ResultView = {
              ai, aiHtml, runAnalyze, exportUrl, onRerun, fmtTime, fmtDur, editLabel, backText,
              sourceA, sourceB, goBack: () => emit("back"),
              notes, zoneNoteCounts, notesNonce, globalQ, globalApplied, globalNonce,
-             doGlobalSearch, clearGlobal, onSaveNote };
+             doGlobalSearch, clearGlobal, onSaveNote, scrollSyncOn, toggleScrollSync };
   },
   template: `
   <div>
@@ -1366,6 +1379,9 @@ const ResultView = {
           <span v-if="meta.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
         </template>
         <template #actions>
+          <button class="mini-btn sync-toggle" :class="{ off: !scrollSyncOn }" @click="toggleScrollSync"
+                  :title="scrollSyncOn ? '明细展开后 A/B 两侧横向滚动联动中；点击改为两侧独立滚动' : '当前两侧独立滚动；点击恢复联动'">
+            {{ scrollSyncOn ? '🔗 两侧联动：开' : '🔗 两侧联动：关' }}</button>
           <a class="mini-btn" :href="'/api/jobs/' + jobId + '/export-all'"
              title="将三个数据分区（差异/未匹配/完全匹配）合并导出为单个 Excel（含概览/评议note，单元格全文本）">⬇ 全部导出 Excel</a>
         </template>
@@ -3726,6 +3742,7 @@ const ReportResultView = {
   emits: ["back"],
   props: ["jobId"],
   setup(props, { emit }) {
+    const { scrollSyncOn, toggle: toggleScrollSync } = useScrollSyncToggle(); // A/B 滚动联动开关
     const sum = ref(null); let timer = null;
     async function load() {
       try {
@@ -3791,7 +3808,7 @@ const ReportResultView = {
       return lines;
     });
     const exportHref = computed(() => `/api/report-jobs/${props.jobId}/export`);
-    return { sum, s, cfg, confHit, confHint, busyRerun, rerunErr, doRerun, fileName, countCheckText, exportHref, REPORT_STATUS, sourceA, sourceB, monitorMap, goBack: () => emit("back") };
+    return { sum, s, cfg, confHit, confHint, busyRerun, rerunErr, doRerun, fileName, countCheckText, exportHref, REPORT_STATUS, sourceA, sourceB, monitorMap, scrollSyncOn, toggleScrollSync, goBack: () => emit("back") };
   },
   template: `
   <div v-if="sum">
@@ -3801,6 +3818,9 @@ const ReportResultView = {
         <span class="badge-status" :class="sum.status">{{ REPORT_STATUS[sum.status] || sum.status }}</span>
       </template>
       <template #actions>
+        <button class="mini-btn sync-toggle" :class="{ off: !scrollSyncOn }" @click="toggleScrollSync"
+                :title="scrollSyncOn ? '明细展开后 A/B 两侧横向滚动联动中；点击改为两侧独立滚动' : '当前两侧独立滚动；点击恢复联动'">
+          {{ scrollSyncOn ? '🔗 两侧联动：开' : '🔗 两侧联动：关' }}</button>
         <a class="mini-btn" :href="exportHref"
            title="仅导出单侧不匹配 + 行部分匹配（部分匹配一条差异栏位一行）">⬇ 导出差异 CSV</a>
       </template>
@@ -4087,6 +4107,7 @@ const CustomResultView = {
   emits: ["back"],
   props: ["jobId"],
   setup(props, { emit }) {
+    const { scrollSyncOn, toggle: toggleScrollSync } = useScrollSyncToggle(); // A/B 滚动联动开关
     const sum = ref(null); let timer = null;
     async function load() {
       try {
@@ -4099,7 +4120,7 @@ const CustomResultView = {
     const s = computed(() => (sum.value && sum.value.summary) || null);
     const fileName = (p) => (p || "").split(/[\\/]/).pop();
     const exportHref = computed(() => `/api/custom-jobs/${props.jobId}/export`);
-    return { sum, s, fileName, exportHref, REPORT_STATUS, goBack: () => emit("back") };
+    return { sum, s, fileName, exportHref, REPORT_STATUS, scrollSyncOn, toggleScrollSync, goBack: () => emit("back") };
   },
   template: `
   <div v-if="sum">
@@ -4109,6 +4130,9 @@ const CustomResultView = {
         <span class="badge-status" :class="sum.status">{{ REPORT_STATUS[sum.status] || sum.status }}</span>
       </template>
       <template #actions>
+        <button class="mini-btn sync-toggle" :class="{ off: !scrollSyncOn }" @click="toggleScrollSync"
+                :title="scrollSyncOn ? '明细展开后 A/B 两侧横向滚动联动中；点击改为两侧独立滚动' : '当前两侧独立滚动；点击恢复联动'">
+          {{ scrollSyncOn ? '🔗 两侧联动：开' : '🔗 两侧联动：关' }}</button>
         <a class="mini-btn" :href="exportHref"
            title="仅导出有差异段（一条差异行一行）与单侧段（整段一条）">⬇ 导出差异 CSV</a>
       </template>
