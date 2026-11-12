@@ -96,10 +96,14 @@ public final class ExtractService implements AutoCloseable {
         return n;
     }
 
-    /** 字段映射/配置查询名：压缩文件（*.gz[.9位数字]）取解压后逻辑名，普通文件取文件名。 */
+    /** 字段映射/配置查询名：压缩文件（*.gz[.9位数字]）取解压后逻辑名，普通文件取文件名。
+     *  纯字符串提取、对 / 与 \ 两种分隔符均稳健（不碰磁盘，运行平台与路径风格可不一致——
+     *  Linux 部署收到 Windows 风格路径也按文件名拆；Path.of 在 POSIX 下会把 \ 当普通字符）。 */
     public static String lookupName(String path) {
         if (path == null || path.isBlank()) return path;
-        String n = Path.of(path).getFileName().toString();
+        String n = path;
+        int i = Math.max(n.lastIndexOf('/'), n.lastIndexOf('\\'));
+        if (i >= 0) n = n.substring(i + 1);
         return isGzipName(n) ? logicalName(n) : n;
     }
 
