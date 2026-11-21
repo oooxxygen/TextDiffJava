@@ -217,7 +217,8 @@ public class DiscardController {
 
     /**
      * 全部文本偏离度（双指标）：
-     *  内容偏离度 =（有差异 + 仅A + 仅B）/ A 总条数；条数偏离度 = |B − A| / A 总条数；
+     *  内容偏离度 = 有差异记录条数 / 已匹配键值的记录数（完全匹配+有差异，不含单方存在；无已匹配记录显示「—」）；
+     *  条数偏离度 = |B − A| / A 总条数；
      *  分级 ≥50% 严重问题 / ≥20% 务必关注 / ≥10% 微量偏移，按两指标较大者主排（同值按差异条数）。
      */
     private List<Map<String, Object>> deviations(List<JobRecord> jobs) {
@@ -243,13 +244,13 @@ public class DiscardController {
                 totalB = meta.totalB;
             }
             String nickname = DiscardColsService.monitorKey(j);
-            Deviation.Metric content = Deviation.content(diff, onlyA, onlyB, totalA);
+            Deviation.Metric content = Deviation.content(diff, equal);
             Deviation.Metric count = Deviation.count(totalA, totalB);
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("nickname", nickname);
             m.put("group", discardService.groupOfNickname(nickname));
             m.put("file_name", fileName(j.fileA) == null ? fileName(j.fileB) : fileName(j.fileA));
-            m.put("content_ratio", round4(content.ratio()));
+            m.put("content_ratio", Double.isNaN(content.ratio()) ? null : round4(content.ratio()));
             m.put("content_grade", content.grade());
             m.put("count_ratio", round4(count.ratio()));
             m.put("count_grade", count.grade());
@@ -262,14 +263,18 @@ public class DiscardController {
             out.add(m);
         }
         out.sort((x, y) -> {
-            int c = Double.compare(Math.max(((Number) x.get("content_ratio")).doubleValue(),
-                            ((Number) x.get("count_ratio")).doubleValue()),
-                    Math.max(((Number) y.get("content_ratio")).doubleValue(),
-                            ((Number) y.get("count_ratio")).doubleValue()));
+            int c = Double.compare(Math.max(ratioOrNeg1(x), ((Number) x.get("count_ratio")).doubleValue()),
+                    Math.max(ratioOrNeg1(y), ((Number) y.get("count_ratio")).doubleValue()));
             if (c != 0) return -c;
             return Long.compare(((Number) y.get("diff")).longValue(), ((Number) x.get("diff")).longValue());
         });
         return out;
+    }
+
+    /** 内容偏离度比值（无已匹配记录时为 null → 按 -1 排序垫底）。 */
+    private static double ratioOrNeg1(Map<String, Object> row) {
+        Object v = row.get("content_ratio");
+        return v instanceof Number n ? n.doubleValue() : -1.0;
     }
 
     private static double round4(double v) {

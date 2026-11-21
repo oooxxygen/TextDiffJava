@@ -2,23 +2,26 @@ package com.textdiff.export;
 
 /**
  * 文本偏离度双指标（批次总结）：
- *  内容偏离度 = 差异条数（有差异 + 仅A + 仅B）/ A 选区总条数；
+ *  内容偏离度 = 有差异记录条数 / 已匹配键值的记录数（完全匹配 + 有差异，不含仅A/仅B 单方记录）；
  *  条数偏离度 = |B 选区总条数 − A 选区总条数| / A 选区总条数。
  *
- * 分级（两项指标同一阈值）：≥50% 严重问题（红）、≥20% 务必关注（黄）、≥10% 微量偏移（紫）、其余 正常。
+ * 分级（两项指标同一阈值）：≥50% 严重问题（红）、≥20% 务必关注（黄）、≥10% 微量偏移（紫）、其余 正常；
+ * 已匹配键值的记录数为 0 的文本内容偏离度无定义，显示「—」（grade "—"）。
  */
 public final class Deviation {
     private Deviation() {}
 
     public record Metric(double ratio, String grade) {
         public String percent() {
-            return String.format("%.1f", ratio * 100) + "%";
+            return Double.isNaN(ratio) ? "—" : String.format("%.1f", ratio * 100) + "%";
         }
     }
 
-    /** 内容偏离度：差异条数 / A 总条数（A 为 0 时分母按 1 计，有差异即 100%+）。 */
-    public static Metric content(long diff, long onlyA, long onlyB, long totalA) {
-        double r = (diff + onlyA + onlyB) / (double) Math.max(1, totalA);
+    /** 内容偏离度：有差异条数 / 已匹配键值的记录数（完全匹配+有差异）；无已匹配记录时 ratio=NaN、grade="—"。 */
+    public static Metric content(long diff, long equal) {
+        long matched = diff + equal;
+        if (matched <= 0) return new Metric(Double.NaN, "—");
+        double r = diff / (double) matched;
         return new Metric(r, grade(r));
     }
 

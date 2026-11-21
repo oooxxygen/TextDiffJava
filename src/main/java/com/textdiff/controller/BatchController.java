@@ -12,19 +12,25 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** 批次端点：概览、标签、锁定、删除。导出端点在 M4 启用。 */
+/** 批次端点：概览、标签、锁定、删除、增量条件补填/放弃（增量后置流程）。 */
 @RestController
 @RequestMapping("/api/batches")
 public class BatchController {
     private final JobStore store;
     private final com.textdiff.store.TaskStore taskStore;
     private final com.textdiff.task.ExtractService extractService;
+    private final com.textdiff.task.JobManager jobs;
+    private final com.textdiff.store.FieldMapStore fieldMaps;
 
     public BatchController(JobStore store, com.textdiff.store.TaskStore taskStore,
-                           com.textdiff.task.ExtractService extractService) {
+                           com.textdiff.task.ExtractService extractService,
+                           com.textdiff.task.JobManager jobs,
+                           com.textdiff.store.FieldMapStore fieldMaps) {
         this.store = store;
         this.taskStore = taskStore;
         this.extractService = extractService;
+        this.jobs = jobs;
+        this.fieldMaps = fieldMaps;
     }
 
     @GetMapping("/{id}")
@@ -34,9 +40,38 @@ public class BatchController {
         List<JobRecord> jobs = store.listJobs(id);
         Map<String, Object> resp = new LinkedHashMap<>(ApiViews.batchStats(batch, jobs));
         List<Map<String, Object>> children = new ArrayList<>();
-        for (JobRecord j : jobs) children.add(ApiViews.jobBrief(j, store));
+        for (JobRecord j : jobs) children.add(ApiViews.jobBrief(j, store, true, fieldMaps::ownershipGroupOf));
         resp.put("children", children);
+        resp.put("addmod_pending", ApiViews.addmodPending(jobs));
         return resp;
+    }
+
+    /**
+     * 批次页补填增量条件（增量后置）：body {conds: {job_id: [条件值...]}}，仅受理本批次挂起作业；
+     * 条件随作业落库后立即入队开跑。
+     */
+    @PostMapping("/{id}/incr-conds")
+    public Map<String, Object> incrConds(@PathVariable String id, @RequestBody Map<String, Object> body) {
+        require(id);
+        Object raw = body.get("conds");
+        Map<String, List<String>> conds = new LinkedHashMap<>();
+        if (raw instanceof Map<?, ?> m) {
+            for (Map.Entry<?, ?> e : m.entrySet()) {
+                List<String> row = new ArrayList<>();
+                if (e.getValue() instanceof List<?> l) {
+                    for (Object v : l) row.add(v == null ? "" : v.toString());
+                }
+                conds.put(e.getKey().toString(), row);
+            }
+        }
+        return Map.of("ok", true, "applied", jobs.applyIncrConds(id, conds));
+    }
+
+    /** 放弃增量（Q12=C）：本批次全部挂起作业按普通对比立即开跑（不带条件）。 */
+    @PostMapping("/{id}/incr-release")
+    public Map<String, Object> incrRelease(@PathVariable String id) {
+        require(id);
+        return Map.of("ok", true, "released", jobs.releaseIncrHolds(id));
     }
 
     @PostMapping("/{id}/label")

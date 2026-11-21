@@ -51,6 +51,10 @@ public final class JobRecord {
     public String incrCond;
     /** 增量状态标注：null/"" = 未启用；"增量" = 过滤生效；"增量-空文本" = 过滤后两侧均 0 行。 */
     public String incrState;
+    /** 增量条件待填：规则含 ADDMOD 但提交时未带条件——作业建档后挂起不入队，待批次页补填条件或放弃增量后开跑。 */
+    public boolean awaitingCond;
+    /** 该作业所用配置的来源文件名（如 current.conf / DPTM_BATCH.conf；"内联" = 提交时内联规则；null = 旧记录/报表实时读取）。 */
+    public String confFile;
 
     public JobRecord() {}
 
@@ -100,6 +104,8 @@ public final class JobRecord {
         c.onlyBCount = onlyBCount;
         c.incrCond = incrCond;
         c.incrState = incrState;
+        c.awaitingCond = awaitingCond;
+        c.confFile = confFile;
         return c;
     }
 }

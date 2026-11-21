@@ -28,15 +28,18 @@ public class JobController {
     private final com.textdiff.ai.AiAnalyzer analyzer;
     private final com.textdiff.store.TaskStore taskStore;
     private final com.textdiff.store.SplitJobStore splitJobs;
+    private final com.textdiff.store.FieldMapStore fieldMaps;
 
     public JobController(JobManager jobs, JobStore store, com.textdiff.ai.AiAnalyzer analyzer,
                          com.textdiff.store.TaskStore taskStore,
-                         com.textdiff.store.SplitJobStore splitJobs) {
+                         com.textdiff.store.SplitJobStore splitJobs,
+                         com.textdiff.store.FieldMapStore fieldMaps) {
         this.jobs = jobs;
         this.store = store;
         this.analyzer = analyzer;
         this.taskStore = taskStore;
         this.splitJobs = splitJobs;
+        this.fieldMaps = fieldMaps;
     }
 
     @GetMapping("/joblist")
@@ -53,7 +56,7 @@ public class JobController {
             batches.add(ApiViews.batchStats(b, byBatch.getOrDefault(b.id, List.of()), true));
         }
         List<Map<String, Object>> standalone = new ArrayList<>();
-        for (JobRecord j : standaloneRecs) standalone.add(ApiViews.jobBrief(j, store, false));
+        for (JobRecord j : standaloneRecs) standalone.add(ApiViews.jobBrief(j, store, false, fieldMaps::ownershipGroupOf));
         List<Map<String, Object>> splits = new ArrayList<>();
         for (com.textdiff.store.SplitJob s : splitJobs.list()) {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -72,7 +75,7 @@ public class JobController {
         JobRecord job = require(id);
         var meta = ResultFiles.readMeta(Path.of(job.resultDir));
         Summary summary = ResultFiles.readSummary(Path.of(job.resultDir));
-        return ApiViews.metaResponse(job, meta, summary);
+        return ApiViews.metaResponse(job, meta, summary, fieldMaps::ownershipGroupOf);
     }
 
     @GetMapping("/jobs/{id}/result")

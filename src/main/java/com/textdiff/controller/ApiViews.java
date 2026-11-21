@@ -29,6 +29,12 @@ final class ApiViews {
     /** 作业概要视图（joblist children / standalone 共用）。deep=false 时跳过 meta.json 兜底读
      *  （全局列表高频轮询路径：5000 旧记录 × 每次轮询的逐作业磁盘读曾是主要 IO 开销）。 */
     static Map<String, Object> jobBrief(JobRecord job, JobStore store, boolean deep) {
+        return jobBrief(job, store, deep, null);
+    }
+
+    /** 归属组换源版（需求③）：groupOf 按昵称解析 type_parm 的 ownership_group，null/查不到回退昵称。 */
+    static Map<String, Object> jobBrief(JobRecord job, JobStore store, boolean deep,
+                                        java.util.function.Function<String, String> groupOf) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("job_id", job.id);
         m.put("batch_id", job.batchId);
@@ -45,12 +51,16 @@ final class ApiViews {
         m.put("key_warning", job.keyWarning);
         m.put("job_type", job.jobType == null || job.jobType.isEmpty() ? "file" : job.jobType);
         m.put("incr_state", job.incrState == null || job.incrState.isEmpty() ? null : job.incrState);
+        m.put("awaiting_cond", job.awaitingCond);
+        m.put("conf_file", job.confFile);
 
         CompareConfig cfg = Rules.parseLegacy(job.configLine,
                 ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("nickname", cfg.nickname);
-        config.put("group", cfg.group == null || cfg.group.isEmpty() ? cfg.nickname : cfg.group);
+        String owner = groupOf != null ? groupOf.apply(cfg.nickname) : null;
+        config.put("group", owner != null && !owner.isEmpty() ? owner
+                : (cfg.group == null || cfg.group.isEmpty() ? cfg.nickname : cfg.group));
         config.put("source_a", cfg.sourceA);
         config.put("source_b", cfg.sourceB);
         m.put("config", config);
@@ -83,6 +93,28 @@ final class ApiViews {
 
     static Map<String, Object> jobBrief(JobRecord job, JobStore store) {
         return jobBrief(job, store, true);
+    }
+
+    /** 批次增量待条件清单（增量后置流程）：挂起作业的昵称/文件名/ADDMOD 1-based 栏位，批次页弹增量对话框的数据源。 */
+    static List<Map<String, Object>> addmodPending(List<JobRecord> jobs) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (JobRecord j : jobs) {
+            if (!j.awaitingCond || !JobRecord.PENDING.equals(j.status)) continue;
+            CompareConfig cfg = Rules.parseLegacy(j.configLine,
+                    ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("job_id", j.id);
+            m.put("nickname", cfg.nickname);
+            String fn = null;
+            try {
+                fn = Path.of(j.fileA == null ? "" : j.fileA).getFileName().toString();
+            } catch (RuntimeException ignored) {
+            }
+            m.put("file_name", fn);
+            m.put("addmod", cfg.incrFields.stream().map(f -> f + 1).toList());
+            out.add(m);
+        }
+        return out;
     }
 
     /** 批次聚合状态与统计。slim=true（全局列表轮询）不带全量清单——5000 文件的 no_rule_files
@@ -149,11 +181,18 @@ final class ApiViews {
 
     /** meta 端点完整响应（meta + summary + zone_counts）。 */
     static Map<String, Object> metaResponse(JobRecord job, JobMeta meta, Summary summary) {
+        return metaResponse(job, meta, summary, null);
+    }
+
+    /** 归属组换源版（需求③）：groupOf 按昵称解析 type_parm 的 ownership_group，null/查不到回退昵称。 */
+    static Map<String, Object> metaResponse(JobRecord job, JobMeta meta, Summary summary,
+                                            java.util.function.Function<String, String> groupOf) {
         Map<String, Object> resp = new LinkedHashMap<>();
 
         CompareConfig cfg = Rules.parseLegacy(job.configLine,
                 ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
-        Map<String, Object> config = ApiPayloads.configMap(cfg, "job");
+        Map<String, Object> config = ApiPayloads.configMap(cfg, "job",
+                groupOf == null ? null : groupOf.apply(cfg.nickname));
 
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("job_id", job.id);
@@ -177,6 +216,7 @@ final class ApiViews {
         m.put("ai_status", job.aiStatus);
         m.put("incr_state", job.incrState == null || job.incrState.isEmpty() ? null : job.incrState);
         m.put("incr", meta != null ? meta.incr : null);
+        m.put("conf_file", job.confFile);
         m.put("config", config);
         if (meta != null && meta.dynCols != null && !meta.dynCols.isEmpty()) m.put("dyn_cols", meta.dynCols);
         if (meta != null && meta.dynWarnings != null && !meta.dynWarnings.isEmpty()) {

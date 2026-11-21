@@ -4,25 +4,34 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** 偏离度双指标：内容偏离度=差异条数/A总条数；条数偏离度=|B−A|/A总条数；阈值 10/20/50 分级紫黄红。 */
+/** 偏离度双指标：内容偏离度=有差异条数/已匹配键值的记录数（完全匹配+有差异）；条数偏离度=|B−A|/A总条数；阈值 10/20/50 分级。 */
 class DeviationTest {
 
     @Test
     void contentMetricRatioAndGrades() {
-        // 差异 2 + 仅A 1 + 仅B 1 = 4 / A 总 20 = 20% → 务必关注（黄）
-        Deviation.Metric m = Deviation.content(2, 1, 1, 20);
+        // 有差异 20 / 已匹配键值 100（完全匹配 80 + 有差异 20）= 20% → 务必关注（黄）
+        Deviation.Metric m = Deviation.content(20, 80);
         assertEquals(0.2, m.ratio(), 1e-9);
         assertEquals("务必关注", m.grade());
         assertEquals("20.0%", m.percent());
 
-        assertEquals("正常", Deviation.content(0, 0, 0, 100).grade());
-        assertEquals("微量偏移", Deviation.content(10, 0, 0, 100).grade());   // 恰 10%
-        assertEquals("微量偏移", Deviation.content(19, 0, 0, 100).grade());
-        assertEquals("务必关注", Deviation.content(20, 0, 0, 100).grade());   // 恰 20%
-        assertEquals("严重问题", Deviation.content(50, 0, 0, 100).grade());   // 恰 50%
-        // A 为 0 且有差异：分母按 1，全量偏离
-        assertEquals("严重问题", Deviation.content(0, 0, 3, 0).grade());
-        assertEquals("正常", Deviation.content(0, 0, 0, 0).grade());
+        assertEquals("正常", Deviation.content(0, 100).grade());
+        assertEquals("微量偏移", Deviation.content(10, 90).grade());   // 恰 10%
+        assertEquals("微量偏移", Deviation.content(19, 81).grade());
+        assertEquals("务必关注", Deviation.content(20, 80).grade());   // 恰 20%
+        assertEquals("严重问题", Deviation.content(50, 50).grade());   // 恰 50%
+        assertEquals("严重问题", Deviation.content(3, 0).grade());     // 仅差异无完全匹配 → 100%
+    }
+
+    @Test
+    void contentNoMatchedShowsDash() {
+        // 已匹配键值记录数 = 0（diff+equal=0）：内容偏离度无定义 → ratio=NaN、grade「—」、percent「—」
+        Deviation.Metric m = Deviation.content(0, 0);
+        assertTrue(Double.isNaN(m.ratio()));
+        assertEquals("—", m.grade());
+        assertEquals("—", m.percent());
+        Deviation.Metric only = Deviation.content(0, 0);
+        assertEquals("—", only.grade());
     }
 
     @Test

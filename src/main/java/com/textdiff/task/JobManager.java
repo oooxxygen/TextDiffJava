@@ -118,9 +118,10 @@ public final class JobManager implements AutoCloseable {
         int resumed = 0;
         for (JobRecord job : store.listJobs(null)) {
             if (JobRecord.RUNNING.equals(job.status) || JobRecord.PENDING.equals(job.status)) {
+                boolean held = JobRecord.PENDING.equals(job.status) && job.awaitingCond; // 增量待条件：保持挂起不入队
                 job.status = JobRecord.PENDING;
                 store.saveJob(job);
-                submit(job); // 报表作业经 submit 路由到 reportRunner
+                if (!held) submit(job); // 报表作业经 submit 路由到 reportRunner
                 resumed++;
             }
         }
@@ -209,6 +210,13 @@ public final class JobManager implements AutoCloseable {
     public BatchRecord createBatchAsync(Path dirA, Path dirB, List<String> configLines, String kind,
                                         List<List<String>> incrConds, String groupName,
                                         String cmpBatch, String cmpRound) throws IOException {
+        return createBatchAsync(dirA, dirB, configLines, kind, incrConds, groupName, cmpBatch, cmpRound, null);
+    }
+
+    /** 配置溯源版：confFiles 与 configLines 一一对应（来源配置文件名，内联规则为「内联」），逐作业落 conf_file。 */
+    public BatchRecord createBatchAsync(Path dirA, Path dirB, List<String> configLines, String kind,
+                                        List<List<String>> incrConds, String groupName,
+                                        String cmpBatch, String cmpRound, List<String> confFiles) throws IOException {
         BatchRecord batch = newBatch(dirA, dirB, configLines, kind);
         if (groupName != null && !groupName.isBlank()) batch.groupName = groupName.strip();
         if (cmpBatch != null && !cmpBatch.isBlank()) batch.cmpBatch = cmpBatch.strip();
@@ -217,7 +225,7 @@ public final class JobManager implements AutoCloseable {
         store.saveBatch(batch);
         preparePool.submit(() -> {
             try {
-                materializeBatch(batch, dirA, dirB, configLines, kind, incrConds);
+                materializeBatch(batch, dirA, dirB, configLines, kind, incrConds, confFiles, true);
             } catch (Exception e) {
                 System.err.println("[batch] " + batch.id + " 建档失败: " + e);
                 batch.prepareState = BatchRecord.PREPARE_FAILED;
@@ -244,11 +252,18 @@ public final class JobManager implements AutoCloseable {
     public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines, String kind,
                                    List<List<String>> incrConds, String groupName,
                                    String cmpBatch, String cmpRound) throws IOException {
+        return createBatch(dirA, dirB, configLines, kind, incrConds, groupName, cmpBatch, cmpRound, null);
+    }
+
+    /** 配置溯源版（同步建档）。 */
+    public BatchRecord createBatch(Path dirA, Path dirB, List<String> configLines, String kind,
+                                   List<List<String>> incrConds, String groupName,
+                                   String cmpBatch, String cmpRound, List<String> confFiles) throws IOException {
         BatchRecord batch = newBatch(dirA, dirB, configLines, kind);
         if (groupName != null && !groupName.isBlank()) batch.groupName = groupName.strip();
         if (cmpBatch != null && !cmpBatch.isBlank()) batch.cmpBatch = cmpBatch.strip();
         if (cmpRound != null && !cmpRound.isBlank()) batch.cmpRound = cmpRound.strip();
-        materializeBatch(batch, dirA, dirB, configLines, kind, incrConds);
+        materializeBatch(batch, dirA, dirB, configLines, kind, incrConds, confFiles, false);
         return batch;
     }
 
@@ -264,19 +279,27 @@ public final class JobManager implements AutoCloseable {
     }
 
     /** 配对建档主体：previewPairs 与此共用全部配对逻辑（DirList 单次列举 + 预编译 glob + 逻辑名升序）。
-     *  逐配对立即落盘并派发，每 100 对刷新一次批次 jobCount——批次页轮询可见任务数动态增长。 */
+     *  逐配对立即落盘并派发，每 100 对刷新一次批次 jobCount——批次页轮询可见任务数动态增长。
+     *  confFiles 与 configLines 一一对应（来源配置文件名，可空项=不记录）。
+     *  holdAddmod 仅异步批次链路为 true（HTTP 提交，批次页承接增量条件补填/放弃）：规则含 ADDMOD 且
+     *  提交时未带条件 → 作业挂起（awaitingCond）不入队。同步建档（H2 命令信箱/旧流程）保持旧语义：
+     *  无条件 = 全量对比直接跑，避免外部自动化通道的作业无人补填条件而永久卡住。 */
     private void materializeBatch(BatchRecord batch, Path dirA, Path dirB, List<String> configLines,
-                                  String kind, List<List<String>> incrConds) throws IOException {
+                                  String kind, List<List<String>> incrConds, List<String> confFiles,
+                                  boolean holdAddmod) throws IOException {
         DirList listA = DirList.of(dirA);
         DirList listB = DirList.of(dirB);
         int jobCount = 0;
         java.util.Set<String> matched = new java.util.HashSet<>();
         List<String> missingFiles = new ArrayList<>();
         int pairIdx = 0;
+        int lineIdx = -1;
         for (String line : configLines) {
+            lineIdx++;
             if (line.strip().isEmpty() || line.strip().startsWith("#")) continue;
             CompareConfig cfg = Rules.parseLegacy(line, DEFAULT_DELIM, DEFAULT_TRAILER);
             String configLine = Rules.toLegacyLine(cfg, true); // 规范化全量行：结果页展示与重跑依据
+            String confFile = confFiles == null || lineIdx >= confFiles.size() ? null : confFiles.get(lineIdx);
             java.nio.file.PathMatcher matcher = globMatcher(cfg.fileGlob);
             int pairsForCfg = 0;
             // 普通文件配对（现状逻辑）
@@ -286,9 +309,11 @@ public final class JobManager implements AutoCloseable {
                 pairsForCfg++;
                 JobRecord job = newJob(batch, cfg, configLine, kind,
                         cfg.nickname + " · " + fileName, pair[0], pair[1]);
-                attachIncrCond(job, incrConds, pairIdx++);
+                boolean hasCond = attachIncrCond(job, incrConds, pairIdx++);
+                job.confFile = confFile;
+                if (holdAddmod && !hasCond && !cfg.incrFields.isEmpty()) job.awaitingCond = true; // 增量后置：待补填条件
                 store.saveJob(job);
-                submit(job);
+                if (!job.awaitingCond) submit(job);
                 if (++jobCount % 100 == 0) saveProgress(batch, jobCount);
             }
             // 压缩文件配对：逻辑名匹配 glob；同逻辑名普通文件已存在时压缩版本忽略（普通优先）
@@ -307,9 +332,11 @@ public final class JobManager implements AutoCloseable {
                 String repB = bs.get(bs.size() - 1).toString();
                 JobRecord job = newJob(batch, cfg, configLine, kind,
                         cfg.nickname + " · " + entry.getKey(), repA, repB);
-                attachIncrCond(job, incrConds, pairIdx++);
+                boolean hasCond = attachIncrCond(job, incrConds, pairIdx++);
+                job.confFile = confFile;
+                if (holdAddmod && !hasCond && !cfg.incrFields.isEmpty()) job.awaitingCond = true;
                 store.saveJob(job);
-                submit(job);
+                if (!job.awaitingCond) submit(job);
                 if (++jobCount % 100 == 0) saveProgress(batch, jobCount);
             }
             if (pairsForCfg == 0) missingFiles.add(cfg.nickname + " · " + cfg.fileGlob);
@@ -341,14 +368,16 @@ public final class JobManager implements AutoCloseable {
         return job;
     }
 
-    /** 附加该文本的增量条件值（非空才落记录；对应规则未配 ADDMOD 时存储但过滤自然不启用）。 */
-    private static void attachIncrCond(JobRecord job, List<List<String>> incrConds, int pairIdx) {
-        if (incrConds == null || pairIdx >= incrConds.size()) return;
+    /** 附加该文本的增量条件值（非空才落记录；对应规则未配 ADDMOD 时存储但过滤自然不启用）。返回是否附加了有效条件。 */
+    private static boolean attachIncrCond(JobRecord job, List<List<String>> incrConds, int pairIdx) {
+        if (incrConds == null || pairIdx >= incrConds.size()) return false;
         List<String> cond = incrConds.get(pairIdx);
-        if (cond == null || cond.isEmpty()) return;
+        if (cond == null || cond.isEmpty()) return false;
         if (cond.stream().anyMatch(c -> c != null && !c.isBlank())) {
             job.incrCond = Json.write(cond);
+            return true;
         }
+        return false;
     }
 
     /** 目录一次性列举（仅普通文件，文件名升序）。万级文件 × 多配置行的配对/建档以此消除重复目录遍历。 */
@@ -433,10 +462,45 @@ public final class JobManager implements AutoCloseable {
                     resultsRoot.resolve(jobId).toAbsolutePath().toString());
             if (kind != null && !kind.isBlank()) job.jobType = kind;
             attachIncrCond(job, incrConds, pairIdx++);
+            job.confFile = "内联"; // 直连模式配置由提交请求内联给出
             store.saveJob(job);
             submit(job);
         }
         return batch;
+    }
+
+    /**
+     * 批次页补填增量条件（增量后置流程）：按 job_id 精准下发，仅受理本批次内挂起（awaitingCond）的作业；
+     * 条件随作业落库后立即入队。条件全空的项按「无条件」开跑（过滤自然不启用）。返回受理数量。
+     */
+    public synchronized int applyIncrConds(String batchId, Map<String, List<String>> condsByJob) {
+        int n = 0;
+        for (Map.Entry<String, List<String>> e : condsByJob.entrySet()) {
+            JobRecord job = store.getJob(e.getKey());
+            if (job == null || !batchId.equals(job.batchId) || !job.awaitingCond) continue;
+            List<String> cond = e.getValue();
+            if (cond != null && cond.stream().anyMatch(c -> c != null && !c.isBlank())) {
+                job.incrCond = Json.write(cond);
+            }
+            job.awaitingCond = false;
+            store.saveJob(job);
+            submit(job);
+            n++;
+        }
+        return n;
+    }
+
+    /** 放弃增量（增量后置流程 Q12=C）：本批次全部挂起作业按普通对比立即开跑（不带条件）。返回释放数量。 */
+    public synchronized int releaseIncrHolds(String batchId) {
+        int n = 0;
+        for (JobRecord job : store.listJobs(batchId)) {
+            if (!job.awaitingCond) continue;
+            job.awaitingCond = false;
+            store.saveJob(job);
+            submit(job);
+            n++;
+        }
+        return n;
     }
 
     public synchronized void submit(JobRecord job) {

@@ -111,7 +111,8 @@ public class SubmitController {
         String dirA = str(body.get("dir_a"));
         String dirB = str(body.get("dir_b"));
         if (dirA == null || dirB == null) throw new IllegalArgumentException("缺少 dir_a / dir_b");
-        List<String> lines = resolveConfigLines(body);
+        SourcedLines src = resolveConfigSourced(body);
+        List<String> lines = src.lines();
         if (lines.isEmpty()) throw new IllegalArgumentException("无生效配置行");
 
         List<List<String>> conds = null;
@@ -129,16 +130,21 @@ public class SubmitController {
         }
 
         // 异步建档：立即返回批次，配对与作业落盘在后台进行（万级文本提交不再阻塞 HTTP 请求），
-        // 批次页/任务页轮询可见 prepare_state=preparing → ready 与作业数动态增长
+        // 批次页/任务页轮询可见 prepare_state=preparing → ready 与作业数动态增长；
+        // 规则含 ADDMOD 且未带条件的作业挂起（awaitingCond），待批次页补填条件或放弃增量后开跑
         String group = str(body.get("group"));
         String cmpBatch = str(body.get("cmp_batch"));
         String cmpRound = str(body.get("cmp_round"));
         BatchRecord batch = jobs.createBatchAsync(Path.of(dirA), Path.of(dirB), lines, str(body.get("kind")), conds,
                 group == null || group.isBlank() ? null : group.strip(),
                 cmpBatch == null || cmpBatch.isBlank() ? null : cmpBatch.strip(),
-                cmpRound == null || cmpRound.isBlank() ? null : cmpRound.strip());
+                cmpRound == null || cmpRound.isBlank() ? null : cmpRound.strip(),
+                src.files());
         return Map.of("batch_id", batch.id);
     }
+
+    /** 配置行 + 逐行来源文件（作业 conf_file 溯源用；内联规则记「内联」）。 */
+    private record SourcedLines(List<String> lines, List<String> files) {}
 
     /**
      * 批次配置行解析（use_all / config_file / 内联三选一），预览与正式提交共用。
@@ -146,16 +152,35 @@ public class SubmitController {
      * 目录对比圈定范围：不在分组名单内的文本不读取不对比；未指定分组则对比全部。
      */
     private List<String> resolveConfigLines(Map<String, Object> body) throws IOException {
+        return resolveConfigSourced(body).lines();
+    }
+
+    private SourcedLines resolveConfigSourced(Map<String, Object> body) throws IOException {
         List<String> lines = new ArrayList<>();
+        List<String> files = new ArrayList<>();
         Boolean useAll = bool(body.get("use_all"));
         String configFile = str(body.get("config_file"));
         if (Boolean.TRUE.equals(useAll)) {
             for (String f : listConfigFiles()) {
-                lines.addAll(readConfigLines(paths.configsDir().resolve(f)));
+                for (String l : readConfigLines(paths.configsDir().resolve(f))) {
+                    lines.add(l);
+                    files.add(f);
+                }
             }
-            lines = dedupeLines(lines);
+            int[] keep = dedupeKeeps(lines);
+            List<String> dl = new ArrayList<>();
+            List<String> df = new ArrayList<>();
+            for (int i : keep) {
+                dl.add(lines.get(i));
+                df.add(files.get(i));
+            }
+            lines = dl;
+            files = df;
         } else if (configFile != null) {
-            lines.addAll(readConfigLines(paths.configsDir().resolve(configFile)));
+            for (String l : readConfigLines(paths.configsDir().resolve(configFile))) {
+                lines.add(l);
+                files.add(configFile);
+            }
         } else {
             // 内联单规则
             StringBuilder sb = new StringBuilder();
@@ -176,46 +201,63 @@ public class SubmitController {
             sb.append(":SRCA=").append(strOr(body.get("source_a"), "A"));
             sb.append(":SRCB=").append(strOr(body.get("source_b"), "B"));
             lines.add(sb.toString());
+            files.add("内联");
         }
         String group = str(body.get("group"));
-        if (group != null && !group.isBlank()) lines = filterByGroup(group.strip(), lines);
-        return lines;
+        if (group != null && !group.isBlank()) {
+            boolean[] keep = groupKeeps(group.strip(), lines);
+            List<String> dl = new ArrayList<>();
+            List<String> df = new ArrayList<>();
+            for (int i = 0; i < lines.size(); i++) {
+                if (keep[i]) {
+                    dl.add(lines.get(i));
+                    df.add(files.get(i));
+                }
+            }
+            lines = dl;
+            files = df;
+        }
+        return new SourcedLines(lines, files);
     }
 
-    /** 分组过滤：配置昵称（冒号前段）命中分组成员（忽略大小写）才保留；分组不存在抛 400。 */
-    private List<String> filterByGroup(String groupName, List<String> lines) {
+    /** 分组过滤掩码：成员命中为 true；分组不存在抛 400。供行/来源文件并行列表共用。 */
+    private boolean[] groupKeeps(String groupName, List<String> lines) {
         java.util.Set<String> members = compareGroups.membersOf(groupName);
         if (compareGroups.group(groupName) == null) {
             throw new IllegalArgumentException("对比配置分组不存在: " + groupName);
         }
-        List<String> out = new ArrayList<>();
-        for (String line : lines) {
-            String nick = line.split(":", 2)[0].strip();
+        boolean[] keep = new boolean[lines.size()];
+        for (int i = 0; i < lines.size(); i++) {
+            String nick = lines.get(i).split(":", 2)[0].strip();
             for (String m : members) {
                 if (m.equalsIgnoreCase(nick)) {
-                    out.add(line);
+                    keep[i] = true;
                     break;
                 }
             }
         }
-        return out;
+        return keep;
     }
 
     /**
-     * 全部配置去重：同一规则可能同时存在于 {昵称}.conf / current.conf / default.conf，
+     * 全部配置去重（掩码版）：同一规则可能同时存在于 {昵称}.conf / current.conf / default.conf，
      * 按（昵称 + 通配名）去重保留先到者——单配置文件（UI 保存/编辑的最新内容）优先于
      * current/default 聚合文件，避免 use_all 批次对同一文本重复建作业。
+     * 返回保留项下标（来源文件随行同进退，conf_file 溯源一致）。
      */
-    private static List<String> dedupeLines(List<String> lines) {
-        java.util.LinkedHashMap<String, String> out = new java.util.LinkedHashMap<>();
-        for (String line : lines) {
-            String t = line.strip();
+    private static int[] dedupeKeeps(List<String> lines) {
+        java.util.LinkedHashMap<String, Integer> out = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < lines.size(); i++) {
+            String t = lines.get(i).strip();
             if (t.isEmpty() || t.startsWith("#")) continue;
             String[] parts = t.split(":", 3);
             String key = parts[0].strip() + "\u0000" + (parts.length > 1 ? parts[1].strip() : "");
-            out.putIfAbsent(key, t);
+            out.putIfAbsent(key, i);
         }
-        return new ArrayList<>(out.values());
+        int[] keep = new int[out.size()];
+        int n = 0;
+        for (int v : out.values()) keep[n++] = v;
+        return keep;
     }
 
     static List<String> readConfigLines(Path file) throws IOException {

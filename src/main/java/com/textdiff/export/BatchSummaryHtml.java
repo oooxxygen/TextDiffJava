@@ -75,7 +75,7 @@ public final class BatchSummaryHtml {
                         .append(str(t.get("only_b"), "0")).append("</td></tr>\n");
             }
             sb.append("</tbody></table>\n");
-            sb.append("<p class=\"note\">内容偏离度 =（有差异 + 仅A + 仅B）/ A选区总条数；")
+            sb.append("<p class=\"note\">内容偏离度 = 有差异条数 / 已匹配键值的记录数（完全匹配+有差异，不含仅A/仅B；无已匹配记录显示—）；")
                     .append("条数偏离度 = |B选区总条数 − A选区总条数| / A选区总条数。")
                     .append("分级阈值（两指标同）：≥10% 微量偏移（紫）、≥20% 务必关注（黄）、≥50% 严重问题（红）。")
                     .append("按两指标较大者降序排列。</p>\n");
@@ -139,9 +139,14 @@ public final class BatchSummaryHtml {
                 .append("<span class=\"hit\" data-hits=\"").append(tableId).append("\"></span></div>\n");
     }
 
-    /** 偏离度单元格：占比条 + 百分比 + 等级徽章（紫/黄/红/绿）。 */
+    /** 偏离度单元格：占比条 + 百分比 + 等级徽章（紫/黄/红/绿）；无已匹配记录（content_ratio=null）显示「—」。 */
     private static void devCell(StringBuilder sb, Map<String, Object> t, String kind) {
-        double ratio = Double.parseDouble(str(t.get(kind + "_ratio"), "0"));
+        Object raw = t.get(kind + "_ratio");
+        if (raw == null) {
+            sb.append("<td>—</td>");
+            return;
+        }
+        double ratio = Double.parseDouble(String.valueOf(raw));
         String grade = str(t.get(kind + "_grade"), "正常");
         sb.append("<td><div class=\"bar\"><div class=\"fill").append("count".equals(kind) ? " fill-alt" : "")
                 .append("\" style=\"width:").append(Math.min(100, Math.round(ratio * 100)))

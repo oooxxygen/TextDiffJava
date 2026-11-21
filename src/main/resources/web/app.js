@@ -195,6 +195,68 @@ const AppToast = {
   </transition>`,
 };
 
+/* AppBusy：全局加载遮罩（提交批次 → 秒跳结果页的过渡反馈，需求①），不可点击关闭 */
+const busyState = reactive({ open: false, message: "" });
+function showBusy(message) { busyState.message = message || "处理中…"; busyState.open = true; }
+function hideBusy() { busyState.open = false; }
+const AppBusy = {
+  setup() { return { b: busyState }; },
+  template: `
+  <div class="modal-mask" v-if="b.open">
+    <div class="modal modal-sm busy-box" role="alert" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <div class="busy-msg">{{ b.message }}</div>
+    </div>
+  </div>`,
+};
+
+/* AppChoice：全局多选一模态（增量后置的「稍后填写 / 放弃增量」分流等场景）。
+   askChoice({title, message, choices:[{key,label,danger}]}) → Promise<key|null>（Esc/关闭=取消） */
+const choiceState = reactive({ open: false, title: "", message: "", choices: [], _resolve: null });
+function askChoice(opts) {
+  opts = opts || {};
+  return new Promise(resolve => {
+    Object.assign(choiceState, { open: true, title: opts.title || "请选择",
+      message: opts.message || "", choices: opts.choices || [], _resolve: resolve });
+  });
+}
+function settleChoice(key) {
+  if (!choiceState.open) return;
+  choiceState.open = false;
+  const r = choiceState._resolve;
+  choiceState._resolve = null;
+  if (r) r(key);
+}
+const AppChoice = {
+  setup() {
+    const c = choiceState;
+    function onKey(e) {
+      if (!c.open) return;
+      if (e.key === "Escape") { e.preventDefault(); settleChoice(null); }
+    }
+    watch(() => c.open, (open) => {
+      if (open) window.addEventListener("keydown", onKey, true);
+      else window.removeEventListener("keydown", onKey, true);
+    });
+    return { c, pick: settleChoice };
+  },
+  template: `
+  <div class="modal-mask" v-if="c.open" @click.self="pick(null)">
+    <div class="modal modal-sm" role="dialog" aria-modal="true">
+      <div class="modal-head">{{ c.title }}
+        <button class="modal-x" @click="pick(null)" title="关闭" aria-label="关闭">✕</button></div>
+      <div class="modal-body">
+        <div class="dialog-msg" v-if="c.message">{{ c.message }}</div>
+      </div>
+      <div class="modal-foot choice-foot">
+        <button v-for="ch in c.choices" :key="ch.key" class="btn dialog-btn"
+                :class="{ danger: ch.danger, primary: ch.primary }" @click="pick(ch.key)">{{ ch.label }}</button>
+        <button class="btn ghost dialog-btn" @click="pick(null)">取消</button>
+      </div>
+    </div>
+  </div>`,
+};
+
 /* PageHeader：统一页头（返回 + 页标题 + 徽标插槽 + 页级操作插槽 + 可选副标题行）。
    全站详情页/功能页共用，替代各自重复的「← 返回…」按钮行，建立一致的页面身份层级。 */
 const PageHeader = {
@@ -975,9 +1037,12 @@ const BatchSummaryPage = {
                   <td>{{ t.group }}</td>
                   <td class="mono">{{ t.file_name }}</td>
                   <td>
-                    <span class="conc-bar" style="width:90px;"><span :style="{ width: Math.min(100, pct(t.content_ratio)) + '%' }"></span></span>
-                    <b style="margin-left:6px;">{{ pct(t.content_ratio) }}%</b>
-                    <span class="badge-grade" :class="gradeCls(t.content_grade)">{{ t.content_grade }}</span>
+                    <template v-if="t.content_ratio !== null && t.content_ratio !== undefined">
+                      <span class="conc-bar" style="width:90px;"><span :style="{ width: Math.min(100, pct(t.content_ratio)) + '%' }"></span></span>
+                      <b style="margin-left:6px;">{{ pct(t.content_ratio) }}%</b>
+                      <span class="badge-grade" :class="gradeCls(t.content_grade)">{{ t.content_grade }}</span>
+                    </template>
+                    <template v-else>—</template>
                   </td>
                   <td>
                     <span class="conc-bar count-bar" style="width:90px;"><span :style="{ width: Math.min(100, pct(t.count_ratio)) + '%' }"></span></span>
@@ -989,7 +1054,7 @@ const BatchSummaryPage = {
                 </tr>
               </tbody>
             </table>
-            <p class="hint" style="margin:8px 0 0;">内容偏离度 =（有差异 + 仅{{ p.src_a }} + 仅{{ p.src_b }}）/ {{ p.src_a }}选区总条数；条数偏离度 = |{{ p.src_b }} − {{ p.src_a }}|总条数差 / {{ p.src_a }}选区总条数。分级（两指标同）：≥10% 微量偏移（紫）、≥20% 务必关注（黄）、≥50% 严重问题（红）。</p>
+            <p class="hint" style="margin:8px 0 0;">内容偏离度 = 有差异条数 / 已匹配键值的记录数（完全匹配+有差异，不含仅{{ p.src_a }}/仅{{ p.src_b }}；无已匹配记录显示—）；条数偏离度 = |{{ p.src_b }} − {{ p.src_a }}|总条数差 / {{ p.src_a }}选区总条数。分级（两指标同）：≥10% 微量偏移（紫）、≥20% 务必关注（黄）、≥50% 严重问题（红）。</p>
           </div>
         </div>
       </div>
@@ -1061,10 +1126,27 @@ const ConfigPanel = {
     loadFromMeta();
     watch(() => props.meta, loadFromMeta);
 
-    function startEdit() { editing.value = true; }
+    function startEdit() { editing.value = true; loadConfFiles(); resolveTarget(); }
     function cancel() { editing.value = false; err.value = ""; loadFromMeta(); }
 
     const toast = ref("");
+    // 需求⑤：保存目标配置文件——默认该作业创建时记录的来源文件（conf_file；内联/旧记录回退 current.conf），
+    // 编辑时可在全部配置文件间切换；保存只写目标文件，不影响其他文件（Q14 口径）
+    const confTarget = ref("");
+    const confFiles = ref([]);
+    async function loadConfFiles() {
+      try {
+        const r = await api("/api/config-files");
+        confFiles.value = (r.files || []).map(f => typeof f === "string" ? { name: f } : f);
+      } catch (e) { confFiles.value = []; }
+    }
+    function resolveTarget() {
+      const cf = (props.meta || {}).conf_file;
+      if (!confTarget.value) {
+        confTarget.value = cf && cf !== "内联" ? cf : "current.conf";
+      }
+      return confTarget.value;
+    }
 
     function buildBody() {
       const body = {
@@ -1076,7 +1158,9 @@ const ConfigPanel = {
         key_seq: form.key_seq || null, omit_seq: form.omit_seq || null,
         pri_seq: form.pri_seq || null,
         addmod: form.addmod || null,
-        // 透传列名，确保重跑结果与正常发起一致地显示列名
+        // 需求⑤：持久化目标 = 该作业所用配置文件（可下拉改选）；后端只写该文件，互不影响
+        target: resolveTarget(),
+        // 透传列名，确保重跑结果与正常发起一致地显示列名（保存时同步重编码 COLS）
         column_names: columnNames.value && columnNames.value.length ? columnNames.value : null,
       };
       if (form.replace_rules_text.trim()) {
@@ -1122,25 +1206,28 @@ const ConfigPanel = {
       finally { busy.value = false; }
     }
 
-    // 优化项2：将结果页修改的规则直接持久化到对比配置（current.*），下次读取/导出可见
+    // 需求⑤：将结果页修改的规则持久化到该作业实际使用的配置文件（target 默认 conf_file，可下拉改选），
+    // 目标文件内同（昵称+通配名）替换、其他文件不动
     async function saveConfig() {
       err.value = ""; busy.value = true;
       try {
         if (!form.nickname) throw new Error("需填写昵称才能保存到配置");
         if (!form.key_seq) throw new Error("需填写主键序列才能保存");
         const r = await jpost("/api/configs", buildBody());
-        toast.value = "已保存到配置（" + (r.files || []).join("、") + "）";
+        toast.value = "已保存到 " + (r.target || (r.files || []).join("、"));
         setTimeout(() => toast.value = "", 2500);
       } catch (e) { err.value = e.message; }
       finally { busy.value = false; }
     }
 
-    return { editing, busy, err, form, columnNames, toast, startEdit, cancel, rerun, saveConfig, syncLatest };
+    return { editing, busy, err, form, columnNames, toast, confTarget, confFiles,
+             startEdit, cancel, rerun, saveConfig, syncLatest };
   },
   template: `
   <div class="card">
     <div class="card-head">⚙️ 本次对比配置
       <span class="group-badge" v-if="(meta.config||{}).group">归属组 {{ meta.config.group }}</span>
+      <span class="group-badge conf-src" v-if="meta.conf_file" :title="'本作业创建时使用的配置文件'">🗂 {{ meta.conf_file === '内联' ? '配置来源：提交内联' : '配置来源：' + meta.conf_file }}</span>
       <div class="head-actions">
         <button class="mini-btn" @click="syncLatest" :disabled="busy" title="按昵称从配置库拉取最新生效配置填入">↻ 同步最新配置</button>
         <button v-if="!editing" class="mini-btn" @click="startEdit">编辑</button>
@@ -1181,6 +1268,11 @@ const ConfigPanel = {
           </select></div>
         <div class="field mono"><label>增量过滤 ADDMOD（1-based 栏位，逗号分隔）</label>
           <input v-model="form.addmod" :readonly="!editing" placeholder="如 2,5；留空 = 全量对比" /></div>
+        <div class="field" v-if="editing"><label>保存目标配置文件（只写所选文件，其他文件不受影响）</label>
+          <select v-model="confTarget" class="sel">
+            <option v-for="f in confFiles" :key="f.name" :value="f.name"
+                    :disabled="f.name === 'default.conf'">{{ f.name }}（{{ f.rules || 0 }} 条规则）</option>
+          </select></div>
       </div>
       <div class="field mono" style="margin-top:12px;">
         <label>按列正则替换（JSON，列 1-based）</label>
@@ -1673,8 +1765,9 @@ const SubmitForm = {
       toast.value = "已载入配置 " + c.nickname + named; setTimeout(() => toast.value = "", 1800);
     }
     async function loadConfigFiles() {
-      try { const r = await api("/api/config-files"); cfgFiles.value = r.files;
-            if (!form.batch_config_file && r.files.length) form.batch_config_file = r.files[0]; } catch (e) {}
+      try { const r = await api("/api/config-files");
+            cfgFiles.value = (r.files || []).map(f => typeof f === "string" ? f : f.name);
+            if (!form.batch_config_file && cfgFiles.value.length) form.batch_config_file = cfgFiles.value[0]; } catch (e) {}
     }
     // 对比配置分组（目录对比圈定范围；空 = 全部文本）
     const cmpGroups = ref([]);
@@ -1692,6 +1785,7 @@ const SubmitForm = {
           trailer_prefix: form.trailer_prefix,
           key_seq: form.key_seq, omit_seq: form.omit_seq || null, pri_seq: form.pri_seq || null,
           addmod: form.addmod || null,
+          column_names: form.column_names && form.column_names.length ? form.column_names : null,
         };
         if (form.replace_rules_text.trim()) body.replace_rules = JSON.parse(form.replace_rules_text);
         const r = await jpost("/api/configs", body);
@@ -1782,15 +1876,14 @@ const SubmitForm = {
             p.addmod = form.addmod || null;
             if (!form.key_seq) throw new Error("请填写主键序列（或选择「全部配置」/一个配置文件）");
           }
-          // 增量对比（ADDMOD）：先 dry-run 配对预览，任一文本配置了 ADDMOD 才弹条件模态框
-          const pv = await jpost("/api/batch-preview", p);
-          if ((pv.pairs || []).some(x => (x.addmod || []).length)) {
-            const conds = await openIncrModal(pv.pairs);
-            if (conds === null) { busy.value = false; return; } // 用户取消
-            p.incr_conds = conds;
-          }
-          const r = await jpost("/api/batch-compare", p);
-          emit("batched", r.batch_id);
+          // 需求①秒提：不再提交前同步预扫描（此前 /api/batch-preview 全量扫目录是提交卡顿主因）——
+          // 提交立即返回批次并跳转结果页，作业随后台扫描逐渐入队；规则含 ADDMOD 的文本作业挂起，
+          // 批次页弹出增量条件对话框（稍后填写/放弃增量），不涉及增量的文本先行对比
+          showBusy("正在提交对比批次…");
+          try {
+            const r = await jpost("/api/batch-compare", p);
+            emit("batched", r.batch_id);
+          } finally { hideBusy(); }
         } else {
           const p = buildPayload();
           // 增量对比（ADDMOD）：内联规则声明了 ADDMOD 即弹条件模态框（每文件对一行）
@@ -2239,6 +2332,7 @@ const JobList = {
 
 /* ---------- 批次详情（二级页：路径+概况 + 可搜索的文件列表） ---------- */
 const BatchView = {
+  components: { IncrCondModal },
   props: ["batchId"],
   emits: ["open", "back", "summary"],
   setup(props, { emit }) {
@@ -2302,9 +2396,50 @@ const BatchView = {
             if (ov.value && ov.value.batch) ov.value.batch.label = v; }
       catch (e) { notify(e.message, "error"); }
     }
+    // 需求①增量后置：ADDMOD 文本作业挂起待条件——轮询发现 addmod_pending 后自动弹增量对话框
+    // （每批次只自动弹一次）；取消时按 Q12=C 分流：稍后填写（横幅常驻可重开）/ 放弃增量直接对比
+    const incrModal = reactive({ open: false, rows: [] });
+    const incrDismissed = ref(false);
+    const incrAutoOpened = ref(false);
+    const incrPending = computed(() => (ov.value && ov.value.addmod_pending) || []);
+    watch(incrPending, (list) => {
+      if (list.length && !incrAutoOpened.value && !incrDismissed.value) {
+        incrAutoOpened.value = true;
+        incrModal.rows = list;
+        incrModal.open = true;
+      }
+    });
+    function onIncrConfirm(conds) {
+      incrModal.open = false;
+      const condsByJob = {};
+      incrModal.rows.forEach((r, i) => { condsByJob[r.job_id] = conds[i] || []; });
+      jpost("/api/batches/" + props.batchId + "/incr-conds", { conds: condsByJob })
+        .then(r => notify("已提交增量条件，" + r.applied + " 个文本开始对比"))
+        .catch(e => notify("增量条件提交失败: " + e.message, "error"));
+    }
+    async function onIncrCancel() {
+      incrModal.open = false;
+      incrAutoOpened.value = true;
+      const pick = await askChoice({
+        title: "增量条件未填写",
+        message: "仍有 " + incrPending.value.length + " 个文本等待增量条件（ADDMOD）。稍后填写：这些文本保持等待，本页横幅可随时重开；放弃增量：按全量对比立即开跑。",
+        choices: [
+          { key: "later", label: "⏸ 稍后填写", primary: true },
+          { key: "release", label: "▶ 放弃增量直接对比", danger: true },
+        ],
+      });
+      if (pick === "release") {
+        try {
+          const r = await jpost("/api/batches/" + props.batchId + "/incr-release", {});
+          notify("已放弃增量，" + r.released + " 个文本开始对比");
+        } catch (e) { notify(e.message, "error"); }
+      } else if (pick === "later") {
+        incrDismissed.value = true;
+      }
+    }
     return { ov, q, children, pgChildren, baseName, nickOf, groupOf, fmtTime, srcA, srcB, sourceA, sourceB, gradeOf,
              starFilter, starCounts, toggleStar, groupFilter, groupOptions, exportHref, exportAllHref,
-             editLabel,
+             editLabel, incrModal, incrPending, onIncrConfirm, onIncrCancel,
              open: (id) => emit("open", id), goBack: () => emit("back") };
   },
   template: `
@@ -2325,6 +2460,10 @@ const BatchView = {
         </div>
         <div v-else-if="ov.batch.prepare_state === 'failed'" class="no-rule" style="margin-top:0;">
           ❌ 建档失败：{{ ov.batch.prepare_error || '未知原因' }}
+        </div>
+        <div v-if="incrPending.length" class="no-rule" style="margin-top:10px;">
+          ⏸ {{ incrPending.length }} 个文本待增量条件（ADDMOD），已挂起等待；其余文本正常对比。
+          <button class="mini-btn" @click="incrModal.rows = incrPending; incrModal.open = true">填写增量条件</button>
         </div>
         <div class="summary-metrics">
           <div class="metric total"><div class="num">{{ ov.total_files }}</div><div class="lbl">对比文件数{{ ov.batch.prepare_state === 'preparing' ? '（建档中）' : '' }}</div></div>
@@ -2396,7 +2535,9 @@ const BatchView = {
       </div>
     </div>
   </div>
-  <div v-else class="loading">加载中…</div>`,
+  <div v-else class="loading">加载中…</div>
+  <IncrCondModal v-if="incrModal.open" :rows="incrModal.rows"
+                 @confirm="onIncrConfirm" @cancel="onIncrCancel" />`,
 };
 
 /* ---------- 设置页（AI 接入配置） ---------- */
@@ -2499,7 +2640,27 @@ const SettingsPage = {
       } catch (e) { base.ok = false; base.msg = "导入失败: " + e.message; }
       finally { base.busy = false; }
     }
-    function exportConfigs() { window.location = "/api/configs/export"; }
+    // 配置导出（需求④）：fmt=conf 纯文本（全部生效规则，可直接回导，含修改时间注释）/ xlsx Excel
+    function exportConfigs(fmt) {
+      window.location = "/api/configs/export" + (fmt && fmt !== "xlsx" ? "?fmt=" + fmt : "");
+    }
+
+    // Excel 回导（需求④闭环）：解析导出的 Excel「生效配置」Sheet，按（昵称+通配名）合并写入 current.conf
+    const xl = reactive({ busy: false, msg: "", ok: null, file: null });
+    function onXlFile(ev) { xl.file = ev.target.files[0] || null; }
+    async function importExcel() {
+      if (!xl.file) { xl.msg = "请先选择导出的配置 Excel（.xlsx）"; xl.ok = false; return; }
+      xl.busy = true; xl.msg = "导入中…"; xl.ok = null;
+      try {
+        const fd = new FormData();
+        fd.append("file", xl.file);
+        const r = await api("/api/configs/import-excel", { method: "POST", body: fd });
+        xl.ok = true;
+        xl.msg = "导入成功：" + r.imported + " 条已合并写入 " + r.file
+            + ((r.skipped || []).length ? "（跳过 " + r.skipped.length + " 条：" + r.skipped.join("、") + "）" : "");
+      } catch (e) { xl.ok = false; xl.msg = "导入失败: " + e.message; }
+      finally { xl.busy = false; }
+    }
 
     // 特殊编码字段映射导入（混合编码栏位转码，如 EBCDIC 文件内嵌 UTF-16 字段）
     const cs = reactive({ busy: false, msg: "", ok: null, file: null, status: null });
@@ -2658,7 +2819,7 @@ const SettingsPage = {
     return { providers, form, apiKeySet, busy, toast, test, curModels, pickProvider, save, testConn,
              splitCfgs, loadSplitConfigs, delSplitConfig,
              rt, saveRuntime, imp, onImpFiles, importStructure,
-             base, onBaseFiles, importBaseline, exportConfigs,
+             base, onBaseFiles, importBaseline, exportConfigs, xl, onXlFile, importExcel,
              cs, onCsFile, importCharset,
              ctdyn, onCtDynFile, importCtDyn,
              discard, onDiscardFile, importDiscard, clearDiscard,
@@ -2805,15 +2966,20 @@ const SettingsPage = {
       <div class="card-body">
         <p class="ai-hint" style="margin-top:0;">
           <b>基线导入</b>：上传 .conf/.txt/.json 配置文件，合并写入 <code>default.conf</code> 作为基线（初次导入用）。
-          基线导入会写入 <code>default.conf</code> 并复制生成一份 <code>current.conf</code>。此后页面上的所有配置修改**只写入 <code>current.conf</code>**（扩展文本，含全部字段与修改时间），不改动基线；列名信息来自【列名映射导入】落库的字段映射（对比时按文件名自动注入）。
-          <b>配置导出</b>：导出 Excel（Sheet1 现生效版本；Sheet2 基线↔生效对比，含修改标识与修改时间）。
+          基线导入会写入 <code>default.conf</code> 并复制生成一份 <code>current.conf</code>。此后页面上的所有配置修改**默认只写入 <code>current.conf</code>**（结果页保存可在下拉中改选其他配置文件，只写所选文件、互不影响）；列名信息来自【列名映射导入】落库的字段映射（对比时按文件名自动注入）。
+          <b>配置导出</b>：conf 纯文本（全部生效规则，含各来源文件修改时间注释，可直接回导）或 Excel（Sheet1 生效配置含修改时间列；Sheet2 基线↔生效对比）；<b>Excel 回导</b>按（昵称+通配名）合并写入 current.conf。
         </p>
         <div class="field"><label>基线配置文件（.conf/.txt/.json，可多选）</label>
           <input type="file" accept=".conf,.txt,.json" multiple @change="onBaseFiles" /></div>
+        <div class="field"><label>Excel 回导（选本页导出的配置 Excel .xlsx）</label>
+          <input type="file" accept=".xlsx" @change="onXlFile" /></div>
         <div class="btn-row">
           <button class="btn ghost" @click="importBaseline" :disabled="base.busy">{{ base.busy ? '导入中…' : '导入为基线' }}</button>
-          <button class="btn" @click="exportConfigs">导出配置 Excel</button>
+          <button class="btn ghost" @click="importExcel" :disabled="xl.busy">{{ xl.busy ? '导入中…' : '⬆ 导入 Excel 到 current.conf' }}</button>
+          <button class="btn" @click="exportConfigs('conf')">⬇ 导出 conf</button>
+          <button class="btn" @click="exportConfigs('xlsx')">⬇ 导出配置 Excel</button>
           <span v-if="base.msg" :style="{ color: base.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ base.msg }}</span>
+          <span v-if="xl.msg" :style="{ color: xl.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ xl.msg }}</span>
         </div>
       </div>
     </div>
@@ -4185,11 +4351,19 @@ const ConfigManagePage = {
     // ---- 对比配置 ----
     const cfgQuery = ref(""); const configs = ref([]); const badLines = ref(0);
     const cfgErr = ref(""); const busy = ref(false);
+    // 同（昵称+通配名）规则多文件共存清单（需求⑤提示：use_all 生效优先级=来源文件列所列者）
+    const dups = ref([]);
+    const dupMap = computed(() => {
+      const m = {};
+      (dups.value || []).forEach(d => { m[d.nickname + "\u0000" + (d.file_glob || "*")] = d.files || []; });
+      return m;
+    });
     async function loadConfigs() {
       busy.value = true;
       try {
         const r = await api("/api/configs/manage" + (cfgQuery.value.trim() ? "?q=" + encodeURIComponent(cfgQuery.value.trim()) : ""));
-        configs.value = r.configs || []; badLines.value = r.bad_lines || 0; cfgErr.value = "";
+        configs.value = r.configs || []; badLines.value = r.bad_lines || 0;
+        dups.value = r.dups || []; cfgErr.value = "";
       } catch (e) { cfgErr.value = e.message; }
       finally { busy.value = false; }
     }
@@ -4197,19 +4371,71 @@ const ConfigManagePage = {
     const cfgPg = usePager(() => configs.value, 50);
     watch(cfgQuery, () => { cfgPg.reset(); });
 
+    // ---- 配置文件（需求⑤）：清单（规则数/修改时间/受保护）+ 新建（空白/复制当前）/重命名/删除 ----
+    const confFiles = ref([]);
+    async function loadConfFiles() {
+      try { const r = await api("/api/config-files"); confFiles.value = r.files || []; }
+      catch (e) { confFiles.value = []; }
+    }
+    onMounted(loadConfFiles);
+    // 文件管理选中项（下拉选择 + 重命名/删除，千级文件规模友好）
+    const selFile = ref("current.conf");
+    const selFileInfo = computed(() => confFiles.value.find(f => f.name === selFile.value) || null);
+    const fileModal = reactive({ open: false, mode: "new", err: "", form: { name: "", from: "blank", orig: "" } });
+    function newConfFile() {
+      fileModal.mode = "new"; fileModal.err = "";
+      Object.assign(fileModal.form, { name: "", from: "blank", orig: "" });
+      fileModal.open = true;
+    }
+    function renameConfFile(f) {
+      fileModal.mode = "rename"; fileModal.err = "";
+      Object.assign(fileModal.form, { name: f.name.replace(/\.conf$/i, ""), from: "blank", orig: f.name });
+      fileModal.open = true;
+    }
+    async function saveConfFile() {
+      fileModal.err = "";
+      const name = (fileModal.form.name || "").trim();
+      if (!name) { fileModal.err = "文件名不能为空"; return; }
+      try {
+        if (fileModal.mode === "new") {
+          await jpost("/api/config-files", { name, from: fileModal.form.from });
+          notify("配置文件已创建：" + name + (name.toLowerCase().endsWith(".conf") ? "" : ".conf"));
+        } else {
+          const r = await jpost("/api/config-files/rename", { from: fileModal.form.orig, to: name });
+          notify("配置文件已重命名：" + r.from + " → " + r.to);
+        }
+        fileModal.open = false;
+        loadConfFiles(); loadConfigs();
+      } catch (e) {
+        fileModal.err = (fileModal.mode === "new" ? "创建失败: " : "重命名失败: ") + e.message;
+      }
+    }
+    async function deleteConfFile(f) {
+      if (f.protected) { notify("current.conf / default.conf 为系统文件，不可删除", "err"); return; }
+      const ok = await askConfirm("删除配置文件「" + f.name + "」（" + f.rules + " 条规则）？历史作业不受影响（其记录的是创建时的配置来源）。", { danger: true });
+      if (!ok) return;
+      try {
+        await api("/api/config-files?name=" + encodeURIComponent(f.name), { method: "DELETE" });
+        notify("配置文件「" + f.name + "」已删除");
+        loadConfFiles(); loadConfigs();
+      } catch (e) { notify("删除失败: " + e.message, "err"); }
+    }
+
     const cfgModal = reactive({ open: false, mode: "new", err: "",
       form: { nickname: "", file_glob: "*", key_seq: "", omit_seq: "", delimiter: " | ",
               trailer_prefix: "|||||", encoding_a: "auto", encoding_b: "auto",
-              source_a: "A", source_b: "B", pri_seq: "", addmod: "" } });
+              source_a: "A", source_b: "B", pri_seq: "", addmod: "", target: "current.conf" } });
     function newConfig() {
       cfgModal.mode = "new"; cfgModal.err = "";
       Object.assign(cfgModal.form, { nickname: "", file_glob: "*", key_seq: "", omit_seq: "",
         delimiter: " | ", trailer_prefix: "|||||", encoding_a: "auto", encoding_b: "auto",
-        source_a: "A", source_b: "B", pri_seq: "", addmod: "" });
+        source_a: "A", source_b: "B", pri_seq: "", addmod: "", target: "current.conf" });
       cfgModal.open = true;
     }
     function editConfig(c) {
       cfgModal.mode = "edit"; cfgModal.err = "";
+      // 保存目标：默认该规则当前所在文件；default.conf 为基线不可写 → 回退 current.conf
+      const tgt = c._source === "default.conf" ? "current.conf" : (c._source || "current.conf");
       Object.assign(cfgModal.form, {
         nickname: c.nickname || "", file_glob: c.file_glob || "*",
         key_seq: seqToStr(c.key_columns), omit_seq: seqToStr(c.omit_columns),
@@ -4217,7 +4443,7 @@ const ConfigManagePage = {
         trailer_prefix: c.trailer_prefix || "|||||",
         encoding_a: c.encoding_a || "auto", encoding_b: c.encoding_b || "auto",
         source_a: c.source_a || "A", source_b: c.source_b || "B",
-        pri_seq: c.pri_seq || "", addmod: c.addmod || "" });
+        pri_seq: c.pri_seq || "", addmod: c.addmod || "", target: tgt });
       cfgModal.open = true;
     }
     async function saveConfig() {
@@ -4231,17 +4457,19 @@ const ConfigManagePage = {
           encoding_a: cfgModal.form.encoding_a, encoding_b: cfgModal.form.encoding_b,
           source_a: cfgModal.form.source_a || null, source_b: cfgModal.form.source_b || null,
           pri_seq: cfgModal.form.pri_seq || null, addmod: cfgModal.form.addmod || null,
+          target: cfgModal.form.target || "current.conf",
         });
-        cfgModal.open = false; loadConfigs();
-        notify("配置「" + cfgModal.form.nickname + "」已保存（写入 " + cfgModal.form.nickname + ".conf，目录批次生效）");
+        cfgModal.open = false; loadConfigs(); loadConfFiles();
+        notify("配置「" + cfgModal.form.nickname + "」已保存到 " + (cfgModal.form.target || "current.conf")
+            + "（其他配置文件不受影响）");
       } catch (e) { cfgModal.err = "保存失败: " + e.message; }
     }
     async function deleteConfig(c) {
-      const ok = await askConfirm("删除配置「" + c.nickname + "」？将删除其 .conf 并从 current/default.conf 移除该行。", { danger: true });
+      const ok = await askConfirm("删除配置「" + c.nickname + "」？将从全部配置文件移除该昵称的规则行（基线 default.conf 同样清理）。", { danger: true });
       if (!ok) return;
       try {
         await api("/api/configs?nickname=" + encodeURIComponent(c.nickname), { method: "DELETE" });
-        notify("配置「" + c.nickname + "」已删除"); loadConfigs();
+        notify("配置「" + c.nickname + "」已删除"); loadConfigs(); loadConfFiles();
       } catch (e) { notify("删除失败: " + e.message, "err"); }
     }
 
@@ -4301,7 +4529,9 @@ const ConfigManagePage = {
       ev.target.value = "";
     }
 
-    return { cfgQuery, configs, badLines, cfgErr, busy, loadConfigs, cfgPg,
+    return { cfgQuery, configs, badLines, cfgErr, busy, loadConfigs, cfgPg, dups, dupMap,
+             confFiles, selFile, selFileInfo,
+             fileModal, newConfFile, renameConfFile, saveConfFile, deleteConfFile, loadConfFiles,
              cfgModal, newConfig, editConfig, saveConfig, deleteConfig, configNicks, missCount,
              groups, grpErr, grpBusy, loadGroups, grpModal, newGroup, editGroup, saveGroup,
              deleteGroup, importGroups, fmtTime };
@@ -4316,9 +4546,23 @@ const ConfigManagePage = {
                      @go="cfgPg.go" @resize="cfgPg.resize" />
           <button class="mini-btn" @click="loadConfigs" :disabled="busy">↻ 刷新</button>
           <button class="mini-btn" @click="newConfig">＋ 新增配置</button>
+          <button class="mini-btn" @click="newConfFile" title="新建独立配置文件（可空白或复制 current.conf 作起点），供同一文本按不同配置对比">🗂 新增配置文件</button>
         </div>
       </div>
       <div class="card-body">
+        <div class="conf-file-bar" v-if="confFiles.length">
+          <b>🗂 配置文件：</b>
+          <select v-model="selFile" class="styled-select" style="min-width:200px;">
+            <option v-for="f in confFiles" :key="f.name" :value="f.name"
+                    :disabled="f.name === 'default.conf'">{{ f.name }}（{{ f.rules || 0 }} 条）</option>
+          </select>
+          <template v-if="selFileInfo">
+            <span class="hint">{{ selFileInfo.rules || 0 }} 条规则 · 修改于 {{ selFileInfo.mtime ? fmtTime(selFileInfo.mtime) : '—' }}<template v-if="selFileInfo.protected"> · 🔒 系统文件</template></span>
+            <button v-if="!selFileInfo.protected" class="mini-btn" @click="renameConfFile(selFileInfo)">✏️ 重命名</button>
+            <button v-if="!selFileInfo.protected" class="mini-btn" @click="deleteConfFile(selFileInfo)">🗑 删除文件</button>
+          </template>
+          <span class="hint" style="margin-left:8px;">修改/新增规则默认写入 current.conf；独立配置文件在规则弹框中选择保存目标。</span>
+        </div>
         <div class="sec-search">
           <label>搜索 <input v-model="cfgQuery" @input="loadConfigs" placeholder="按昵称 / 通配名搜索" style="width:260px;" /></label>
         </div>
@@ -4338,7 +4582,9 @@ const ConfigManagePage = {
                 <td>{{ c.encoding_a }} / {{ c.encoding_b }}</td>
                 <td>{{ c.pri_seq || '5' }}</td>
                 <td>{{ c.addmod || '—' }}</td>
-                <td class="mono">{{ c._source }}<template v-if="c.line_no">:{{ c.line_no }}</template></td>
+                <td class="mono">{{ c._source }}<template v-if="c.line_no">:{{ c.line_no }}</template>
+                  <span v-if="dupMap[c.nickname + '\u0000' + (c.file_glob || '*')]" class="miss-hint"
+                        :title="'同（昵称+通配名）规则还存在于：' + dupMap[c.nickname + '\u0000' + (c.file_glob || '*')].filter(f => f !== c._source).join('、') + '。目录批次「全部配置」按来源文件优先级取本条生效'">⚠ 同名多文件</span></td>
                 <td>
                   <button class="mini-btn" @click="editConfig(c)">✏️ 修改</button>
                   <button class="mini-btn" @click="deleteConfig(c)">🗑 删除</button>
@@ -4347,7 +4593,7 @@ const ConfigManagePage = {
             </tbody>
           </table>
         </div>
-        <p class="hint" style="margin:8px 0 0;">修改/新增写入 {昵称}.conf（目录批次「全部配置」时优先生效）；同一配置同时存在于聚合文件时，保存后以单配置文件为准。</p>
+        <p class="hint" style="margin:8px 0 0;">修改/新增规则默认写入 current.conf（弹框中可改选目标配置文件；只写所选文件，其他文件不受影响）；目录批次「全部配置」按来源文件优先级（单配置文件 → current.conf → default.conf）取同名规则生效。</p>
       </div>
     </div>
 
@@ -4411,13 +4657,41 @@ const ConfigManagePage = {
               </select></div>
             <div class="field mono"><label>增量过滤 ADDMOD（栏位，逗号分隔）</label>
               <input v-model="cfgModal.form.addmod" placeholder="留空 = 全量" /></div>
+            <div class="field"><label>保存目标配置文件（只写所选文件，其他文件不受影响）</label>
+              <select v-model="cfgModal.form.target">
+                <option v-for="f in confFiles" :key="f.name" :value="f.name"
+                        :disabled="f.name === 'default.conf'">{{ f.name }}（{{ f.rules || 0 }} 条）</option>
+              </select></div>
           </div>
-          <p class="hint" style="margin:10px 0 0;">保存写入 {昵称}.conf；同昵称旧配置行（current/default 等聚合文件）自动被其覆盖生效。修改/新增仅动此配置，已有替换规则与列名映射保留。</p>
+          <p class="hint" style="margin:10px 0 0;">保存写入所选目标配置文件（目标内同昵称+通配名规则替换、否则追加）；已有替换规则与列名映射保留。</p>
           <div class="error-box" v-if="cfgModal.err">{{ cfgModal.err }}</div>
         </div>
         <div class="modal-foot">
           <button class="btn ghost" @click="cfgModal.open=false">取消</button>
           <button class="btn primary" @click="saveConfig">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 配置文件 新建/重命名 弹框（需求⑤） -->
+    <div class="modal-mask" v-if="fileModal.open" @click.self="fileModal.open=false">
+      <div class="modal modal-sm">
+        <div class="modal-head">{{ fileModal.mode === 'new' ? '🗂 新增配置文件' : '🗂 重命名配置文件「' + fileModal.form.orig + '」' }}
+          <button class="modal-x" @click="fileModal.open=false">✕</button></div>
+        <div class="modal-body">
+          <div class="field"><label>文件名（自动补 .conf 后缀）</label>
+            <input v-model="fileModal.form.name" placeholder="如 DPTM_BATCH" /></div>
+          <div class="field" v-if="fileModal.mode === 'new'"><label>起始内容</label>
+            <select v-model="fileModal.form.from">
+              <option value="blank">空白配置</option>
+              <option value="current">复制当前 current.conf 全部内容作起点</option>
+            </select></div>
+          <p class="hint" style="margin:10px 0 0;">current.conf / default.conf 为系统文件（🔒），不可重命名或删除；独立配置文件可在规则编辑弹框中选为保存目标，供同一文本按不同配置对比。</p>
+          <div class="error-box" v-if="fileModal.err">{{ fileModal.err }}</div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn ghost" @click="fileModal.open=false">取消</button>
+          <button class="btn primary" @click="saveConfFile">{{ fileModal.mode === 'new' ? '创建' : '重命名' }}</button>
         </div>
       </div>
     </div>
@@ -4448,7 +4722,7 @@ const App = {
   components: { SubmitForm, JobList, BatchView, ResultView, SettingsPage, SplitPage, SplitResultView,
                 TaskManagerPage, ReportPage, ReportBatchView, ReportResultView,
                 CustomPage, CustomBatchView, CustomResultView, BatchSummaryPage, ConfigManagePage,
-                AppDialog, AppToast },
+                AppDialog, AppChoice, AppBusy, AppToast },
   setup() {
     const tab = ref("submit");
     const jobId = ref(null);
@@ -4556,6 +4830,8 @@ const App = {
     <ConfigManagePage v-else-if="tab==='configmgr'" :encodings="encodings" />
     <SettingsPage v-else-if="tab==='settings'" @edit-split-config="editSplitConfig" />
     <AppDialog />
+    <AppChoice />
+    <AppBusy />
     <AppToast />
   </div>`,
 };

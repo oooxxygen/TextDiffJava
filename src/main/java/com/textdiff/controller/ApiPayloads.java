@@ -53,6 +53,11 @@ final class ApiPayloads {
 
     /** 配置对象 → 前端展示形态（meta.config / configs 列表项）。0-based 数组 + 1-based 序列串。 */
     static Map<String, Object> configMap(CompareConfig cfg, String source) {
+        return configMap(cfg, source, null);
+    }
+
+    /** 归属组换源版（需求③）：ownershipGroup 非空时 group 取 type_parm 的归属组，否则回退昵称（旧行为）。 */
+    static Map<String, Object> configMap(CompareConfig cfg, String source, String ownershipGroup) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("nickname", cfg.nickname);
         m.put("file_glob", cfg.fileGlob);
@@ -71,7 +76,9 @@ final class ApiPayloads {
         m.put("addmod", cfg.incrFields.isEmpty() ? null : Rules.addmod1based(cfg.incrFields));
         m.put("column_names", cfg.columnNames);
         m.put("replace_rules", replaceRulesMap(cfg.replaceRules));
-        m.put("group", cfg.group == null || cfg.group.isEmpty() ? cfg.nickname : cfg.group);
+        m.put("group", ownershipGroup != null && !ownershipGroup.isEmpty()
+                ? ownershipGroup
+                : (cfg.group == null || cfg.group.isEmpty() ? cfg.nickname : cfg.group));
         m.put("_source", source);
         return m;
     }

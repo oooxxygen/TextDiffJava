@@ -55,11 +55,12 @@ class CompareGroupApiTest {
         Files.writeString(defaultC, "SCOPENICK:f*.txt:KEYSEQ=1:ENCA=utf-8:ENCB=utf-8\r\n", StandardCharsets.UTF_8);
         Files.writeString(extra, "EXTRANICK:x*.txt:KEYSEQ=2:ENCA=utf-8:ENCB=utf-8\r\n", StandardCharsets.UTF_8);
         try {
-            // manage 生效去重：同（昵称+通配）只显示生效那条（单配置文件优先于 current/default）
+            // manage 生效去重：同（昵称+通配）只显示生效那条（单配置文件优先于 current/default）；
+            // dups 数组（同名规则多文件提示）不占 configs 展示位——按 _source 计数
             String manage = mvc.perform(get("/api/configs/manage"))
                     .andExpect(status().isOk())
                     .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-            assertEquals(1, count(manage, "\"nickname\":\"SCOPENICK\""), manage);
+            assertEquals(1, count(manage, "\"_source\":\"SCOPENICK.conf\""), manage);
             assertTrue(manage.contains("\"_source\":\"SCOPENICK.conf\""), manage);
             assertFalse(manage.contains("\"_source\":\"current.conf\""), manage);
 
@@ -87,11 +88,12 @@ class CompareGroupApiTest {
             mvc.perform(delete("/api/batches/" + batchId)).andExpect(status().isOk());
             mvc.perform(delete("/api/compare-groups").param("name", "范围组")).andExpect(status().isOk());
 
-            // 无主键配置（整行对比）可保存；来源命名缺省 A/B（非 auto）
+            // 无主键配置（整行对比）可保存（target 指定独立文件）；来源命名缺省 A/B（非 auto）
             mvc.perform(post("/api/configs").contentType("application/json")
                             .content("{\"nickname\":\"NOKEY_X\",\"file_glob\":\"n*.txt\","
-                                    + "\"delimiter\":\" | \",\"trailer_prefix\":\"|||||\"}"))
-                    .andExpect(status().isOk());
+                                    + "\"delimiter\":\" | \",\"trailer_prefix\":\"|||||\",\"target\":\"NOKEY_X.conf\"}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.target").value("NOKEY_X.conf"));
             String raw = mvc.perform(get("/api/configs/raw").param("file", "NOKEY_X.conf"))
                     .andExpect(status().isOk())
                     .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
@@ -105,7 +107,8 @@ class CompareGroupApiTest {
                     .andExpect(jsonPath("$.files[0]").value("extra_rules.txt"));
             assertFalse(Files.readString(extra, StandardCharsets.UTF_8).contains("EXTRANICK"));
         } finally {
-            for (Path p : List.of(own, current, defaultC, extra)) Files.deleteIfExists(p);
+            for (Path p : List.of(own, current, defaultC, extra,
+                    cfg.resolve("NOKEY_X.conf"))) Files.deleteIfExists(p);
         }
     }
 

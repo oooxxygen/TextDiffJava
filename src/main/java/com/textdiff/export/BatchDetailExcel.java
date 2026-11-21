@@ -179,9 +179,19 @@ public final class BatchDetailExcel {
         }
     }
 
+    /** POI 单元格硬上限 32767 字符：主键/跳过栏位达几百字段时「对比配置」描述可达数万字符，超限即抛异常——统一截断保护。 */
+    public static final int CELL_MAX = 32000;
+
+    /** 超长截断（带标记）；conf 格式导出才是完整保真通道。 */
+    public static String capCell(String value) {
+        if (value == null || value.length() <= CELL_MAX) return value;
+        return value.substring(0, CELL_MAX) + "…（超长截断，完整内容请导出配置 conf 格式查看）";
+    }
+
     private static Cell cell(Row row, int col, String value) {
         Cell c = row.createCell(col);
-        c.setCellValue(value == null ? "" : value);
+        String v = capCell(value);
+        c.setCellValue(v == null ? "" : v);
         return c;
     }
 

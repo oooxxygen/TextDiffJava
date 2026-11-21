@@ -124,7 +124,7 @@ public class ExportController {
 
     /**
      * 批次明细 Excel：Sheet1 对比总览（每表新旧总数/完全匹配/键值匹配有差异/未匹配 + 对比配置列号+名称），
-     * Sheet2 差异栏位（表名昵称/列号/列名/备注）。group 过滤归属组（可选）。
+     * Sheet2 差异栏位（表名昵称/列号/列名/备注）。group 过滤归属组（可选，需求③：按 type_parm ownership_group）。
      */
     @GetMapping("/batches/{id}/export-detail")
     public ResponseEntity<byte[]> exportBatchDetail(@PathVariable String id,
@@ -133,9 +133,7 @@ public class ExportController {
         if (batch == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "批次不存在: " + id);
         List<JobRecord> jobs = new ArrayList<>();
         for (JobRecord j : store.listJobs(id)) {
-            String nick = j.nickname;
-            if (group != null && !group.isBlank() && !group.equals(nick)
-                    && !(j.configLine != null && j.configLine.startsWith(group + ":"))) continue;
+            if (group != null && !group.isBlank() && !group.equals(groupOfJob(j))) continue;
             jobs.add(j);
         }
         if (jobs.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "无可导出的子作业");
@@ -151,9 +149,7 @@ public class ExportController {
         Path dir = tmpDir().resolve("batch_" + id + "_" + System.nanoTime());
         List<Path> files = new ArrayList<>();
         for (JobRecord j : store.listJobs(id)) {
-            String nick = j.nickname;
-            if (group != null && !group.isBlank() && !group.equals(nick)
-                    && !(j.configLine != null && j.configLine.startsWith(group + ":"))) continue;
+            if (group != null && !group.isBlank() && !group.equals(groupOfJob(j))) continue;
             if (includeFull) {
                 files.addAll(ExportAssembler.writeFullCsv(dir, j, ExportAssembler.DATA));
             }
@@ -163,6 +159,14 @@ public class ExportController {
         Path zip = dir.resolve("批次_" + id + ".zip");
         ExportAssembler.zip(zip, files);
         return zipDownload(zip);
+    }
+
+    /** 作业的归属组（需求③换源）：配置行昵称 → type_parm ownership_group，查不到回退昵称本身。 */
+    private String groupOfJob(JobRecord j) {
+        String nick = j.configLine != null && j.configLine.contains(":")
+                ? j.configLine.split(":", 2)[0].strip() : j.nickname;
+        String owner = fieldMaps == null ? null : fieldMaps.ownershipGroupOf(nick);
+        return owner != null && !owner.isEmpty() ? owner : nick;
     }
 
     /** zone 过滤与结果页分区一致：trailer=尾部区全量（任意状态）；equal/diff/unmatched 不含尾部行。 */

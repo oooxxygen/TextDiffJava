@@ -122,6 +122,17 @@ public final class FieldMapStore implements AutoCloseable {
         return types.get(reportId);
     }
 
+    /**
+     * 昵称（report_id）→ 归属组（bat_report_type_parm 的 ownership_group 列）。
+     * 未导入类型表 / 无此昵称 / 归属组为空 → 返回 null（调用方回退昵称显示，与旧行为一致）。
+     */
+    public synchronized String ownershipGroupOf(String reportId) {
+        if (reportId == null || reportId.isBlank()) return null;
+        FieldMaps.ReportType t = types.get(reportId);
+        String g = t == null ? null : t.ownershipGroup();
+        return g == null || g.isBlank() ? null : g;
+    }
+
     /** 0-based 有序字段名（无映射返回空列表）。 */
     public synchronized List<String> fieldNamesFor(String reportId) {
         Map<Integer, FieldMaps.ReportField> m = fields.get(reportId);

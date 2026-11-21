@@ -72,6 +72,8 @@ public class ConfigController {
         List<Map<String, Object>> out = new ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
         int bad = 0;
+        // 同（昵称+通配名）规则在多个文件共存的清单（需求⑤提示用：use_all 生效优先级=来源文件列所列者）
+        Map<String, java.util.List<String>> fileHits = new java.util.LinkedHashMap<>();
         for (Map.Entry<String, String> e : readAllOrdered().entrySet()) {
             int lineNo = 0;
             for (String line : e.getValue().split("\\r?\\n")) {
@@ -81,6 +83,8 @@ public class ConfigController {
                 try {
                     CompareConfig cfg = Rules.parseLegacy(t,
                             ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
+                    fileHits.computeIfAbsent(cfg.nickname + "\u0000" + cfg.fileGlob,
+                            k -> new ArrayList<>()).add(e.getKey());
                     if (q != null && !q.isBlank()
                             && !cfg.nickname.contains(q) && !cfg.fileGlob.contains(q)) continue;
                     if (!seen.add(cfg.nickname + "\u0000" + cfg.fileGlob)) continue;
@@ -92,7 +96,17 @@ public class ConfigController {
                 }
             }
         }
-        return Map.of("configs", out, "bad_lines", bad);
+        List<Map<String, Object>> dups = new ArrayList<>();
+        for (Map.Entry<String, java.util.List<String>> e : fileHits.entrySet()) {
+            if (e.getValue().size() < 2) continue;
+            String[] k = e.getKey().split("\u0000", 2);
+            Map<String, Object> d = new java.util.LinkedHashMap<>();
+            d.put("nickname", k[0]);
+            d.put("file_glob", k.length > 1 ? k[1] : "*");
+            d.put("files", e.getValue());
+            dups.add(d);
+        }
+        return Map.of("configs", out, "bad_lines", bad, "dups", dups);
     }
 
     /** 删除配置：删 {昵称}.conf（如存在），并从 configs 目录全部配置文件中移除该昵称的行。 */
@@ -139,6 +153,11 @@ public class ConfigController {
         return Map.of("deleted", true, "nickname", nick, "files", touched);
     }
 
+    /**
+     * 保存配置规则（需求⑤）：默认写入 <b>current.conf</b>（请求体 target 可指定其他配置文件，如
+     * 配置管理页新建的独立文件）；目标文件内同（昵称+通配名）规则替换、否则追加，<b>不触碰其他文件</b>。
+     * default.conf 为基线文件禁止作目标。column_names 显式传入时重编码 COLS（修复旧版忽略导致的陈旧）。
+     */
     @SuppressWarnings("unchecked")
     @PostMapping("/configs")
     public Map<String, Object> save(@RequestBody Map<String, Object> body) throws IOException {
@@ -148,8 +167,10 @@ public class ConfigController {
             throw new IllegalArgumentException("缺少 nickname");
         }
         sanitize(nickname);
+        String globKey = glob == null || glob.isBlank() ? "*" : glob.strip();
+        String target = normalizeConfTarget(str(body.get("target")));
         StringBuilder sb = new StringBuilder();
-        sb.append(nickname.strip()).append(':').append(glob == null || glob.isBlank() ? "*" : glob.strip());
+        sb.append(nickname.strip()).append(':').append(globKey);
         String keySeq = str(body.get("key_seq"));
         String omitSeq = str(body.get("omit_seq"));
         if (keySeq != null && !keySeq.isBlank()) sb.append(":KEYSEQ=").append(keySeq.strip());
@@ -166,14 +187,17 @@ public class ConfigController {
         if (priSeq != null && !priSeq.isBlank()) sb.append(":PRISEQ=").append(priSeq.strip());
         String addmod = str(body.get("addmod"));
         if (addmod != null && !addmod.isBlank()) sb.append(":ADDMOD=").append(addmod.strip());
-        // 现有同名配置保留其 ignore/replace/cols 扩展字段；PRISEQ/ADDMOD 请求未带时沿用现值
-        CompareConfig existing = findConfig(nickname);
+        // 现有同名配置保留其 ignore/replace 扩展字段；COLS/PRISEQ/ADDMOD 请求未带时沿用现值
+        // （沿用优先取目标文件中的同规则，其次任意文件——跨文件同名规则互不覆盖，仅取值兜底）
+        CompareConfig existing = findConfigIn(target, nickname.strip());
+        if (existing == null) existing = findConfig(nickname);
+        List<String> colNames = columnNamesOf(body);
         CompareConfig parsed = Rules.parseLegacy(sb.toString(),
                 ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
         if (existing != null) {
             parsed.ignoreColumns = existing.ignoreColumns;
             parsed.replaceRules = existing.replaceRules;
-            parsed.columnNames = existing.columnNames;
+            if (colNames == null || colNames.isEmpty()) parsed.columnNames = existing.columnNames;
             if ((priSeq == null || priSeq.isBlank()) && existing.priSeqSet) {
                 parsed.priSeq = existing.priSeq;
                 parsed.priSeqSet = true;
@@ -182,12 +206,59 @@ public class ConfigController {
                 parsed.incrFields = existing.incrFields;
             }
         }
+        if (colNames != null && !colNames.isEmpty()) parsed.columnNames = colNames;
         String line = Rules.toLegacyLine(parsed, true);
+        // 写目标文件：同（昵称+通配名）替换，否则追加；其他文件一律不动（Q14 口径：文件间互不影响）
         Path dir = paths.configsDir();
         Files.createDirectories(dir);
-        Path file = dir.resolve(nickname.strip() + ".conf");
-        Files.writeString(file, line + System.lineSeparator(), StandardCharsets.UTF_8);
-        return Map.of("files", List.of(file.getFileName().toString()), "nickname", nickname.strip());
+        Path file = dir.resolve(target);
+        List<String> kept = new ArrayList<>();
+        boolean replaced = false;
+        if (Files.isRegularFile(file)) {
+            for (String l : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                String t = l.strip();
+                if (t.isEmpty() || t.startsWith("#")) {
+                    kept.add(l);
+                    continue;
+                }
+                String[] parts = t.split(":", 3);
+                String nick = parts[0].strip();
+                String g = parts.length > 1 ? parts[1].strip() : "";
+                if (!replaced && nick.equals(nickname.strip()) && g.equals(globKey)) {
+                    kept.add(line);
+                    replaced = true;
+                } else {
+                    kept.add(l);
+                }
+            }
+        }
+        if (!replaced) kept.add(line);
+        Files.writeString(file, String.join(System.lineSeparator(), kept) + System.lineSeparator(),
+                StandardCharsets.UTF_8);
+        return Map.of("files", List.of(target), "nickname", nickname.strip(), "target", target);
+    }
+
+    /** 请求体 column_names（字符串列表）→ 非空列表，缺省 null（沿用现值）。 */
+    private static List<String> columnNamesOf(Map<String, Object> body) {
+        Object raw = body.get("column_names");
+        if (!(raw instanceof List<?> list) || list.isEmpty()) return null;
+        List<String> out = new ArrayList<>();
+        for (Object o : list) {
+            if (o != null) out.add(o.toString());
+        }
+        return out.isEmpty() ? null : out;
+    }
+
+    /** 保存目标文件名规范化：sanitize + 缺省 current.conf + 补 .conf 后缀；default.conf 禁作目标。 */
+    private String normalizeConfTarget(String target) {
+        if (target == null || target.isBlank()) return "current.conf";
+        sanitize(target);
+        String t = target.strip();
+        if (!t.toLowerCase().endsWith(".conf")) t = t + ".conf";
+        if (t.equalsIgnoreCase("default.conf")) {
+            throw new IllegalArgumentException("default.conf 为基线文件，不可作为保存目标");
+        }
+        return t;
     }
 
     /** 预解压设置读取（设置页）：临时解压目录 + 预解压数量。 */
@@ -240,7 +311,105 @@ public class ConfigController {
 
     @GetMapping("/config-files")
     public Map<String, Object> configFiles() throws IOException {
-        return Map.of("files", listFiles());
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map.Entry<String, String> e : readAll().entrySet()) {
+            Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("name", e.getKey());
+            m.put("protected", e.getKey().equals("current.conf") || e.getKey().equals("default.conf"));
+            m.put("mtime", fileMtime(e.getKey()));
+            int rules = 0;
+            for (String line : e.getValue().split("\\r?\\n")) {
+                String t = line.strip();
+                if (!t.isEmpty() && !t.startsWith("#")) rules++;
+            }
+            m.put("rules", rules);
+            out.add(m);
+        }
+        return Map.of("files", out);
+    }
+
+    /** 配置文件最后修改时间（毫秒；缺失返回 0）——设置页/管理页展示辅助信息（Q13）。 */
+    private long fileMtime(String name) {
+        try {
+            return Files.getLastModifiedTime(paths.configsDir().resolve(name)).toMillis();
+        } catch (IOException ignored) {
+            return 0;
+        }
+    }
+
+    /** 新建配置文件（需求⑤）：from=blank 空文件 / from=current 复制 current.conf 全部内容作起点（Q5=C 两入口之一）。 */
+    @PostMapping("/config-files")
+    public Map<String, Object> createConfigFile(@RequestBody Map<String, Object> body) throws IOException {
+        String name = normalizeConfTarget(str(body.get("name")));
+        if (name.equalsIgnoreCase("current.conf")) {
+            throw new IllegalArgumentException("current.conf 为系统默认配置，不可新建同名文件");
+        }
+        Path dir = paths.configsDir();
+        Files.createDirectories(dir);
+        Path file = dir.resolve(name);
+        if (Files.exists(file)) throw new ResponseStatusException(HttpStatus.CONFLICT, "配置文件已存在: " + name);
+        if ("current".equalsIgnoreCase(str(body.get("from")))) {
+            Path cur = dir.resolve("current.conf");
+            Files.writeString(file, Files.isRegularFile(cur)
+                    ? Files.readString(cur, StandardCharsets.UTF_8) : "", StandardCharsets.UTF_8);
+        } else {
+            Files.writeString(file, "", StandardCharsets.UTF_8);
+        }
+        return Map.of("ok", true, "name", name);
+    }
+
+    /** 重命名配置文件（需求⑤）：current.conf / default.conf 受保护不可改名；目标重名拒绝。 */
+    @PostMapping("/config-files/rename")
+    public Map<String, Object> renameConfigFile(@RequestBody Map<String, Object> body) throws IOException {
+        String from = str(body.get("from"));
+        String to = str(body.get("to"));
+        if (from == null || from.isBlank() || to == null || to.isBlank()) {
+            throw new IllegalArgumentException("缺少 from / to");
+        }
+        sanitize(from);
+        sanitize(to);
+        Path dir = paths.configsDir();
+        Path src = dir.resolve(from.strip().toLowerCase().endsWith(".conf") ? from.strip() : from.strip() + ".conf");
+        if (!Files.isRegularFile(src)) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "配置文件不存在: " + from);
+        String fromName = src.getFileName().toString();
+        if (fromName.equals("current.conf") || fromName.equals("default.conf")) {
+            throw new IllegalArgumentException("current.conf / default.conf 为系统文件，不可重命名");
+        }
+        String toName = normalizeConfTarget(to);
+        Path dst = dir.resolve(toName);
+        if (Files.exists(dst)) throw new ResponseStatusException(HttpStatus.CONFLICT, "目标文件已存在: " + toName);
+        Files.move(src, dst);
+        return Map.of("ok", true, "from", fromName, "to", toName);
+    }
+
+    /** 删除配置文件（需求⑤）：仅独立配置文件；current.conf / default.conf 受保护。 */
+    @DeleteMapping("/config-files")
+    public Map<String, Object> deleteConfigFile(@RequestParam String name) throws IOException {
+        sanitize(name);
+        Path dir = paths.configsDir();
+        Path f = dir.resolve(name.strip().toLowerCase().endsWith(".conf") ? name.strip() : name.strip() + ".conf");
+        if (!Files.isRegularFile(f)) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "配置文件不存在: " + name);
+        String n = f.getFileName().toString();
+        if (n.equals("current.conf") || n.equals("default.conf")) {
+            throw new IllegalArgumentException("current.conf / default.conf 为系统文件，不可删除");
+        }
+        Files.delete(f);
+        return Map.of("ok", true, "deleted", n);
+    }
+
+    /** 指定文件内按昵称查找规则（保存沿用扩展字段时优先目标文件，跨文件同名不覆盖仅兜底）。 */
+    private CompareConfig findConfigIn(String fileName, String nickname) throws IOException {
+        Path f = paths.configsDir().resolve(fileName);
+        if (!Files.isRegularFile(f)) return null;
+        for (String line : readConfigLines(f)) {
+            try {
+                CompareConfig cfg = Rules.parseLegacy(line,
+                        ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
+                if (nickname.equals(cfg.nickname)) return cfg;
+            } catch (RuntimeException ignored) {
+            }
+        }
+        return null;
     }
 
     @PostMapping("/parse-config")
@@ -410,19 +579,71 @@ public class ConfigController {
     }
 
     /**
-     * 配置导出 Excel：Sheet1 生效配置（default.conf + configs 目录全部规则解析后的字段）；
-     * Sheet2 基线↔目录差异（昵称在基线但内容/缺失不同 → 修改/新增标识）。
+     * 配置导出（需求④，fmt 可选）：
+     *  fmt=conf → 全部生效规则合并去重（legacy 行格式，可直接回导）；头部 # 注释携带导出时间与
+     *             各来源文件修改时间（辅助信息 Q13，导入解析跳过 # 行不受影响）。
+     *  fmt=xlsx → Sheet1 生效配置（结构化列 + 修改时间列 + 列名解码明文，可回导；REPLACE 不参与
+     *             Excel 往返——完整保真请导出 conf）；Sheet2 基线对比（整行原文超长截断保护，
+     *             修复几百字段时 POI 32767 上限崩溃）。
      */
     @GetMapping("/configs/export")
-    public org.springframework.http.ResponseEntity<byte[]> exportExcel() {
-        Map<String, String> all;
-        Map<String, String> baseline;
-        try {
-            all = readAll();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+    public org.springframework.http.ResponseEntity<byte[]> exportConfigs(
+            @RequestParam(defaultValue = "xlsx") String fmt) throws IOException {
+        if ("conf".equalsIgnoreCase(fmt) || "txt".equalsIgnoreCase(fmt)) return exportConf();
+        return exportExcel();
+    }
+
+    /** 合并去重后的生效规则：key(昵称\0通配) → {行, 来源文件}（与 use_all 生效优先级一致）。 */
+    private java.util.LinkedHashMap<String, String[]> effectiveLines() throws IOException {
+        java.util.LinkedHashMap<String, String[]> eff = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, String> e : readAllOrdered().entrySet()) {
+            for (String line : readConfigLines(paths.configsDir().resolve(e.getKey()))) {
+                String[] parts = line.split(":", 3);
+                String key = parts[0].strip() + "\u0000" + (parts.length > 1 ? parts[1].strip() : "");
+                eff.putIfAbsent(key, new String[]{line, e.getKey()});
+            }
         }
-        baseline = new java.util.LinkedHashMap<>();
+        return eff;
+    }
+
+    private static final java.time.format.DateTimeFormatter TS_FMT =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    /** conf 格式导出（可直接回导；头部 # 注释为辅助信息，解析侧自动跳过）。 */
+    private org.springframework.http.ResponseEntity<byte[]> exportConf() throws IOException {
+        Map<String, String> ordered = readAllOrdered();
+        java.util.LinkedHashMap<String, String[]> eff = effectiveLines();
+        StringBuilder sb = new StringBuilder();
+        sb.append("# TextDiffJava 生效配置导出（合并去重，可直接回导）\n");
+        sb.append("# 导出时间: ").append(java.time.LocalDateTime.now().format(TS_FMT)).append("\n");
+        sb.append("# 来源文件修改时间:\n");
+        for (String name : ordered.keySet()) {
+            sb.append("#   ").append(name).append("  ").append(mtimeText(name)).append("\n");
+        }
+        for (String[] v : eff.values()) sb.append(v[0]).append("\n");
+        byte[] body = sb.toString().getBytes(StandardCharsets.UTF_8);
+        String fname = "textdiff_configs_" + java.time.LocalDate.now() + ".conf";
+        return org.springframework.http.ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename*=UTF-8''" + urlEncode(fname))
+                .contentType(org.springframework.http.MediaType.parseMediaType("text/plain;charset=UTF-8"))
+                .body(body);
+    }
+
+    private String mtimeText(String name) {
+        long ms = fileMtime(name);
+        return ms == 0 ? "-" : java.time.LocalDateTime
+                .ofInstant(java.time.Instant.ofEpochMilli(ms), java.time.ZoneId.systemDefault())
+                .format(TS_FMT);
+    }
+
+    private static String urlEncode(String s) {
+        return java.net.URLEncoder.encode(s, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    /** Excel 格式导出（结构化列 + 修改时间列，可回导；基线对比整行原文截断保护）。 */
+    private org.springframework.http.ResponseEntity<byte[]> exportExcel() throws IOException {
+        Map<String, String> all = readAll();
+        Map<String, String> baseline = new java.util.LinkedHashMap<>();
         try {
             Path b = paths.configsDir().resolve("default.conf");
             if (Files.isRegularFile(b)) {
@@ -434,29 +655,37 @@ public class ConfigController {
         try (var wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
             var sh1 = wb.createSheet("生效配置");
             java.util.List<String> heads = java.util.List.of("配置文件", "昵称", "文件名通配", "主键栏位",
-                    "跳过栏位", "分隔符", "编码A", "编码B", "来源A", "来源B");
+                    "跳过栏位", "忽略栏位", "分隔符", "编码A", "编码B", "来源A", "来源B",
+                    "折叠行前缀", "优先级", "增量栏位", "列名字段", "修改时间");
             var r0 = sh1.createRow(0);
             for (int c = 0; c < heads.size(); c++) r0.createCell(c).setCellValue(heads.get(c));
             int r = 1;
-            for (Map.Entry<String, String> e : all.entrySet()) {
+            for (String[] v : effectiveLines().values()) {
                 try {
-                    CompareConfig cfg = Rules.parseLegacy(e.getValue(),
+                    CompareConfig cfg = Rules.parseLegacy(v[0],
                             ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
                     var row = sh1.createRow(r++);
-                    row.createCell(0).setCellValue(e.getKey());
+                    row.createCell(0).setCellValue(v[1]);
                     row.createCell(1).setCellValue(cfg.nickname);
                     row.createCell(2).setCellValue(cfg.fileGlob);
-                    row.createCell(3).setCellValue(ApiPayloads.seq1based(cfg.keyColumns));
-                    row.createCell(4).setCellValue(ApiPayloads.seq1based(cfg.omitColumns));
-                    row.createCell(5).setCellValue(cfg.delimiter == null ? "" : cfg.delimiter);
-                    row.createCell(6).setCellValue(cfg.encodingA == null ? "auto" : cfg.encodingA);
-                    row.createCell(7).setCellValue(cfg.encodingB == null ? "auto" : cfg.encodingB);
-                    row.createCell(8).setCellValue(cfg.sourceA == null ? "A" : cfg.sourceA);
-                    row.createCell(9).setCellValue(cfg.sourceB == null ? "B" : cfg.sourceB);
+                    row.createCell(3).setCellValue(strOrEmpty(ApiPayloads.seq1based(cfg.keyColumns)));
+                    row.createCell(4).setCellValue(strOrEmpty(ApiPayloads.seq1based(cfg.omitColumns)));
+                    row.createCell(5).setCellValue(strOrEmpty(ApiPayloads.seq1based(cfg.ignoreColumns)));
+                    row.createCell(6).setCellValue(cfg.delimiter == null ? "" : cfg.delimiter);
+                    row.createCell(7).setCellValue(cfg.encodingA == null ? "auto" : cfg.encodingA);
+                    row.createCell(8).setCellValue(cfg.encodingB == null ? "auto" : cfg.encodingB);
+                    row.createCell(9).setCellValue(cfg.sourceA == null ? "A" : cfg.sourceA);
+                    row.createCell(10).setCellValue(cfg.sourceB == null ? "B" : cfg.sourceB);
+                    row.createCell(11).setCellValue(cfg.trailerPrefix == null ? "" : cfg.trailerPrefix);
+                    row.createCell(12).setCellValue(cfg.priSeqSet ? String.valueOf(cfg.priSeq) : "");
+                    row.createCell(13).setCellValue(cfg.incrFields.isEmpty() ? ""
+                            : Rules.addmod1based(cfg.incrFields));
+                    row.createCell(14).setCellValue(String.join("\n", cfg.columnNames));
+                    row.createCell(15).setCellValue(mtimeText(v[1]));
                 } catch (RuntimeException ignored) {
                 }
             }
-            for (int c = 0; c < heads.size(); c++) sh1.setColumnWidth(c, 18 * 256);
+            for (int c = 0; c < heads.size(); c++) sh1.setColumnWidth(c, c == 14 ? 40 * 256 : 18 * 256);
 
             var sh2 = wb.createSheet("基线对比");
             java.util.List<String> h2 = java.util.List.of("昵称", "基线", "目录配置", "状态");
@@ -472,8 +701,11 @@ public class ConfigController {
                         : all.values().stream().filter(v -> nickOf(v).equals(nick)).findFirst().orElse(null);
                 var row = sh2.createRow(r2++);
                 row.createCell(0).setCellValue(nick);
-                row.createCell(1).setCellValue(bLine == null ? "（基线无）" : bLine);
-                row.createCell(2).setCellValue(dLine == null ? "（目录无）" : dLine);
+                // POI 单元格 32767 上限：整行原文（含 COLS= base64 数万字符）超限即抛异常 → 500，统一截断保护
+                row.createCell(1).setCellValue(com.textdiff.export.BatchDetailExcel.capCell(
+                        bLine == null ? "（基线无）" : bLine));
+                row.createCell(2).setCellValue(com.textdiff.export.BatchDetailExcel.capCell(
+                        dLine == null ? "（目录无）" : dLine));
                 row.createCell(3).setCellValue(bLine == null ? "新增" : dLine == null ? "缺失"
                         : bLine.strip().equals(dLine.strip()) ? "一致" : "已修改");
             }
@@ -489,6 +721,121 @@ public class ConfigController {
         } catch (Exception e) {
             throw new RuntimeException("配置导出失败: " + e.getMessage(), e);
         }
+    }
+
+    private static String strOrEmpty(String s) {
+        return s == null ? "" : s;
+    }
+
+    /**
+     * Excel 回导（需求④闭环）：解析「生效配置」Sheet 结构化列 → 重建 legacy 行 →
+     * 按（昵称+通配名）合并写入 current.conf（需求⑤：导入默认存 current.conf）；辅助列（修改时间等）忽略，
+     * 替换规则(REPLACE) 不参与 Excel 往返（现有同名规则保留原值）。
+     */
+    @PostMapping("/configs/import-excel")
+    public Map<String, Object> importExcel(@RequestParam("file") MultipartFile file) throws IOException {
+        Path dir = paths.configsDir();
+        Files.createDirectories(dir);
+        Path current = dir.resolve("current.conf");
+        // 现有 current.conf 规则（key 保序，替换原位、新规则追加）
+        java.util.LinkedHashMap<String, String> merged = new java.util.LinkedHashMap<>();
+        if (Files.isRegularFile(current)) {
+            for (String line : readConfigLines(current)) {
+                merged.putIfAbsent(dedupeKey(line), line);
+            }
+        }
+        int imported = 0;
+        List<String> bad = new ArrayList<>();
+        try (var wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook(file.getInputStream())) {
+            var sh = wb.getSheet("生效配置") != null ? wb.getSheet("生效配置") : wb.getSheetAt(0);
+            Map<String, Integer> col = headerIndex(sh.getRow(0));
+            for (int r = 1; r <= sh.getLastRowNum(); r++) {
+                org.apache.poi.ss.usermodel.Row row = sh.getRow(r);
+                if (row == null) continue;
+                String nick = cellStr(row, col.get("昵称")).strip();
+                if (nick.isEmpty()) continue;
+                String glob = cellStr(row, col.get("文件名通配")).strip();
+                try {
+                    StringBuilder sb = new StringBuilder(nick).append(':')
+                            .append(glob.isEmpty() ? "*" : glob);
+                    String keySeq = cellStr(row, col.get("主键栏位")).strip();
+                    if (!keySeq.isEmpty()) sb.append(":KEYSEQ=").append(keySeq);
+                    String omitSeq = cellStr(row, col.get("跳过栏位")).strip();
+                    if (!omitSeq.isEmpty()) sb.append(":OMITSEQ=").append(omitSeq);
+                    String ignoreSeq = cellStr(row, col.get("忽略栏位")).strip();
+                    if (!ignoreSeq.isEmpty()) sb.append(":IGNORESEQ=").append(ignoreSeq);
+                    String delim = cellStr(row, col.get("分隔符")); // 分隔符内部空格有效，不 strip
+                    if (!delim.isEmpty()) sb.append(":DELIM=").append(delim);
+                    sb.append(":ENCA=").append(cellStr(row, col.get("编码A")).isEmpty()
+                            ? "auto" : cellStr(row, col.get("编码A")).strip());
+                    sb.append(":ENCB=").append(cellStr(row, col.get("编码B")).isEmpty()
+                            ? "auto" : cellStr(row, col.get("编码B")).strip());
+                    sb.append(":SRCA=").append(cellStr(row, col.get("来源A")).isEmpty()
+                            ? "A" : cellStr(row, col.get("来源A")).strip());
+                    sb.append(":SRCB=").append(cellStr(row, col.get("来源B")).isEmpty()
+                            ? "B" : cellStr(row, col.get("来源B")).strip());
+                    sb.append(":TRAILER=").append(cellStr(row, col.get("折叠行前缀")));
+                    String pri = cellStr(row, col.get("优先级")).strip();
+                    if (!pri.isEmpty()) sb.append(":PRISEQ=").append(pri);
+                    String addmod = cellStr(row, col.get("增量栏位")).strip();
+                    if (!addmod.isEmpty()) sb.append(":ADDMOD=").append(addmod);
+                    String cols = cellStr(row, col.get("列名字段"));
+                    if (!cols.isEmpty()) {
+                        List<String> names = new ArrayList<>();
+                        for (String n : cols.split("\n")) {
+                            if (!n.strip().isEmpty()) names.add(n.strip());
+                        }
+                        if (!names.isEmpty()) sb.append(":COLS=").append(Rules.encodeStringList(names));
+                    }
+                    CompareConfig cfg = Rules.parseLegacy(sb.toString(),
+                            ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
+                    merged.put(dedupeKey(Rules.toLegacyLine(cfg, true)), Rules.toLegacyLine(cfg, true));
+                    imported++;
+                } catch (RuntimeException ex) {
+                    bad.add(nick + "（" + ex.getMessage() + "）");
+                }
+            }
+        } catch (java.io.IOException e) {
+            throw new IllegalArgumentException("Excel 解析失败: " + e.getMessage());
+        }
+        if (imported == 0) {
+            throw new IllegalArgumentException("未解析到有效配置行" + (bad.isEmpty() ? "" : "；非法行: " + bad));
+        }
+        Files.writeString(current, String.join(System.lineSeparator(), merged.values()) + System.lineSeparator(),
+                StandardCharsets.UTF_8);
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("imported", imported);
+        out.put("file", current.getFileName().toString());
+        if (!bad.isEmpty()) out.put("skipped", bad);
+        return out;
+    }
+
+    /** 规则去重键（昵称 + 通配名），与 use_all/保存语义一致。 */
+    private static String dedupeKey(String line) {
+        String[] parts = line.split(":", 3);
+        return parts[0].strip() + "\u0000" + (parts.length > 1 ? parts[1].strip() : "");
+    }
+
+    /** 表头名 → 列下标（strip 后精确匹配）。 */
+    private static Map<String, Integer> headerIndex(org.apache.poi.ss.usermodel.Row head) {
+        Map<String, Integer> m = new java.util.LinkedHashMap<>();
+        if (head == null) return m;
+        for (int c = 0; c < head.getLastCellNum(); c++) {
+            org.apache.poi.ss.usermodel.Cell cell = head.getCell(c);
+            if (cell == null) continue;
+            String v = new org.apache.poi.ss.usermodel.DataFormatter().formatCellValue(cell);
+            if (v != null && !v.isBlank()) m.put(v.strip(), c);
+        }
+        return m;
+    }
+
+    /** 单元格字符串（原样不 strip——分隔符内部空格有效；空单元格返回 ""）。 */
+    private static String cellStr(org.apache.poi.ss.usermodel.Row row, Integer idx) {
+        if (idx == null || row == null) return "";
+        org.apache.poi.ss.usermodel.Cell cell = row.getCell(idx);
+        if (cell == null) return "";
+        String v = new org.apache.poi.ss.usermodel.DataFormatter().formatCellValue(cell);
+        return v == null ? "" : v;
     }
 
     // ---- internals ----
@@ -516,10 +863,6 @@ public class ConfigController {
         if (all.containsKey("current.conf")) out.put("current.conf", all.get("current.conf"));
         if (all.containsKey("default.conf")) out.put("default.conf", all.get("default.conf"));
         return out;
-    }
-
-    private List<String> listFiles() throws IOException {
-        return new ArrayList<>(readAll().keySet());
     }
 
     private CompareConfig findConfig(String nickname) throws IOException {

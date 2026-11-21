@@ -100,8 +100,8 @@ public final class BatchSummaryExcel {
             cell(row, 12, num(d.get("total_b")));
         }
         widths(sh, heads.length);
-        note(sh, r, "内容偏离度=（有差异+仅A+仅B）/A总条数；条数偏离度=|B总条数−A总条数|/A总条数；"
-                + "分级 ≥50% 严重问题、≥20% 务必关注、≥10% 微量偏移。");
+        note(sh, r, "内容偏离度=有差异条数/已匹配键值的记录数（完全匹配+有差异；无已匹配记录显示—）；"
+                + "条数偏离度=|B总条数−A总条数|/A总条数；分级 ≥50% 严重问题、≥20% 务必关注、≥10% 微量偏移。");
     }
 
     // ---- Sheet3 关注字段监测 ----
@@ -172,8 +172,10 @@ public final class BatchSummaryExcel {
     }
 
     private static String pct(Map<String, Object> m, String key) {
-        double v = Double.parseDouble(str(m.get(key), "0"));
-        return String.format("%.1f", v * 100) + "%";
+        Object v = m.get(key);
+        if (v == null) return "—"; // 内容偏离度无已匹配记录（分母 0）时无定义
+        double d = Double.parseDouble(String.valueOf(v));
+        return String.format("%.1f", d * 100) + "%";
     }
 
     private static String num(Object v) {

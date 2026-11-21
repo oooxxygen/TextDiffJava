@@ -802,3 +802,25 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 /* ---------- A/B 两侧联动滚动开关（查看页头）：关态弱化 ---------- */
 .sync-toggle.off { opacity: .55; }
+
+/* ---------- v0.9.15：全局加载遮罩 / 多选一对话框 / 配置来源徽标 / 配置文件条 ---------- */
+.busy-box { text-align: center; padding: 28px 24px; }
+.busy-box .spinner {
+  width: 34px; height: 34px; margin: 0 auto 12px;
+  border: 3px solid var(--line, #d8dee9); border-top-color: var(--accent, #3b82f6);
+  border-radius: 50%; animation: td-spin .8s linear infinite;
+}
+@keyframes td-spin { to { transform: rotate(360deg); } }
+.busy-msg { font-size: 14px; color: var(--text, #333); }
+.choice-foot { flex-wrap: wrap; gap: 8px; }
+.conf-src { background: rgba(59, 130, 246, .12); }
+.conf-file-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 10px; margin-bottom: 10px;
+  background: var(--bg-soft, #f6f8fa); border: 1px solid var(--line, #e5e9ef); border-radius: 8px;
+}
+.conf-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px; border-radius: 6px;
+  background: #fff; border: 1px solid var(--line, #e5e9ef); font-size: 12px;
+}
