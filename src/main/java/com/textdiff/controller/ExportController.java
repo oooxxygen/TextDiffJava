@@ -70,9 +70,16 @@ public class ExportController {
                     : fieldMaps.typeByReport(com.textdiff.export.DiscardColsService.monitorKey(job));
             String parmType = t == null || t.parmReportType() == null ? "" : t.parmReportType();
             String team = t == null || t.ownershipGroup() == null ? "" : t.ownershipGroup();
-            Path out = com.textdiff.export.CollectCaseExcel.write(dir.resolve(ExportAssembler.base(job) + "_差异.xlsx"),
-                    job, batch, parmType, team);
-            return fileDownload(out, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            // 采集表：实际对比文件名前缀命名；数据行超 5 万分片 → 页面按钮下载压缩包
+            String base = com.textdiff.export.CollectCaseExcel.collectBase(job);
+            List<Path> parts = com.textdiff.export.CollectCaseExcel.writeSharded(dir, base, job, batch, parmType, team);
+            if (parts.size() == 1) {
+                return fileDownload(parts.get(0),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            }
+            Path zip = dir.resolve(base + "_差异等" + parts.size() + "个文件.zip");
+            com.textdiff.export.ExportAssembler.zip(zip, parts);
+            return zipDownload(zip);
         }
         List<Path> parts = ExportAssembler.writeFullCsv(dir, job, filter);
         return csvOrZip(dir, parts);

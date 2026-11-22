@@ -19,10 +19,13 @@ import org.apache.poi.xssf.streaming.SXSSFWorkbook;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -79,6 +82,192 @@ public final class CollectCaseExcel {
 
     private static final SecureRandom RND = new SecureRandom();
     private static final char[] HEX = "0123456789abcdef".toCharArray();
+
+    /** 采集表分片阈值：单文件数据行（差异行+单方行，不含表头）超过 5 万 → 每 5 万行一个分片 xlsx。 */
+    public static final int SHARD_ROWS = 50_000;
+
+    /** 采集表文件基名（实际对比文件名前置防混）：{实际对比文件名}_{标签或昵称}，非法文件名字符转 _；
+     *  A 侧文件名优先、B 侧兜底；两侧均无文件名时仅用基名。
+     *  批次作业的 nickname/label 可能是「昵称 · 文件名」复合串，与前置文件名重复 → 统一取 configLine
+     *  首段裸昵称（与表名列同源），避免文件名出现两遍。 */
+    public static String collectBase(JobRecord job) {
+        String fn = fileName(job.fileA);
+        if (fn.isEmpty()) fn = fileName(job.fileB);
+        String plainNick;
+        try {
+            plainNick = Rules.parseLegacy(job.configLine == null ? "" : job.configLine, " | ", "|||||").nickname;
+        } catch (RuntimeException e) {
+            plainNick = job.nickname; // JSON 等异形配置行回退原值
+        }
+        if (plainNick == null || plainNick.isBlank()) plainNick = nvl(job.nickname);
+        String base = job.label != null && !job.label.isEmpty() ? job.label : plainNick;
+        if (!fn.isEmpty() && base.equals(plainNick + " · " + fn)) base = plainNick; // 复合标签还原
+        String joined = (fn.isEmpty() ? "" : fn + "_") + base;
+        return joined.replaceAll("[\\\\/:*?\"<>|]", "_");
+    }
+
+    /**
+     * 分片写出采集表（页面按钮与任务默认导出共用）：单文件 ≤{@link #SHARD_ROWS} 行 →
+     * 改名 {base}_差异.xlsx（无分片尾缀）；超过 → 每 {@link #SHARD_ROWS} 行一个分片
+     * {base}_差异-{作业id前6}-{序号}.xlsx（序号从 1 起，每片带表头）。
+     * 返回落盘文件清单（按序）。
+     */
+    public static List<Path> writeSharded(Path dir, String baseName, JobRecord job, BatchRecord batch,
+                                          String parmType, String ownershipGroup) {
+        CompareConfig cfg = configOf(job);
+        String nick = DiscardColsService.monitorKey(job);
+        String dateA = collectDate(job);
+        String bank = bankNoOf(fileName(job.fileA), fileName(job.fileB));
+        String fileType = fileTypeOf(fileName(job.fileA));
+        String cmpBatch = batch == null ? "" : nvl(batch.cmpBatch);
+        String cmpRound = batch == null ? "" : nvl(batch.cmpRound);
+        String type = nvl(parmType);
+        String team = devTeam(ownershipGroup);
+        String srcA = blankTo(cfg.sourceA, "A");
+        String srcB = blankTo(cfg.sourceB, "B");
+        String shortId = job.id == null ? "job"
+                : job.id.length() <= 6 ? job.id : job.id.substring(0, 6);
+
+        List<Path> out = new ArrayList<>();
+        ShardWriter w = new ShardWriter(dir, baseName, shortId, out);
+        try {
+            try (var stream = ResultFiles.stream(Path.of(job.resultDir).resolve(ResultFiles.RESULT_JSONL))) {
+                stream.filter(CollectCaseExcel::isCaseRow).forEach(row ->
+                        w.add(row, cfg, cmpBatch, cmpRound, bank, fileType, dateA, nick, type, team, srcA, srcB));
+            } catch (RuntimeException e) {
+                throw new IllegalStateException("差异采集表读取失败: " + job.id + "（" + e.getMessage() + "）", e);
+            }
+        } finally {
+            w.close();
+        }
+        if (out.isEmpty()) {
+            w.newShard(); // 无采集行（调用方未预检）也产出仅表头文件，与旧行为一致
+            w.close();
+        }
+        // 仅一片 → 去分片尾缀
+        if (out.size() == 1) {
+            Path single = dir.resolve(baseName + "_差异.xlsx");
+            try {
+                Files.move(out.get(0), single, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e) {
+                throw new UncheckedIOException("差异采集表改名失败: " + out.get(0), e);
+            }
+            out.set(0, single);
+        }
+        return out;
+    }
+
+    /** 分片写出器：按 SHARD_ROWS 轮转 SXSSF 工作簿；行数据写满当前分片即落盘开下一片。 */
+    private static final class ShardWriter {
+        private final Path dir;
+        private final String base;
+        private final String shortId;
+        private final List<Path> out;
+        private SXSSFWorkbook wb;
+        private Sheet sheet;
+        private CellStyle head;
+        private int shardNo = 0;
+        private int nextRow = 0;   // 当前分片下一个行索引（0 = 表头）
+        private int dataRows = 0;  // 当前分片已写数据行（不含表头）
+
+        ShardWriter(Path dir, String base, String shortId, List<Path> out) {
+            this.dir = dir;
+            this.base = base;
+            this.shortId = shortId;
+            this.out = out;
+        }
+
+        /** 写一条采集行；当前分片已满（SHARD_ROWS 行）先落盘再开下一片。 */
+        void add(RowDiff row, CompareConfig cfg, String cmpBatch, String cmpRound, String bank,
+                 String fileType, String date, String nick, String type, String team, String srcA, String srcB) {
+            if (wb != null && dataRows >= SHARD_ROWS) close();
+            newShard();
+            if (Status.DIFF.equals(row.status)) {
+                for (int col : row.diffCols) {
+                    if (dataRows >= SHARD_ROWS) close();
+                    newShard();
+                    Row r = sheet.createRow(nextRow++);
+                    dataRows++;
+                    text(r, 0, date);
+                    text(r, 1, cmpBatch);
+                    text(r, 2, cmpRound);
+                    text(r, 3, ""); // 重复轮次：预留列，默认无赋值（人工填写）
+                    text(r, 4, bank);
+                    text(r, 5, type);
+                    text(r, 6, nick);
+                    text(r, 7, fileType);
+                    text(r, 13, team);
+                    String aVal = col >= CsvExporter.VBASE ? CsvExporter.dynVal(row, col, true) : at(row.aCols, col);
+                    String bVal = col >= CsvExporter.VBASE ? CsvExporter.dynVal(row, col, false) : at(row.bCols, col);
+                    if (col >= CsvExporter.VBASE) {
+                        var d = CsvExporter.dynOf(null, col);
+                        text(r, 8, d == null ? String.valueOf(col) : d.label());
+                    } else {
+                        r.createCell(8).setCellValue(col + 1);
+                    }
+                    text(r, 9, ERR_FIELD_MISMATCH);
+                    text(r, 10, srcA + "：" + aVal + PROBLEM_SEP + srcB + "：" + bVal);
+                    text(r, 20, caseId());
+                }
+            } else {
+                boolean sideA = Status.UNMATCHED_A.equals(row.status);
+                String existSide = sideA ? srcA : srcB;
+                String missSide = sideA ? srcB : srcA;
+                Row r = sheet.createRow(nextRow++);
+                dataRows++;
+                text(r, 0, date);
+                text(r, 1, cmpBatch);
+                text(r, 2, cmpRound);
+                text(r, 3, ""); // 重复轮次：预留列，默认无赋值（人工填写）
+                text(r, 4, bank);
+                text(r, 5, type);
+                text(r, 6, nick);
+                text(r, 7, fileType);
+                text(r, 13, team);
+                r.createCell(8).setCellValue(0);
+                text(r, 9, sideA ? ERR_B_SIDE_MISSING : ERR_A_SIDE_MISSING);
+                text(r, 10, existSide + "：" + CsvExporter.displayKey(row.key) + PROBLEM_SEP + missSide + "：" + NO_RECORD);
+                text(r, 20, caseId());
+            }
+        }
+
+        private void newShard() {
+            if (wb != null) return;
+            shardNo++;
+            wb = new SXSSFWorkbook(500);
+            sheet = wb.createSheet("data");
+            head = headStyle(wb);
+            Row hr = sheet.createRow(0);
+            for (int i = 0; i < HEADERS.length; i++) {
+                Cell c = hr.createCell(i);
+                c.setCellValue(HEADERS[i]);
+                c.setCellStyle(head);
+            }
+            int[] widths = {12, 10, 8, 10, 10, 10, 22, 10, 10, 26, 50, 10, 10, 12,
+                    10, 10, 10, 10, 10, 10, 26};
+            for (int i = 0; i < widths.length; i++) sheet.setColumnWidth(i, widths[i] * 256);
+            nextRow = 1;  // 行 0 已被表头占用
+            dataRows = 0;
+        }
+
+        void close() {
+            if (wb == null) return;
+            Path f = dir.resolve(base + "_差异-" + shortId + "-" + shardNo + ".xlsx");
+            try {
+                if (f.getParent() != null) java.nio.file.Files.createDirectories(f.getParent());
+                try (var fos = new java.io.FileOutputStream(f.toFile())) {
+                    wb.write(fos);
+                }
+                wb.close();
+                wb.dispose();
+            } catch (IOException e) {
+                throw new UncheckedIOException("差异采集表写入失败: " + f, e);
+            }
+            wb = null;
+            sheet = null;
+            out.add(f);
+        }
+    }
 
     /** 导出单作业差异采集表；返回落盘文件。batch 可空（独立作业无批次 → B/C 列空）。 */
     public static Path write(Path out, JobRecord job, BatchRecord batch, String parmType, String ownershipGroup) {

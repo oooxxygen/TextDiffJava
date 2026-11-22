@@ -302,12 +302,27 @@ public final class TaskManager implements AutoCloseable {
                 : Path.of(configured);
     }
 
-    /** 差异 CSV 导出：写导出目录（默认 results/{batchId}/export），同时保留全量 CSV 以维持既有行为；超 2 万条各自分片。 */
+    /** 差异 CSV 导出：写导出目录（默认 results/{batchId}/export），同时保留全量 CSV 以维持既有行为；超 2 万条各自分片。
+     *  差异采集表（21 列）：存在差异数据行才生成（无差异不产空表）；数据行超 5 万分片直接落盘本目录。 */
     private List<Path> runExport(JobRecord job) throws Exception {
         Path dir = exportDir(job);
         Files.createDirectories(dir);
         List<Path> out = new java.util.ArrayList<>(ExportAssembler.writeFullCsv(dir, job, ExportAssembler.DATA));
         out.addAll(ExportAssembler.writeDiffCsv(dir, job, ExportAssembler.DATA));
+        long caseRows = (long) job.diffCount + job.onlyACount + job.onlyBCount;
+        if (caseRows <= 0 && job.diffCount < 0) { // 旧记录无完成快照 → 回退 meta.json
+            JobMeta meta = ResultFiles.readMeta(Path.of(job.resultDir == null ? "" : job.resultDir));
+            caseRows = meta == null ? 0 : (long) meta.diff + meta.onlyA + meta.onlyB;
+        }
+        if (caseRows > 0) {
+            var batch = job.batchId == null || job.batchId.isBlank() ? null : store.getBatch(job.batchId);
+            var t = aiFieldMaps == null ? null
+                    : aiFieldMaps.typeByReport(com.textdiff.export.DiscardColsService.monitorKey(job));
+            String parmType = t == null || t.parmReportType() == null ? "" : t.parmReportType();
+            String team = t == null || t.ownershipGroup() == null ? "" : t.ownershipGroup();
+            out.addAll(com.textdiff.export.CollectCaseExcel.writeSharded(dir,
+                    com.textdiff.export.CollectCaseExcel.collectBase(job), job, batch, parmType, team));
+        }
         return out;
     }
 

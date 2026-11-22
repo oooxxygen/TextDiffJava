@@ -14,6 +14,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.ByteArrayInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -196,6 +197,77 @@ class CollectCaseExcelTest {
             assertEquals("A：k9    B：(无)", r1.getCell(10).getStringCellValue()); // 缺省别名 A/B
             assertCaseId(r1.getCell(20).getStringCellValue());
         }
+    }
+
+    /** 分片写出用作业：id 决定分片短 ID；rows 条仅 A 存在记录 = rows 条采集行。 */
+    private static JobRecord shardJob(Path dir, String id, String nick, int rows) throws Exception {
+        JobRecord job = new JobRecord(id, "b1", nick, nick + ":*.txt:KEYSEQ=1",
+                "/data/a/f.dat", "/data/b/f.dat", dir.resolve("results").resolve(id).toString());
+        try (ResultFiles.JsonlSink sink = ResultFiles.JsonlSink.create(
+                Path.of(job.resultDir).resolve(ResultFiles.RESULT_JSONL))) {
+            for (int i = 0; i < rows; i++) {
+                sink.addRow(RowDiff.onlyA("k" + i, Status.SECTION_DATA,
+                        new String[]{"k" + i, String.valueOf(i)}));
+            }
+        }
+        return job;
+    }
+
+    @Test
+    void 采集表基名_实际文件名前缀与非法字符收敛() {
+        JobRecord j = new JobRecord("j1", null, "CASENICK", "CASENICK:x.txt",
+                "/data/a/01A3020D.v01", "/data/b/01A3020D.v01", "");
+        j.label = "";
+        assertEquals("01A3020D.v01_CASENICK", CollectCaseExcel.collectBase(j)); // 需求：实际文件名前置
+        j.label = "夜批<核对>";                                                  // 非法文件名字符转 _
+        assertEquals("01A3020D.v01_夜批_核对_", CollectCaseExcel.collectBase(j));
+        // 批次作业自动复合标签「昵称 · 文件名」→ 还原纯昵称，避免文件名重复出现
+        j.label = "CASENICK · 01A3020D.v01";
+        assertEquals("01A3020D.v01_CASENICK", CollectCaseExcel.collectBase(j));
+        JobRecord j2 = new JobRecord("j2", null, "CASENICK", "CASENICK:x.txt", null, "/data/b/x.dat", "");
+        assertEquals("x.dat_CASENICK", CollectCaseExcel.collectBase(j2));        // A 侧缺失回退 B 侧
+        JobRecord j3 = new JobRecord("j3", null, "CASENICK", "CASENICK:x.txt", "", "", "");
+        assertEquals("CASENICK", CollectCaseExcel.collectBase(j3));              // 两侧均无 → 仅基名
+    }
+
+    @Test
+    void 分片写出_单片改名_超限每5万行一片(@TempDir Path dir) throws Exception {
+        // ≤5 万：单片 → 改名去分片尾缀（{基名}_差异.xlsx）
+        JobRecord small = shardJob(dir, "s1", "SMALL01", 3);
+        List<Path> a = CollectCaseExcel.writeSharded(dir.resolve("out1"), "01A3020D.v01_SMALL01",
+                small, null, "", "");
+        assertEquals(1, a.size());
+        assertEquals("01A3020D.v01_SMALL01_差异.xlsx", a.get(0).getFileName().toString());
+        // >5 万：每 SHARD_ROWS 行一片，{基名}_差异-{作业id前6}-{序号}.xlsx，每片带表头
+        JobRecord big = shardJob(dir, "shardjob01", "BIG01", CollectCaseExcel.SHARD_ROWS + 1);
+        List<Path> b = CollectCaseExcel.writeSharded(dir.resolve("out2"), "BIG01", big, null, "", "");
+        assertEquals(2, b.size());
+        assertEquals("BIG01_差异-shardj-1.xlsx", b.get(0).getFileName().toString());
+        assertEquals("BIG01_差异-shardj-2.xlsx", b.get(1).getFileName().toString());
+        // 5 万行级分片用 zip+XML 计数校验（XSSF 全量装载 50k 行会撑爆测试 JVM 堆）；
+        // SXSSF 写内联字符串，文本直接在 sheet1.xml 中（不经 sharedStrings）
+        try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(b.get(0).toFile())) {
+            String sheet = new String(zf.getInputStream(zf.getEntry("xl/worksheets/sheet1.xml"))
+                    .readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            assertEquals(CollectCaseExcel.SHARD_ROWS + 1, countRows(sheet), "分片1 = 表头 + 5 万数据行");
+            assertTrue(sheet.contains("采集日期"));
+            assertTrue(sheet.contains("主机记录在信创未找到"));
+        }
+        try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(b.get(1).toFile())) {
+            String sheet = new String(zf.getInputStream(zf.getEntry("xl/worksheets/sheet1.xml"))
+                    .readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            assertEquals(2, countRows(sheet), "分片2 = 表头 + 余 1 行");
+        }
+    }
+
+    /** sheet1.xml 的 <row 元素数（= 实际行数，含表头）。 */
+    private static int countRows(String sheetXml) {
+        int n = 0, i = 0;
+        while ((i = sheetXml.indexOf("<row ", i)) >= 0) {
+            n++;
+            i += 5;
+        }
+        return n;
     }
 
     @Test
