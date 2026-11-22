@@ -90,6 +90,11 @@ public final class PromptRenderer {
         ph.put("nickname", job.nickname);
         ph.put("fileA", job.fileA);
         ph.put("fileB", job.fileB);
+        // 需求①别名：提示词与 AI 输出中的两侧称呼改用分区别名（SRCA/SRCB，缺省 A/B）
+        String srcA = cfg.sourceA == null || cfg.sourceA.isBlank() ? "A" : cfg.sourceA.strip();
+        String srcB = cfg.sourceB == null || cfg.sourceB.isBlank() ? "B" : cfg.sourceB.strip();
+        ph.put("srcA", srcA);
+        ph.put("srcB", srcB);
         ph.put("encodingA", meta != null ? nvl(meta.encodingA) : "未知");
         ph.put("encodingB", meta != null ? nvl(meta.encodingB) : "未知");
         ph.put("keySeq", ApiSeq.seq1based(cfg.keyColumns));
@@ -104,11 +109,13 @@ public final class PromptRenderer {
 
         StringBuilder tt = new StringBuilder();
         if (summary != null && summary.trailerFields != null && !summary.trailerFields.isEmpty()) {
-            tt.append("| 字段 | A 值 | B 值 | 一致 |\n|---|---|---|---|\n");
+            tt.append("| 字段 | ").append(srcA).append(" 值 | ").append(srcB)
+                    .append(" 值 | 一致 |\n|---|---|---|---|\n");
             summary.trailerFields.forEach((k, v) -> tt.append("| ").append(k).append(" | ")
                     .append(nvl(v.a())).append(" | ").append(nvl(v.b())).append(" | ")
                     .append(v.equal() ? "✓" : "✗").append(" |\n"));
-            tt.append("\nRecNum 校验：A=").append(summary.recnumCheckA).append("，B=").append(summary.recnumCheckB);
+            tt.append("\nRecNum 校验：").append(srcA).append("=").append(summary.recnumCheckA)
+                    .append("，").append(srcB).append("=").append(summary.recnumCheckB);
         } else {
             tt.append("（无 trailer 数据）");
         }
@@ -119,8 +126,9 @@ public final class PromptRenderer {
             if (summary.keyDupA == 0 && summary.keyDupB == 0) {
                 ku.append("A/B 两侧主键均能唯一定位记录，无需重检。");
             } else {
-                ku.append("<span style=\"color:red\">**🔴 主键存在重复，无法唯一定位记录：A 侧重复 ")
-                        .append(summary.keyDupA).append(" 次，B 侧重复 ").append(summary.keyDupB)
+                ku.append("<span style=\"color:red\">**🔴 主键存在重复，无法唯一定位记录：").append(srcA)
+                        .append(" 侧重复 ").append(summary.keyDupA).append(" 次，").append(srcB)
+                        .append(" 侧重复 ").append(summary.keyDupB)
                         .append(" 次（样例：").append(String.join("、", summary.dupKeySamples))
                         .append("），该对比配置需重检**</span>");
             }
@@ -134,14 +142,17 @@ public final class PromptRenderer {
         if (summary != null) {
             long dev = summary.totalB - summary.totalA;
             double devPct = summary.totalA == 0 ? 0 : Math.abs(dev) * 100.0 / summary.totalA;
-            ov.append("- A（旧）总条数 ").append(summary.totalA).append("，B（新）总条数 ").append(summary.totalB)
-                    .append("；B 相对 A 偏离 ").append(dev >= 0 ? "+" : "").append(dev).append(" 条（")
+            ov.append("- ").append(srcA).append(" 总条数 ").append(summary.totalA).append("，")
+                    .append(srcB).append(" 总条数 ").append(summary.totalB)
+                    .append("；").append(srcB).append(" 相对 ").append(srcA).append(" 偏离 ")
+                    .append(dev >= 0 ? "+" : "").append(dev).append(" 条（")
                     .append(String.format("%.2f", devPct)).append("%）\n");
             ov.append("- 完全一致 ").append(summary.equal).append(" 条，有差异 ").append(summary.diff)
-                    .append(" 条，仅 A（B 中缺失）").append(summary.onlyA).append(" 条，仅 B（新增）")
+                    .append(" 条，仅 ").append(srcA).append("（").append(srcB).append(" 中缺失）")
+                    .append(summary.onlyA).append(" 条，仅 ").append(srcB).append("（新增）")
                     .append(summary.onlyB).append(" 条\n");
             if (summary.diffColFreq != null && !summary.diffColFreq.isEmpty()) {
-                ov.append("\n| 差异栏位 | 差异条数 | 占 B 总条数比 |\n|---|---|---|\n");
+                ov.append("\n| 差异栏位 | 差异条数 | 占 ").append(srcB).append("总条数比 |\n|---|---|---|\n");
                 summary.diffColFreq.forEach((c, n) -> {
                     String name = names.getOrDefault(c, "栏位" + (c + 1));
                     double pct = summary.totalB == 0 ? 0 : n * 100.0 / summary.totalB;
@@ -185,7 +196,8 @@ public final class PromptRenderer {
                 cf.append("- 长度变化：变长 ").append(f.lengthGrows).append("，变短 ").append(f.lengthShrinks).append("\n");
             }
             if (!f.topPatterns.isEmpty()) {
-                cf.append("- A→B 模式分布（**全量统计**，").append(f.patternKinds).append(" 种模式 / 共 ")
+                cf.append("- ").append(srcA).append("→").append(srcB)
+                        .append(" 模式分布（**全量统计**，").append(f.patternKinds).append(" 种模式 / 共 ")
                         .append(f.count).append(" 行差异；覆盖率为 模式次数÷该列差异行数）：\n");
                 long shown = 0;
                 for (String[] p : f.topPatterns) {
@@ -201,7 +213,7 @@ public final class PromptRenderer {
             }
             cf.append("- 差异数据明细（TOP ").append(Math.min(budget.maxSamplesPerColumn(), f.samples.size()))
                     .append("，共 ").append(f.count).append(" 行差异）：\n\n");
-            cf.append("| 主键 | A（旧）值 | B（新）值 |\n|---|---|---|\n");
+            cf.append("| 主键 | ").append(srcA).append(" 值 | ").append(srcB).append(" 值 |\n|---|---|---|\n");
             int shown = 0;
             for (String[] s : f.samples) {
                 if (shown++ >= budget.maxSamplesPerColumn()) {

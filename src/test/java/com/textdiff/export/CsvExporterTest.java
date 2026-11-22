@@ -83,7 +83,7 @@ class CsvExporterTest {
                 RowDiff.equal("k1", Status.SECTION_DATA, new String[]{"k1", "1"}),
                 RowDiff.diff("k2", Status.SECTION_DATA, new String[]{"k2", "2", "a"}, new String[]{"k2", "9", "b"}, new int[]{1, 2}),
                 RowDiff.onlyA("k3", Status.SECTION_DATA, new String[]{"k3", "3"}));
-        CsvExporter.writeDiffFields(f, rows, List.of("主键", "金额", "备注"));
+        CsvExporter.writeDiffFields(f, rows, List.of("主键", "金额", "备注"), "A", "B");
 
         List<String> lines = Files.readAllLines(f, StandardCharsets.UTF_8);
         assertEquals(1 + 2, lines.size()); // 仅 k2 的两个差异字段
@@ -97,7 +97,7 @@ class CsvExporterTest {
         Path f = dir.resolve("esc.csv");
         List<RowDiff> rows = List.of(RowDiff.diff("k\"1\",x", Status.SECTION_DATA,
                 new String[]{"a,b", "含\"引号\""}, new String[]{"换\n行", "z"}, new int[]{0, 1}));
-        CsvExporter.writeDiffFields(f, rows, List.of());
+        CsvExporter.writeDiffFields(f, rows, List.of(), "A", "B");
         String content = Files.readString(f, StandardCharsets.UTF_8).replace("\ufeff", "");
         // 引号翻倍、含逗号/换行的字段整体加引号（RFC 4180）；栏位 0：A=a,b B=换行；栏位 1：A=引号 B=z
         assertTrue(content.contains("\"k\"\"1\"\",x\",1,栏位1,\"a,b\",\"换\n行\""));
@@ -142,7 +142,7 @@ class CsvExporterTest {
         List<RowDiff> rows = List.of(RowDiff.diff(key, Status.SECTION_DATA,
                 new String[]{"A1", "123456789012345678901234567890"},
                 new String[]{"A1", "999"}, new int[]{1}));
-        CsvExporter.writeDiffFields(f, rows, List.of());
+        CsvExporter.writeDiffFields(f, rows, List.of(), "A", "B");
         String content = Files.readString(f, StandardCharsets.UTF_8).replace("\ufeff", "");
         String[] lines = content.split("\r\n");
         assertEquals(2, lines.length);

@@ -61,8 +61,9 @@ final class ApiViews {
         String owner = groupOf != null ? groupOf.apply(cfg.nickname) : null;
         config.put("group", owner != null && !owner.isEmpty() ? owner
                 : (cfg.group == null || cfg.group.isEmpty() ? cfg.nickname : cfg.group));
-        config.put("source_a", cfg.sourceA);
-        config.put("source_b", cfg.sourceB);
+        String[] src = srcNamesOf(job.configLine);
+        config.put("source_a", src[0]);
+        config.put("source_b", src[1]);
         m.put("config", config);
 
         if (job.diffCount >= 0) {
@@ -115,6 +116,39 @@ final class ApiViews {
             out.add(m);
         }
         return out;
+    }
+
+    /**
+     * configLine 来源名（需求①别名修复）：legacy 行走 SRCA/SRCB 令牌；custom 的 JSON 行
+     * 读 srca/srcb 附加键——注意 Rules.parseLegacy 对 JSON 行<b>不抛错</b>只回默认 A/B，
+     * 必须按 "{ " 前缀分流，否则 JSON 回退永不生效；均缺省 A/B。
+     */
+    static String[] srcNamesOf(String configLine) {
+        String a = "A", b = "B";
+        String line = configLine == null ? "" : configLine.strip();
+        if (line.startsWith("{")) {
+            try {
+                Map<String, String> m = com.textdiff.store.Json.read(line, Map.class);
+                if (m != null) {
+                    String va = m.get("srca");
+                    String vb = m.get("srcb");
+                    if (va != null && !va.isBlank()) a = va.strip();
+                    if (vb != null && !vb.isBlank()) b = vb.strip();
+                }
+            } catch (RuntimeException ignored) {
+                // 无命名信息按默认处理
+            }
+            return new String[]{a, b};
+        }
+        try {
+            CompareConfig cfg = Rules.parseLegacy(line,
+                    ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
+            if (cfg.sourceA != null && !cfg.sourceA.isBlank()) a = cfg.sourceA.strip();
+            if (cfg.sourceB != null && !cfg.sourceB.isBlank()) b = cfg.sourceB.strip();
+        } catch (RuntimeException ignored) {
+            // 解析失败按默认处理
+        }
+        return new String[]{a, b};
     }
 
     /** 批次聚合状态与统计。slim=true（全局列表轮询）不带全量清单——5000 文件的 no_rule_files
@@ -193,6 +227,11 @@ final class ApiViews {
                 ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
         Map<String, Object> config = ApiPayloads.configMap(cfg, "job",
                 groupOf == null ? null : groupOf.apply(cfg.nickname));
+        // 需求①别名修复：custom 的 JSON configLine 不含 SRCA 令牌，parseLegacy 只回默认 A/B——
+        // 统一经 srcNamesOf 分流（JSON 行读 srca/srcb 附加键）覆盖，别名在各处展示真实生效
+        String[] src = srcNamesOf(job.configLine);
+        config.put("source_a", src[0]);
+        config.put("source_b", src[1]);
 
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("job_id", job.id);

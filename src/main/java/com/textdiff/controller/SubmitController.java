@@ -203,6 +203,11 @@ public class SubmitController {
             lines.add(sb.toString());
             files.add("内联");
         }
+        // 需求①别名修复：use_all/config_file 从配置文件读出的行此前完全忽略请求里的
+        // source_a/source_b（只有内联分支读取）——目录批次填了别名也不生效，全链路回退字面 A/B。
+        // 此处统一注入：请求别名非空且非默认（A/B）时优先生效，剥除行内既有令牌后追加；
+        // 未填则保留配置文件自带的 SRCA/SRCB。
+        lines = applySrcAliases(lines, str(body.get("source_a")), str(body.get("source_b")));
         String group = str(body.get("group"));
         if (group != null && !group.isBlank()) {
             boolean[] keep = groupKeeps(group.strip(), lines);
@@ -258,6 +263,30 @@ public class SubmitController {
         int n = 0;
         for (int v : out.values()) keep[n++] = v;
         return keep;
+    }
+
+    /** 令牌剥除（别名注入用）：行内既有 SRCA=/SRCB= 值不含裸冒号（与 parseLegacy 分词约束一致）。 */
+    private static final java.util.regex.Pattern SRCA_TOKEN = java.util.regex.Pattern.compile(":SRCA=[^:]*");
+    private static final java.util.regex.Pattern SRCB_TOKEN = java.util.regex.Pattern.compile(":SRCB=[^:]*");
+
+    /** 来源别名注入（需求①）：请求里显式填写的别名（非空且非默认 A/B）优先于配置文件内已有令牌——
+     * 逐行剥除既有 SRCA=/SRCB= 后追加请求值；每侧独立判断，未填的一侧保留文件令牌。包级可见便于单测。 */
+    static List<String> applySrcAliases(List<String> lines, String reqA, String reqB) {
+        boolean hasA = reqA != null && !reqA.isBlank() && !"A".equals(reqA.strip());
+        boolean hasB = reqB != null && !reqB.isBlank() && !"B".equals(reqB.strip());
+        if (!hasA && !hasB) return lines;
+        List<String> out = new ArrayList<>(lines.size());
+        for (String l : lines) {
+            String t = l.strip();
+            if (hasA) t = SRCA_TOKEN.matcher(t).replaceAll("");
+            if (hasB) t = SRCB_TOKEN.matcher(t).replaceAll("");
+            // 令牌剥除可能留下 "::"（令牌原在行首/相邻）——收敛为单冒号（该格式下值不含连续冒号）
+            t = t.replaceAll(":{2,}", ":");
+            if (hasA) t = t + ":SRCA=" + reqA.strip();
+            if (hasB) t = t + ":SRCB=" + reqB.strip();
+            out.add(t);
+        }
+        return out;
     }
 
     static List<String> readConfigLines(Path file) throws IOException {

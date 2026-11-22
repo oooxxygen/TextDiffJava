@@ -75,6 +75,14 @@ class ConfigFileApiTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.dups[?(@.nickname=='" + nick + "')]").exists());
 
+            // source 参数（勘误③条目选择器数据源）：逐文件展平——同名规则被独立文件遮蔽时仍能从指定文件带入
+            mvc.perform(get("/api/configs/manage").param("source", "current.conf"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.configs[?(@.nickname=='" + nick + "')]").exists());
+            mvc.perform(get("/api/configs/manage").param("source", ownName + ".conf"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.configs[?(@.nickname=='" + nick + "')]").exists());
+
             // 独立文件重命名
             mvc.perform(post("/api/config-files/rename").contentType(MediaType.APPLICATION_JSON)
                             .content(json("{\"from\":\"%s\",\"to\":\"%s\"}".formatted(ownName, renamed))))

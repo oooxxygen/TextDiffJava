@@ -41,6 +41,7 @@ class BatchSummaryHtmlTest {
                 "deviations", List.of(map(
                         "nickname", "INCT0101",
                         "group", "卡中心",
+                        "parm_type", "C64",
                         "file_name", "01A3020D.v01",
                         "content_ratio", 0.25,
                         "content_grade", "务必关注",
@@ -90,7 +91,8 @@ class BatchSummaryHtmlTest {
                 "废弃字段", "新线不为旧线子集", "b-red",
                 "（不监控：无法对比，仅报表展示）", "不监控",
                 "25.0%", "50.0%", "务必关注", "严重问题", "微量偏移",
-                "data-nick=\"INCT0101\"", "data-group=\"卡中心\"",
+                "data-nick=\"INCT0101\"", "data-group=\"卡中心\"", "data-type=\"C64\"",
+                "<th>类型</th>", "旧线 目录", "仅旧线", "仅新线",
                 "国家码&lt;script&gt;"));
         missing.removeIf(html::contains);
         assertTrue(missing.isEmpty(), "缺失内容: " + missing + "；html 长度 " + html.length());

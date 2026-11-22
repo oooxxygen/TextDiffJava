@@ -39,7 +39,7 @@ class BatchSummaryExcelTest {
                 "group_name", "日常对比配置",
                 "generated_at", 1770000200L,
                 "deviations", List.of(map(
-                        "nickname", "INCT0101", "group", "卡中心", "file_name", "01A3020D.v01",
+                        "nickname", "INCT0101", "group", "卡中心", "parm_type", "C64", "file_name", "01A3020D.v01",
                         "content_ratio", 0.25, "content_grade", "务必关注",
                         "count_ratio", 0.5, "count_grade", "严重问题",
                         "equal", 6, "diff", 2, "only_a", 0, "only_b", 0,
@@ -73,16 +73,21 @@ class BatchSummaryExcelTest {
             Sheet dev = wb.getSheet("偏离度");
             Row head = dev.getRow(0);
             assertEquals("表名(昵称)", head.getCell(0).getStringCellValue());
-            assertEquals("内容偏离度", head.getCell(3).getStringCellValue());
-            assertEquals("条数偏离度", head.getCell(5).getStringCellValue());
+            assertEquals("类型", head.getCell(2).getStringCellValue()); // 需求②：type_parm 文本类型列
+            assertEquals("仅旧线", head.getCell(10).getStringCellValue());
+            assertEquals("旧线总条数", head.getCell(12).getStringCellValue());
+            assertEquals("内容偏离度", head.getCell(4).getStringCellValue());
+            assertEquals("条数偏离度", head.getCell(6).getStringCellValue());
             Row r1 = dev.getRow(1);
             assertEquals("INCT0101", r1.getCell(0).getStringCellValue());
             assertEquals("卡中心", r1.getCell(1).getStringCellValue());
-            assertEquals("25.0%", r1.getCell(3).getStringCellValue());
-            assertEquals("务必关注", r1.getCell(4).getStringCellValue());
-            assertEquals("50.0%", r1.getCell(5).getStringCellValue());
-            assertEquals("严重问题", r1.getCell(6).getStringCellValue());
-            assertEquals("8", r1.getCell(11).getStringCellValue());
+            assertEquals("C64", r1.getCell(2).getStringCellValue());
+            assertEquals("01A3020D.v01", r1.getCell(3).getStringCellValue());
+            assertEquals("25.0%", r1.getCell(4).getStringCellValue());
+            assertEquals("务必关注", r1.getCell(5).getStringCellValue());
+            assertEquals("50.0%", r1.getCell(6).getStringCellValue());
+            assertEquals("严重问题", r1.getCell(7).getStringCellValue());
+            assertEquals("8", r1.getCell(12).getStringCellValue());
 
             Sheet disc = wb.getSheet("关注字段监测");
             assertEquals("字段类型", disc.getRow(0).getCell(6).getStringCellValue());

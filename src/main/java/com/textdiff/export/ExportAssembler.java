@@ -111,16 +111,17 @@ public final class ExportAssembler {
     }
 
     /**
-     * 仅差异栏位 CSV 导出（分片，流式）：一条字段差异一行（键值/栏位号/栏位名/A 值/B 值）。
+     * 仅差异栏位 CSV 导出（分片，流式）：一条字段差异一行（键值/栏位号/栏位名/{srcA}值/{srcB}值）。
      * ≤2 万行单文件，超出切 {base}_仅差异栏位_001.csv…。
      */
     public static List<Path> writeDiffFieldsCsv(Path dir, JobRecord job, Predicate<RowDiff> filter) {
-        List<String> names = columnNames(job);
+        CompareConfig cfg = compareConfig(job);
+        List<String> names = cfg.columnNames;
         List<com.textdiff.store.JobMeta.DynCol> dyn = dynCols(job);
         return streamCsv(dir, base(job), "_仅差异栏位.csv", job, filter,
                 new PartedRowWriter() {
                     @Override public void header(java.io.BufferedWriter w) throws java.io.IOException {
-                        CsvExporter.writeDiffHeader(w);
+                        CsvExporter.writeDiffHeader(w, cfg.sourceA, cfg.sourceB);
                     }
                     @Override public boolean row(java.io.BufferedWriter w, RowDiff r) throws java.io.IOException {
                         return CsvExporter.writeDiffRow(w, r, names, dyn);

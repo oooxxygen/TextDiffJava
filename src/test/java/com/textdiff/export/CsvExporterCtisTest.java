@@ -48,7 +48,7 @@ class CsvExporterCtisTest {
 
         Path f = dir.resolve("diff.csv");
         try (BufferedWriter w = CsvExporter.newBomWriter(f)) {
-            CsvExporter.writeDiffHeader(w);
+            CsvExporter.writeDiffHeader(w, "A", "B");
             CsvExporter.writeDiffRow(w, r, List.of(), dynCols);
         }
         List<String> lines = stripBom(f);

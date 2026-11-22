@@ -68,11 +68,13 @@ public class ConfigController {
      * 生效那条（来源 = 生效文件）。坏行计数不阻断。
      */
     @GetMapping("/configs/manage")
-    public Map<String, Object> manage(@RequestParam(required = false) String q) throws IOException {
+    public Map<String, Object> manage(@RequestParam(required = false) String q,
+                                      @RequestParam(required = false) String source) throws IOException {
         List<Map<String, Object>> out = new ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
         int bad = 0;
-        // 同（昵称+通配名）规则在多个文件共存的清单（需求⑤提示用：use_all 生效优先级=来源文件列所列者）
+        boolean bySource = source != null && !source.isBlank();
+        // 同（昵称+通配名）规则在多个文件共存的清单（需求⑤提示用：use_all 生效优先级=来源文件所列者）
         Map<String, java.util.List<String>> fileHits = new java.util.LinkedHashMap<>();
         for (Map.Entry<String, String> e : readAllOrdered().entrySet()) {
             int lineNo = 0;
@@ -85,9 +87,12 @@ public class ConfigController {
                             ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
                     fileHits.computeIfAbsent(cfg.nickname + "\u0000" + cfg.fileGlob,
                             k -> new ArrayList<>()).add(e.getKey());
+                    if (bySource && !source.equals(e.getKey())) continue;
                     if (q != null && !q.isBlank()
                             && !cfg.nickname.contains(q) && !cfg.fileGlob.contains(q)) continue;
-                    if (!seen.add(cfg.nickname + "\u0000" + cfg.fileGlob)) continue;
+                    // 指定 source = 逐文件展平（新增配置条目选择器：列出该文件全部条目，不做跨文件去重——
+                    // 同名规则被独立文件遮蔽时仍可从 current.conf 带入）
+                    if (!bySource && !seen.add(cfg.nickname + "\u0000" + cfg.fileGlob)) continue;
                     Map<String, Object> m = ApiPayloads.configMap(cfg, e.getKey());
                     m.put("line_no", lineNo);
                     out.add(m);
@@ -316,7 +321,8 @@ public class ConfigController {
             Map<String, Object> m = new java.util.LinkedHashMap<>();
             m.put("name", e.getKey());
             m.put("protected", e.getKey().equals("current.conf") || e.getKey().equals("default.conf"));
-            m.put("mtime", fileMtime(e.getKey()));
+            // 前端 fmtTime 按 epoch 秒渲染——此处转秒（毫秒会把修改时间显示成 58861 年）；mtimeText 导出侧仍用毫秒
+            m.put("mtime", fileMtime(e.getKey()) / 1000);
             int rules = 0;
             for (String line : e.getValue().split("\\r?\\n")) {
                 String t = line.strip();

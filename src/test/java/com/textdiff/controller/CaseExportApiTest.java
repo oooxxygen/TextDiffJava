@@ -1,5 +1,6 @@
 package com.textdiff.controller;
 
+import com.textdiff.export.CollectCaseExcel;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -99,22 +100,30 @@ class CaseExportApiTest {
                 assertEquals("采集日期", head.getCell(0).getStringCellValue());
                 assertEquals("批次", head.getCell(1).getStringCellValue());
                 assertEquals("轮次", head.getCell(2).getStringCellValue());
-                assertEquals("银行号", head.getCell(3).getStringCellValue());
-                assertEquals("栏位索引", head.getCell(7).getStringCellValue());
-                assertEquals("分析团队", head.getCell(12).getStringCellValue());
-                // 行1：k2 主键匹配有差异 → 栏位索引 2（1-based），错误类型 A/B 实际值；批次轮次来自提交
+                assertEquals("重复轮次", head.getCell(3).getStringCellValue()); // 需求：轮次与银行号之间预留
+                assertEquals("银行号", head.getCell(4).getStringCellValue());
+                assertEquals("栏位索引", head.getCell(8).getStringCellValue());
+                assertEquals("错误类型", head.getCell(9).getStringCellValue());
+                assertEquals("存在问题", head.getCell(10).getStringCellValue());
+                assertEquals("分析团队", head.getCell(13).getStringCellValue());
+                assertEquals("主键id", head.getCell(20).getStringCellValue());
+                // 行1：k2 主键匹配有差异 → 栏位索引 2（1-based）；批次轮次来自提交；银行号取文件名首段 4-6 位数字
                 Row r1 = sh.getRow(1);
                 assertEquals("P2703", r1.getCell(1).getStringCellValue());
                 assertEquals("2", r1.getCell(2).getStringCellValue());
-                assertEquals("*", r1.getCell(3).getStringCellValue());   // 通配符取自配置通配名 f*.txt 的 *
-                assertEquals("CASEXP", r1.getCell(5).getStringCellValue()); // 表名 = 昵称
-                assertEquals("txt", r1.getCell(6).getStringCellValue());   // 扩展名取实际文件
-                assertEquals(2.0, r1.getCell(7).getNumericCellValue(), 1e-9);
-                assertEquals("A:'2' B:'9'", r1.getCell(8).getStringCellValue());
-                // 行2：k3 仅 A 存在 → 栏位索引 0，整行原貌
+                assertEquals("", r1.getCell(3).getStringCellValue());    // 重复轮次默认不赋值
+                assertEquals("***", r1.getCell(4).getStringCellValue());  // f1.txt 首段无 4-6 位数字 → ***
+                assertEquals("CASEXP", r1.getCell(6).getStringCellValue()); // 表名 = 昵称
+                assertEquals("txt", r1.getCell(7).getStringCellValue());   // 非压缩 → 扩展名末三位
+                assertEquals(2.0, r1.getCell(8).getNumericCellValue(), 1e-9);
+                assertEquals("栏位值不匹配", r1.getCell(9).getStringCellValue());
+                assertEquals("A：2    B：9", r1.getCell(10).getStringCellValue()); // 存在问题（缺省别名 A/B）
+                // 行2：k3 仅 A 存在 → 栏位索引 0，错误类型侧别文案 + 存在问题主键
                 Row r2 = sh.getRow(2);
-                assertEquals(0.0, r2.getCell(7).getNumericCellValue(), 1e-9);
-                assertEquals("A:'k3 | 3'", r2.getCell(8).getStringCellValue());
+                assertEquals(0.0, r2.getCell(8).getNumericCellValue(), 1e-9);
+                assertEquals("主机记录在信创未找到", r2.getCell(9).getStringCellValue());
+                assertEquals("A：k3    B：(无)", r2.getCell(10).getStringCellValue());
+                assertNotNull(r2.getCell(20).getStringCellValue()); // 主键id 24 位随机
                 assertNull(sh.getRow(3));
             }
         } finally {

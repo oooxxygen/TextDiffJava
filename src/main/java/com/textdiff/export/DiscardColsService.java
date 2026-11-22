@@ -326,29 +326,39 @@ public final class DiscardColsService {
         return groupOf(nickname);
     }
 
+    /** 文本类型（批次总结「类型」列）：type_parm 的 parm_report_type 按昵称关联；未导入/无此昵称为空串。 */
+    public String parmTypeOf(String nickname) {
+        var t = fieldMaps == null ? null : fieldMaps.typeByReport(nickname);
+        return t == null || t.parmReportType() == null ? "" : t.parmReportType();
+    }
+
     private String groupOf(String nickname) {
         var t = fieldMaps == null ? null : fieldMaps.typeByReport(nickname);
         return t == null || t.ownershipGroup() == null || t.ownershipGroup().isBlank()
                 ? "" : t.ownershipGroup();
     }
 
-    /** configLine 的 SRCA/SRCB：批次内首个非默认命名生效（默认 A/B 不覆盖）。custom 的 JSON 行读 srca/srcb 键。 */
+    /** configLine 的 SRCA/SRCB：批次内首个非默认命名生效（默认 A/B 不覆盖）。custom 的 JSON 行读 srca/srcb 键——
+     * 注意 Rules.parseLegacy 对 JSON 行不抛错只回默认，须按 "{ " 前缀分流，否则 JSON 回退永不生效。 */
     private String srcOf(JobRecord job, boolean sideA) {
+        String line = job.configLine == null ? "" : job.configLine.strip();
+        if (line.startsWith("{")) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, String> m = Json.read(line, Map.class);
+                String v = m == null ? null : m.get(sideA ? "srca" : "srcb");
+                if (v != null && !v.isBlank() && !v.equals(sideA ? "A" : "B")) return v.strip();
+            } catch (RuntimeException ignored) {
+                // 无命名信息按默认处理
+            }
+            return null;
+        }
         try {
-            com.textdiff.engine.CompareConfig cfg =
-                    Rules.parseLegacy(job.configLine == null ? "" : job.configLine, " | ", "|||||");
+            com.textdiff.engine.CompareConfig cfg = Rules.parseLegacy(line, " | ", "|||||");
             String v = sideA ? cfg.sourceA : cfg.sourceB;
             if (v != null && !v.isBlank() && !v.equals(sideA ? "A" : "B")) return v.strip();
         } catch (RuntimeException ignored) {
-            // custom 的 JSON configLine：读 srca/srcb 附加键
-            try {
-                @SuppressWarnings("unchecked")
-                Map<String, String> m = Json.read(job.configLine, Map.class);
-                String v = m == null ? null : m.get(sideA ? "srca" : "srcb");
-                if (v != null && !v.isBlank() && !v.equals(sideA ? "A" : "B")) return v.strip();
-            } catch (RuntimeException ignored2) {
-                // 无命名信息按默认处理
-            }
+            // 解析失败按默认处理
         }
         return null;
     }

@@ -249,6 +249,7 @@ public class DiscardController {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("nickname", nickname);
             m.put("group", discardService.groupOfNickname(nickname));
+            m.put("parm_type", discardService.parmTypeOf(nickname)); // 需求②：type_parm.parm_report_type（C64/ORI 等）
             m.put("file_name", fileName(j.fileA) == null ? fileName(j.fileB) : fileName(j.fileA));
             m.put("content_ratio", Double.isNaN(content.ratio()) ? null : round4(content.ratio()));
             m.put("content_grade", content.grade());

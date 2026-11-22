@@ -918,7 +918,7 @@ const DiscardCard = {
       <div class="head-actions">
         <span v-if="data.generated_at" class="count" style="align-self:center;">采集于 {{ fmtTime(data.generated_at) }}</span>
         <a v-if="batchId && data.hit" class="mini-btn" :href="csvHref"
-           title="下载本批次关注字段 A/B 取值范围 CSV（UTF-8 BOM，可直接用 Excel 打开）">⬇ DISCARD_COLS.csv</a>
+           :title="'下载本批次关注字段 ' + (d.src_a || 'A') + '/' + (d.src_b || 'B') + ' 取值范围 CSV（UTF-8 BOM，可直接用 Excel 打开）'">⬇ DISCARD_COLS.csv</a>
       </div>
     </div>
     <div class="card-body">
@@ -955,25 +955,33 @@ const BatchSummaryPage = {
     const GRADE_CLS = { "微量偏移": "purple", "务必关注": "yellow", "严重问题": "severe", "正常": "ok" };
     function gradeCls(g) { return GRADE_CLS[g] || "ok"; }
     function pct(v) { return (v * 100).toFixed(1); }
-    // 分区搜索（表名 + 归属组，AND 组合；在线页与离线 HTML 同语义）
-    const devNick = ref(""); const devGroup = ref("");
+    // 分区搜索（表名 + 归属组 + 类型，AND 组合；类型为下拉选本批次出现的取值，需求②）
+    const devNick = ref(""); const devGroup = ref(""); const devType = ref("");
     const discNick = ref(""); const discGroup = ref("");
-    function hits(list, nick, group) {
+    const devTypes = computed(() => {
+      const set = new Set();
+      (p.value ? (p.value.deviations || []) : []).forEach(r => { if (r.parm_type) set.add(r.parm_type); });
+      return [...set].sort();
+    });
+    function hits(list, nick, group, type) {
       const n = nick.value.trim().toLowerCase(); const g = group.value.trim().toLowerCase();
-      if (!n && !g) return list;
+      const t = type ? type.value : "";
+      if (!n && !g && !t) return list;
       return list.filter(r => {
         const rn = (r.nickname || "").toLowerCase(); const rg = (r.group || "").toLowerCase();
-        return (!n || rn.indexOf(n) >= 0) && (!g || rg.indexOf(g) >= 0);
+        return (!n || rn.indexOf(n) >= 0) && (!g || rg.indexOf(g) >= 0)
+            && (!t || (r.parm_type || "") === t);
       });
     }
-    const devs = computed(() => hits(p.value ? (p.value.deviations || []) : [], devNick, devGroup));
-    const discRows = computed(() => hits(d.value.rows || [], discNick, discGroup));
+    const devs = computed(() => hits(p.value ? (p.value.deviations || []) : [], devNick, devGroup, devType));
+    const discRows = computed(() => hits(d.value.rows || [], discNick, discGroup, null));
     const devPg = usePager(() => devs.value, 50);
     const discPg = usePager(() => discRows.value, 100);
-    watch([devNick, devGroup], () => devPg.reset());
+    watch([devNick, devGroup, devType], () => devPg.reset());
     watch([discNick, discGroup], () => discPg.reset());
     return { p, err, busy, load, htmlHref, xlsxHref, STATUS_TEXT, d,
-             gradeCls, pct, devNick, devGroup, discNick, discGroup, devs, discRows, devPg, discPg,
+             gradeCls, pct, devNick, devGroup, devType, devTypes, discNick, discGroup,
+             devs, discRows, devPg, discPg,
              fmtTime, goBack: () => emit("back") };
   },
   template: `
@@ -1022,12 +1030,16 @@ const BatchSummaryPage = {
           <div class="sec-search">
             <label>表名 <input v-model="devNick" placeholder="按表名（昵称）搜索" /></label>
             <label>归属组 <input v-model="devGroup" placeholder="按归属组搜索" /></label>
+            <label>类型 <select v-model="devType" style="min-width:110px;">
+              <option value="">全部</option>
+              <option v-for="t in devTypes" :key="t" :value="t">{{ t }}</option>
+            </select></label>
             <span class="hint" v-if="devs.length !== (p.deviations || []).length">命中 {{ devs.length }} / {{ (p.deviations || []).length }}</span>
           </div>
           <div class="empty" v-if="!devs.length">无已完成文本（或全部完全匹配无差异行）。</div>
           <div v-else style="overflow-x:auto;">
             <table class="discard-table">
-              <thead><tr><th>#</th><th>表名（昵称）</th><th>归属组</th><th>文件名</th>
+              <thead><tr><th>#</th><th>表名（昵称）</th><th>归属组</th><th>类型</th><th>文件名</th>
                 <th style="min-width:150px;">内容偏离度</th><th style="min-width:150px;">条数偏离度</th>
                 <th>完全匹配</th><th>有差异</th><th>仅{{ p.src_a }}</th><th>仅{{ p.src_b }}</th></tr></thead>
               <tbody>
@@ -1035,6 +1047,7 @@ const BatchSummaryPage = {
                   <td>{{ (devPg.page - 1) * devPg.size + i + 1 }}</td>
                   <td>{{ t.nickname }}</td>
                   <td>{{ t.group }}</td>
+                  <td class="mono">{{ t.parm_type || '—' }}</td>
                   <td class="mono">{{ t.file_name }}</td>
                   <td>
                     <template v-if="t.content_ratio !== null && t.content_ratio !== undefined">
@@ -1062,7 +1075,7 @@ const BatchSummaryPage = {
         <div class="card-head">🔍 关注字段取值监测（DISCARD_COLS）
           <div class="head-actions" v-if="d.hit">
             <a class="mini-btn" :href="'/api/batches/' + p.batch_id + '/discard-cols.csv'"
-               title="下载本批次关注字段 A/B 取值范围 CSV">⬇ DISCARD_COLS.csv</a>
+               :title="'下载本批次关注字段 ' + p.src_a + '/' + p.src_b + ' 取值范围 CSV'">⬇ DISCARD_COLS.csv</a>
           </div>
         </div>
         <div class="card-body">
@@ -1138,6 +1151,12 @@ const ConfigPanel = {
       try {
         const r = await api("/api/config-files");
         confFiles.value = (r.files || []).map(f => typeof f === "string" ? { name: f } : f);
+        // 存量迁移兜底：conf_file 指向已合并进 current.conf 的旧单文件时回退 current.conf，
+        // 防止保存时按旧文件名复活单文件（split 条目重新散落）
+        if (confTarget.value && confFiles.value.length
+            && !confFiles.value.some(f => f.name === confTarget.value)) {
+          confTarget.value = "current.conf";
+        }
       } catch (e) { confFiles.value = []; }
     }
     function resolveTarget() {
@@ -1589,7 +1608,7 @@ const ResultView = {
                    :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="true" :records-open="false" :page-size="10"
                    :export-url="'/api/jobs/' + jobId + '/export?mode=diff'" export-label="⬇ 差异CSV"
                    :extra-exports="[
-                     { url: '/api/jobs/' + jobId + '/export?mode=fields', label: '⬇ 仅差异栏位', title: '仅差异栏位导出：一条字段差异一行（键值/栏位号/栏位名/A值/B值）' },
+                     { url: '/api/jobs/' + jobId + '/export?mode=fields', label: '⬇ 仅差异栏位', title: '仅差异栏位导出：一条字段差异一行（键值/栏位号/栏位名/两侧取值）' },
                      { url: '/api/jobs/' + jobId + '/export?mode=collect', label: '⬇ 差异采集表(xlsx)', title: '差异采集对比案例 Excel（CollectComparisonCaseTemplate 20 列）' }]"
                    :monitor-map="monitorMap"
                    :supports-note="true" :notes="notes" :note-count="zoneNoteCounts.diff||0" :ext-query="globalQ" :ext-query-nonce="globalNonce" :notes-nonce="notesNonce" @save-note="onSaveNote" />
@@ -3836,7 +3855,22 @@ const ReportBatchView = {
       catch (e) { notify(e.message, "error"); }
     }
     function baseName2(p) { return (p || "").split(/[\\/]/).pop(); }
-    return { ov, q, children, pgChildren, exportHref, fmtTime, baseName: baseName2, editLabel, REPORT_STATUS,
+    // 需求①别名：批次级来源名（子作业首个非默认 source_a/source_b 生效，缺省 A/B）
+    const srcA = computed(() => {
+      for (const c of (ov.value && ov.value.children) || []) {
+        const s = (c.config || {}).source_a;
+        if (s && s !== "A") return s;
+      }
+      return "A";
+    });
+    const srcB = computed(() => {
+      for (const c of (ov.value && ov.value.children) || []) {
+        const s = (c.config || {}).source_b;
+        if (s && s !== "B") return s;
+      }
+      return "B";
+    });
+    return { ov, q, children, pgChildren, exportHref, fmtTime, baseName: baseName2, editLabel, REPORT_STATUS, srcA, srcB,
              open: (id) => emit("open", id), goBack: () => emit("back") };
   },
   template: `
@@ -3864,10 +3898,10 @@ const ReportBatchView = {
           <div class="metric"><div class="num">{{ ov.done }}</div><div class="lbl">已完成</div></div>
         </div>
         <div style="margin-top:12px;font-size:12px;color:var(--text-soft);">
-          A：{{ ov.batch.dir_a }}<br/>B：{{ ov.batch.dir_b }}<br/>{{ ov.batch.config_source }}
+          {{ srcA }}：{{ ov.batch.dir_a }}<br/>{{ srcB }}：{{ ov.batch.dir_b }}<br/>{{ ov.batch.config_source }}
         </div>
         <div v-if="ov.batch.no_rule_files && ov.batch.no_rule_files.length" class="no-rule" style="margin-top:10px;">
-          ⚠ 未配对（B 侧无同名文件）：{{ ov.batch.no_rule_files.join('、') }}
+          ⚠ 未配对（{{ srcB }} 侧无同名文件）：{{ ov.batch.no_rule_files.join('、') }}
         </div>
       </div>
     </div>
@@ -3893,7 +3927,7 @@ const ReportBatchView = {
           <span class="count" v-else-if="c.summary">
             条数 {{ c.summary.equal + c.summary.diff + c.summary.only_a }}↔{{ c.summary.equal + c.summary.diff + c.summary.only_b }} ·
             匹配 {{ c.summary.equal }} · 部分匹配 <b style="color:var(--diff-bar)">{{ c.summary.diff }}</b> ·
-            仅A {{ c.summary.only_a }} / 仅B {{ c.summary.only_b }}
+            仅{{ srcA }} {{ c.summary.only_a }} / 仅{{ srcB }} {{ c.summary.only_b }}
           </span>
         </div>
       </div>
@@ -4030,17 +4064,17 @@ const ReportResultView = {
         <div class="card-head">🧾 对比概览</div>
         <div class="card-body" v-if="s">
           <div class="summary-metrics">
-            <div class="metric total"><div class="num">{{ s.row_count_a }}</div><div class="lbl">总条数 A（程序计数）</div></div>
-            <div class="metric total"><div class="num">{{ s.row_count_b }}</div><div class="lbl">总条数 B（程序计数）</div></div>
+            <div class="metric total"><div class="num">{{ s.row_count_a }}</div><div class="lbl">总条数 {{ sourceA }}（程序计数）</div></div>
+            <div class="metric total"><div class="num">{{ s.row_count_b }}</div><div class="lbl">总条数 {{ sourceB }}（程序计数）</div></div>
             <div class="metric diff"><div class="num">{{ s.header_line_diff }}</div><div class="lbl">表头差异行</div></div>
             <div class="metric diff"><div class="num">{{ s.footer_line_diff }}</div><div class="lbl">表尾差异行</div></div>
             <div class="metric"><div class="num">{{ s.equal }}</div><div class="lbl">完全匹配</div></div>
             <div class="metric diff"><div class="num">{{ s.partial }}</div><div class="lbl">部分匹配</div></div>
-            <div class="metric only"><div class="num">{{ s.only_a }}</div><div class="lbl">仅A有</div></div>
-            <div class="metric only"><div class="num">{{ s.only_b }}</div><div class="lbl">仅B有</div></div>
+            <div class="metric only"><div class="num">{{ s.only_a }}</div><div class="lbl">仅{{ sourceA }}有</div></div>
+            <div class="metric only"><div class="num">{{ s.only_b }}</div><div class="lbl">仅{{ sourceB }}有</div></div>
           </div>
           <div style="margin-top:10px;font-size:12px;color:var(--text-soft);">
-            报表段数 A/B：{{ s.section_count_a }} / {{ s.section_count_b }}
+            报表段数 {{ sourceA }}/{{ sourceB }}：{{ s.section_count_a }} / {{ s.section_count_b }}
             <span v-if="s.control_format" class="group-badge" style="margin-left:8px;" title="控制行版式（1@OD@|）：无需模板，自分区解析；业务记录按折行原貌逐行对照">📐 控制行版式 · 折行 {{ s.fold_lines }} 行</span>
             <span v-if="s.field_names && s.field_names.length" style="margin-left:12px;">加工字段（铺底）：{{ s.field_names.join('、') }}</span>
           </div>
@@ -4204,7 +4238,22 @@ const CustomBatchView = {
     // 子文件分页 lazy load（默认 100/页）
     const pgChildren = usePager(() => children.value, 100);
     watch(q, () => pgChildren.reset());
-    return { ov, q, children, pgChildren, fmtTime, baseName: baseName2, editLabel, REPORT_STATUS,
+    // 需求①别名：批次级来源名（子作业首个非默认 source_a/source_b 生效，缺省 A/B）
+    const srcA = computed(() => {
+      for (const c of (ov.value && ov.value.children) || []) {
+        const s = (c.config || {}).source_a;
+        if (s && s !== "A") return s;
+      }
+      return "A";
+    });
+    const srcB = computed(() => {
+      for (const c of (ov.value && ov.value.children) || []) {
+        const s = (c.config || {}).source_b;
+        if (s && s !== "B") return s;
+      }
+      return "B";
+    });
+    return { ov, q, children, pgChildren, fmtTime, baseName: baseName2, editLabel, REPORT_STATUS, srcA, srcB,
              open: (id) => emit("open", id), goBack: () => emit("back") };
   },
   template: `
@@ -4230,10 +4279,10 @@ const CustomBatchView = {
           <div class="metric"><div class="num">{{ ov.done }}</div><div class="lbl">已完成</div></div>
         </div>
         <div style="margin-top:12px;font-size:12px;color:var(--text-soft);">
-          A：{{ ov.batch.dir_a }}<br/>B：{{ ov.batch.dir_b }}<br/>{{ ov.batch.config_source }}
+          {{ srcA }}：{{ ov.batch.dir_a }}<br/>{{ srcB }}：{{ ov.batch.dir_b }}<br/>{{ ov.batch.config_source }}
         </div>
         <div v-if="ov.batch.no_rule_files && ov.batch.no_rule_files.length" class="no-rule" style="margin-top:10px;">
-          ⚠ 未配对（B 侧无同名文件）：{{ ov.batch.no_rule_files.join('、') }}
+          ⚠ 未配对（{{ srcB }} 侧无同名文件）：{{ ov.batch.no_rule_files.join('、') }}
         </div>
       </div>
     </div>
@@ -4258,7 +4307,7 @@ const CustomBatchView = {
           <span class="count" v-else-if="c.summary">
             段数 {{ c.summary.equal + c.summary.diff + c.summary.only_a }}↔{{ c.summary.equal + c.summary.diff + c.summary.only_b }} ·
             一致 {{ c.summary.equal }} · 有差异 <b style="color:var(--diff-bar)">{{ c.summary.diff }}</b> ·
-            仅A {{ c.summary.only_a }} / 仅B {{ c.summary.only_b }}
+            仅{{ srcA }} {{ c.summary.only_a }} / 仅{{ srcB }} {{ c.summary.only_b }}
           </span>
         </div>
       </div>
@@ -4286,7 +4335,10 @@ const CustomResultView = {
     const s = computed(() => (sum.value && sum.value.summary) || null);
     const fileName = (p) => (p || "").split(/[\\/]/).pop();
     const exportHref = computed(() => `/api/custom-jobs/${props.jobId}/export`);
-    return { sum, s, fileName, exportHref, REPORT_STATUS, scrollSyncOn, toggleScrollSync, goBack: () => emit("back") };
+    // 需求①别名：两侧来源名（summary 端点从 JSON configLine 的 srca/srcb 解析，缺省 A/B）
+    const sourceA = computed(() => (sum.value && sum.value.source_a) || "A");
+    const sourceB = computed(() => (sum.value && sum.value.source_b) || "B");
+    return { sum, s, fileName, exportHref, REPORT_STATUS, sourceA, sourceB, scrollSyncOn, toggleScrollSync, goBack: () => emit("back") };
   },
   template: `
   <div v-if="sum">
@@ -4312,18 +4364,18 @@ const CustomResultView = {
         <div class="card-head">📐 对比概览</div>
         <div class="card-body" v-if="s">
           <div class="summary-metrics">
-            <div class="metric total"><div class="num">{{ s.segments_a }}</div><div class="lbl">段数 A</div></div>
-            <div class="metric total"><div class="num">{{ s.segments_b }}</div><div class="lbl">段数 B</div></div>
+            <div class="metric total"><div class="num">{{ s.segments_a }}</div><div class="lbl">段数 {{ sourceA }}</div></div>
+            <div class="metric total"><div class="num">{{ s.segments_b }}</div><div class="lbl">段数 {{ sourceB }}</div></div>
             <div class="metric"><div class="num">{{ s.equal }}</div><div class="lbl">完全一致</div></div>
             <div class="metric diff"><div class="num">{{ s.diff }}</div><div class="lbl">有差异</div></div>
-            <div class="metric only"><div class="num">{{ s.only_a }}</div><div class="lbl">仅A有</div></div>
-            <div class="metric only"><div class="num">{{ s.only_b }}</div><div class="lbl">仅B有</div></div>
-            <div class="metric" :class="{ diff: s.key_miss_a + s.key_miss_b > 0 }"><div class="num">{{ s.key_miss_a + s.key_miss_b }}</div><div class="lbl">主键未命中段(A+B)</div></div>
+            <div class="metric only"><div class="num">{{ s.only_a }}</div><div class="lbl">仅{{ sourceA }}有</div></div>
+            <div class="metric only"><div class="num">{{ s.only_b }}</div><div class="lbl">仅{{ sourceB }}有</div></div>
+            <div class="metric" :class="{ diff: s.key_miss_a + s.key_miss_b > 0 }"><div class="num">{{ s.key_miss_a + s.key_miss_b }}</div><div class="lbl">主键未命中段({{ sourceA }}+{{ sourceB }})</div></div>
           </div>
           <div style="margin-top:10px;font-size:12px;color:var(--text-soft);">
             <div>段起始：<code>{{ s.start_pattern }}</code>；段结束：<code>{{ s.end_pattern || '（留空：到下一段起始前）' }}</code>；主键：<code>{{ s.key_pattern || '（未配置：按段全文精确匹配）' }}</code></div>
             <div style="margin-top:4px;" v-if="s.head_lines_a + s.head_lines_b + s.tail_lines_a + s.tail_lines_b">
-              段外残行：文件头 A {{ s.head_lines_a }} / B {{ s.head_lines_b }} 行；文件尾 A {{ s.tail_lines_a }} / B {{ s.tail_lines_b }} 行（已参与对照）
+              段外残行：文件头 {{ sourceA }} {{ s.head_lines_a }} / {{ sourceB }} {{ s.head_lines_b }} 行；文件尾 {{ sourceA }} {{ s.tail_lines_a }} / {{ sourceB }} {{ s.tail_lines_b }} 行（已参与对照）
             </div>
           </div>
           <div v-if="s.warnings && s.warnings.length" class="no-rule" style="margin-top:10px;">
@@ -4333,11 +4385,11 @@ const CustomResultView = {
       </div>
 
       <ReportZone :job-id="jobId" base="custom-jobs" section="segment" zone="diff" title="段差异（主键相同、内容不同）" tone="diff"
-                  :default-open="true" sourceA="A" sourceB="B" :key="'cd' + jobId" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :key="'cd' + jobId" />
       <ReportZone :job-id="jobId" base="custom-jobs" section="segment" zone="unmatched" title="段 · 单侧不匹配（按主键配对后多余/缺失）" tone="unmatched"
-                  :default-open="true" sourceA="A" sourceB="B" :key="'cu' + jobId" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :key="'cu' + jobId" />
       <ReportZone :job-id="jobId" base="custom-jobs" section="segment" zone="equal" title="段 · 完全一致" tone="equal"
-                  :default-open="false" sourceA="A" sourceB="B" :key="'ce' + jobId" />
+                  :default-open="false" :source-a="sourceA" :source-b="sourceB" :key="'ce' + jobId" />
     </template>
   </div>
   <div v-else class="loading">加载中…</div>`,
@@ -4382,9 +4434,26 @@ const ConfigManagePage = {
     const selFile = ref("current.conf");
     const selFileInfo = computed(() => confFiles.value.find(f => f.name === selFile.value) || null);
     const fileModal = reactive({ open: false, mode: "new", err: "", form: { name: "", from: "blank", orig: "" } });
+    // 勘误③：新增配置文件 = 空白 或 从 current.conf 选择单条条目带入其配置（不再复制整个 current.conf）
+    const currentRules = ref([]);
+    const entryQuery = ref("");
+    const entryPick = ref("");
+    const entryCfg = ref(null);
+    const entryOptions = computed(() => {
+      const q = entryQuery.value.trim().toLowerCase();
+      const list = !q ? currentRules.value : currentRules.value.filter(c =>
+        (c.nickname || "").toLowerCase().indexOf(q) >= 0 || (c.file_glob || "").toLowerCase().indexOf(q) >= 0);
+      return list.slice(0, 50);
+    });
+    function pickEntry(c) { entryPick.value = c.nickname; entryCfg.value = c; }
     function newConfFile() {
       fileModal.mode = "new"; fileModal.err = "";
       Object.assign(fileModal.form, { name: "", from: "blank", orig: "" });
+      entryQuery.value = ""; entryPick.value = ""; entryCfg.value = null;
+      // 条目选择器数据源 = current.conf 全量规则（source 参数逐文件展平，避免同名规则被独立文件遮蔽漏条目）
+      api("/api/configs/manage?source=current.conf").then(r => {
+        currentRules.value = r.configs || [];
+      }).catch(() => { currentRules.value = []; });
       fileModal.open = true;
     }
     function renameConfFile(f) {
@@ -4392,20 +4461,48 @@ const ConfigManagePage = {
       Object.assign(fileModal.form, { name: f.name.replace(/\.conf$/i, ""), from: "blank", orig: f.name });
       fileModal.open = true;
     }
+    // 勘误②：规则编辑弹窗的「另存为」——当前修改后的规则存为新配置文件（只含此条，原文件不动）
+    const saveAsModal = reactive({ open: false, err: "", form: { name: "" } });
+    function openSaveAs() {
+      saveAsModal.err = ""; saveAsModal.form.name = "";
+      saveAsModal.open = true;
+    }
+    async function saveAs() {
+      saveAsModal.err = "";
+      const name = (saveAsModal.form.name || "").trim();
+      if (!name) { saveAsModal.err = "文件名不能为空"; return; }
+      try {
+        await jpost("/api/configs", Object.assign(cfgBody(), { target: name }));
+        cfgModal.open = false; saveAsModal.open = false;
+        loadConfigs(); loadConfFiles();
+        notify("配置「" + cfgModal.form.nickname + "」已另存到 " + name
+            + (name.toLowerCase().endsWith(".conf") ? "" : ".conf") + "（原文件不受影响）");
+      } catch (e) { saveAsModal.err = "另存失败: " + e.message; }
+    }
     async function saveConfFile() {
       fileModal.err = "";
       const name = (fileModal.form.name || "").trim();
       if (!name) { fileModal.err = "文件名不能为空"; return; }
+      if (fileModal.mode === "new" && fileModal.form.from === "entry" && !entryCfg.value) {
+        fileModal.err = "请选择要带入的 current.conf 条目"; return;
+      }
       try {
         if (fileModal.mode === "new") {
-          await jpost("/api/config-files", { name, from: fileModal.form.from });
-          notify("配置文件已创建：" + name + (name.toLowerCase().endsWith(".conf") ? "" : ".conf"));
+          // 勘误③：新文件一律空白创建；选择条目时创建后直接打开预填该条配置的编辑弹框，保存进新文件
+          await jpost("/api/config-files", { name, from: "blank" });
+          fileModal.open = false;
+          loadConfFiles(); loadConfigs();
+          if (fileModal.form.from === "entry" && entryCfg.value) {
+            prefillFromEntry(entryCfg.value, name);
+          } else {
+            notify("配置文件已创建：" + name + (name.toLowerCase().endsWith(".conf") ? "" : ".conf"));
+          }
         } else {
           const r = await jpost("/api/config-files/rename", { from: fileModal.form.orig, to: name });
           notify("配置文件已重命名：" + r.from + " → " + r.to);
+          fileModal.open = false;
+          loadConfFiles(); loadConfigs();
         }
-        fileModal.open = false;
-        loadConfFiles(); loadConfigs();
       } catch (e) {
         fileModal.err = (fileModal.mode === "new" ? "创建失败: " : "重命名失败: ") + e.message;
       }
@@ -4432,9 +4529,23 @@ const ConfigManagePage = {
         source_a: "A", source_b: "B", pri_seq: "", addmod: "", target: "current.conf" });
       cfgModal.open = true;
     }
+    // 勘误③：带入 current.conf 已有条目的完整配置 → 编辑后保存进新文件（供同一文本按不同配置对比）
+    function prefillFromEntry(e, targetFile) {
+      cfgModal.mode = "new"; cfgModal.err = "";
+      Object.assign(cfgModal.form, {
+        nickname: e.nickname || "", file_glob: e.file_glob || "*",
+        key_seq: seqToStr(e.key_columns), omit_seq: seqToStr(e.omit_columns),
+        delimiter: e.delimiter != null ? e.delimiter : " | ",
+        trailer_prefix: e.trailer_prefix || "|||||",
+        encoding_a: e.encoding_a || "auto", encoding_b: e.encoding_b || "auto",
+        source_a: e.source_a || "A", source_b: e.source_b || "B",
+        pri_seq: e.pri_seq || "", addmod: e.addmod || "", target: targetFile });
+      cfgModal.open = true;
+    }
     function editConfig(c) {
       cfgModal.mode = "edit"; cfgModal.err = "";
-      // 保存目标：默认该规则当前所在文件；default.conf 为基线不可写 → 回退 current.conf
+      // 勘误②：保存写该规则当前所在文件（default.conf 为基线不可写 → 回退 current.conf）；
+      // 想另存独立文件用「另存为」按钮，不影响原文件
       const tgt = c._source === "default.conf" ? "current.conf" : (c._source || "current.conf");
       Object.assign(cfgModal.form, {
         nickname: c.nickname || "", file_glob: c.file_glob || "*",
@@ -4446,19 +4557,22 @@ const ConfigManagePage = {
         pri_seq: c.pri_seq || "", addmod: c.addmod || "", target: tgt });
       cfgModal.open = true;
     }
+    function cfgBody() {
+      return {
+        nickname: cfgModal.form.nickname, file_glob: cfgModal.form.file_glob || "*",
+        key_seq: cfgModal.form.key_seq || null, omit_seq: cfgModal.form.omit_seq || null,
+        delimiter: cfgModal.form.delimiter, trailer_prefix: cfgModal.form.trailer_prefix,
+        encoding_a: cfgModal.form.encoding_a, encoding_b: cfgModal.form.encoding_b,
+        source_a: cfgModal.form.source_a || null, source_b: cfgModal.form.source_b || null,
+        pri_seq: cfgModal.form.pri_seq || null, addmod: cfgModal.form.addmod || null,
+        target: cfgModal.form.target || "current.conf",
+      };
+    }
     async function saveConfig() {
       cfgModal.err = "";
       if (!cfgModal.form.nickname.trim()) { cfgModal.err = "昵称不能为空"; return; }
       try {
-        await jpost("/api/configs", {
-          nickname: cfgModal.form.nickname, file_glob: cfgModal.form.file_glob || "*",
-          key_seq: cfgModal.form.key_seq || null, omit_seq: cfgModal.form.omit_seq || null,
-          delimiter: cfgModal.form.delimiter, trailer_prefix: cfgModal.form.trailer_prefix,
-          encoding_a: cfgModal.form.encoding_a, encoding_b: cfgModal.form.encoding_b,
-          source_a: cfgModal.form.source_a || null, source_b: cfgModal.form.source_b || null,
-          pri_seq: cfgModal.form.pri_seq || null, addmod: cfgModal.form.addmod || null,
-          target: cfgModal.form.target || "current.conf",
-        });
+        await jpost("/api/configs", cfgBody());
         cfgModal.open = false; loadConfigs(); loadConfFiles();
         notify("配置「" + cfgModal.form.nickname + "」已保存到 " + (cfgModal.form.target || "current.conf")
             + "（其他配置文件不受影响）");
@@ -4532,6 +4646,8 @@ const ConfigManagePage = {
     return { cfgQuery, configs, badLines, cfgErr, busy, loadConfigs, cfgPg, dups, dupMap,
              confFiles, selFile, selFileInfo,
              fileModal, newConfFile, renameConfFile, saveConfFile, deleteConfFile, loadConfFiles,
+             entryQuery, entryPick, entryOptions, pickEntry,
+             saveAsModal, openSaveAs, saveAs,
              cfgModal, newConfig, editConfig, saveConfig, deleteConfig, configNicks, missCount,
              groups, grpErr, grpBusy, loadGroups, grpModal, newGroup, editGroup, saveGroup,
              deleteGroup, importGroups, fmtTime };
@@ -4546,7 +4662,7 @@ const ConfigManagePage = {
                      @go="cfgPg.go" @resize="cfgPg.resize" />
           <button class="mini-btn" @click="loadConfigs" :disabled="busy">↻ 刷新</button>
           <button class="mini-btn" @click="newConfig">＋ 新增配置</button>
-          <button class="mini-btn" @click="newConfFile" title="新建独立配置文件（可空白或复制 current.conf 作起点），供同一文本按不同配置对比">🗂 新增配置文件</button>
+          <button class="mini-btn" @click="newConfFile" title="新建独立配置文件（空白或从 current.conf 选条目带入配置作起点），供同一文本按不同配置对比">🗂 新增配置文件</button>
         </div>
       </div>
       <div class="card-body">
@@ -4561,7 +4677,7 @@ const ConfigManagePage = {
             <button v-if="!selFileInfo.protected" class="mini-btn" @click="renameConfFile(selFileInfo)">✏️ 重命名</button>
             <button v-if="!selFileInfo.protected" class="mini-btn" @click="deleteConfFile(selFileInfo)">🗑 删除文件</button>
           </template>
-          <span class="hint" style="margin-left:8px;">修改/新增规则默认写入 current.conf；独立配置文件在规则弹框中选择保存目标。</span>
+          <span class="hint" style="margin-left:8px;">修改保存写入规则所在文件，「另存为」可存为新文件；新增配置默认写入 current.conf。</span>
         </div>
         <div class="sec-search">
           <label>搜索 <input v-model="cfgQuery" @input="loadConfigs" placeholder="按昵称 / 通配名搜索" style="width:260px;" /></label>
@@ -4593,7 +4709,7 @@ const ConfigManagePage = {
             </tbody>
           </table>
         </div>
-        <p class="hint" style="margin:8px 0 0;">修改/新增规则默认写入 current.conf（弹框中可改选目标配置文件；只写所选文件，其他文件不受影响）；目录批次「全部配置」按来源文件优先级（单配置文件 → current.conf → default.conf）取同名规则生效。</p>
+        <p class="hint" style="margin:8px 0 0;">修改规则「保存」写入其所在文件（弹框中显示目标），「另存为」另立新文件（只含该条、原文件不动）；新增配置默认写入 current.conf；目录批次「全部配置」按来源文件优先级（单配置文件 → current.conf → default.conf）取同名规则生效。</p>
       </div>
     </div>
 
@@ -4657,18 +4773,40 @@ const ConfigManagePage = {
               </select></div>
             <div class="field mono"><label>增量过滤 ADDMOD（栏位，逗号分隔）</label>
               <input v-model="cfgModal.form.addmod" placeholder="留空 = 全量" /></div>
-            <div class="field"><label>保存目标配置文件（只写所选文件，其他文件不受影响）</label>
+            <div class="field" v-if="cfgModal.mode === 'new'"><label>保存目标配置文件（只写所选文件，其他文件不受影响）</label>
               <select v-model="cfgModal.form.target">
                 <option v-for="f in confFiles" :key="f.name" :value="f.name"
                         :disabled="f.name === 'default.conf'">{{ f.name }}（{{ f.rules || 0 }} 条）</option>
               </select></div>
+            <div class="field" v-else><label>保存目标（写入规则所在文件，其他文件不受影响）</label>
+              <input :value="cfgModal.form.target" disabled /></div>
           </div>
-          <p class="hint" style="margin:10px 0 0;">保存写入所选目标配置文件（目标内同昵称+通配名规则替换、否则追加）；已有替换规则与列名映射保留。</p>
+          <p class="hint" style="margin:10px 0 0;">保存写入规则所在的目标配置文件（目标内同昵称+通配名规则替换、否则追加，其他文件不受影响）；不想改动原文件时点「另存为」存为新配置文件；已有替换规则与列名映射保留。</p>
           <div class="error-box" v-if="cfgModal.err">{{ cfgModal.err }}</div>
         </div>
         <div class="modal-foot">
           <button class="btn ghost" @click="cfgModal.open=false">取消</button>
+          <button class="btn ghost" v-if="cfgModal.mode === 'edit'" @click="openSaveAs"
+                  title="把当前修改后的规则另存为一个新配置文件（只含此条，原文件不动）">另存为…</button>
           <button class="btn primary" @click="saveConfig">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 另存为新配置文件 弹框（勘误②） -->
+    <div class="modal-mask" v-if="saveAsModal.open" @click.self="saveAsModal.open=false">
+      <div class="modal modal-sm">
+        <div class="modal-head">另存为新配置文件
+          <button class="modal-x" @click="saveAsModal.open=false">✕</button></div>
+        <div class="modal-body">
+          <p class="hint">把当前修改后的「{{ cfgModal.form.nickname }}」规则保存为新配置文件（新文件只含此条规则，原文件不受影响）。</p>
+          <div class="field" style="margin-top:10px;"><label>新文件名（自动补 .conf 后缀）</label>
+            <input v-model="saveAsModal.form.name" placeholder="如 DPTM_BATCH" @keyup.enter="saveAs" /></div>
+          <div class="error-box" v-if="saveAsModal.err">{{ saveAsModal.err }}</div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn ghost" @click="saveAsModal.open=false">取消</button>
+          <button class="btn primary" @click="saveAs">另存为</button>
         </div>
       </div>
     </div>
@@ -4684,9 +4822,22 @@ const ConfigManagePage = {
           <div class="field" v-if="fileModal.mode === 'new'"><label>起始内容</label>
             <select v-model="fileModal.form.from">
               <option value="blank">空白配置</option>
-              <option value="current">复制当前 current.conf 全部内容作起点</option>
+              <option value="entry">选择 current.conf 条目带入其配置</option>
             </select></div>
-          <p class="hint" style="margin:10px 0 0;">current.conf / default.conf 为系统文件（🔒），不可重命名或删除；独立配置文件可在规则编辑弹框中选为保存目标，供同一文本按不同配置对比。</p>
+          <div class="field entry-picker" v-if="fileModal.mode === 'new' && fileModal.form.from === 'entry'">
+            <label>选择条目（输入昵称 / 通配名过滤）</label>
+            <input v-model="entryQuery" @input="entryPick = ''" placeholder="如 AARH 或 01A" />
+            <div class="entry-list" v-if="!entryPick">
+              <div v-for="e in entryOptions" :key="e.nickname + '\u0000' + (e.file_glob || '')"
+                   class="entry-item" @click="pickEntry(e)">
+                <b>{{ e.nickname }}</b> <span class="mono">{{ e.file_glob }}</span>
+                <span class="hint">{{ e.key_seq || '整行对比' }}</span>
+              </div>
+              <div v-if="!entryOptions.length" class="hint" style="padding:6px 10px;">无匹配条目</div>
+            </div>
+            <div v-else class="hint" style="color:var(--eq-bar);">✓ 已选 {{ entryPick }}——创建后进入该条编辑，可修改后保存进新文件</div>
+          </div>
+          <p class="hint" style="margin:10px 0 0;">current.conf / default.conf 为系统文件（🔒），不可重命名或删除；独立配置文件供同一文本按不同配置对比（提交时选为对比配置文件，或在规则编辑弹框中选为保存目标）。</p>
           <div class="error-box" v-if="fileModal.err">{{ fileModal.err }}</div>
         </div>
         <div class="modal-foot">

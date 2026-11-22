@@ -210,19 +210,20 @@ public final class CsvExporter {
         w.write("\r\n");
     }
 
-    /** 差异 CSV：仅 diff 记录，一条字段差异一行（键值/栏位号/栏位名/A 值/B 值）。 */
-    public static void writeDiffFields(Path file, List<RowDiff> rows, List<String> colNames) {
+    /** 差异 CSV：仅 diff 记录，一条字段差异一行（键值/栏位号/栏位名/{srcA}值/{srcB}值）。 */
+    public static void writeDiffFields(Path file, List<RowDiff> rows, List<String> colNames,
+                                       String srcA, String srcB) {
         try (BufferedWriter w = newBomWriter(file)) {
-            writeDiffHeader(w);
+            writeDiffHeader(w, srcA, srcB);
             for (RowDiff r : rows) writeDiffRow(w, r, colNames);
         } catch (IOException e) {
             throw new UncheckedIOException("差异 CSV 导出失败: " + file + " (" + e + ")", e);
         }
     }
 
-    /** 差异 CSV 表头。 */
-    public static void writeDiffHeader(BufferedWriter w) throws IOException {
-        w.write("键值,栏位号,栏位名,A值,B值\r\n");
+    /** 差异 CSV 表头（来源名替换版）：键值,栏位号,栏位名,{srcA}值,{srcB}值。 */
+    public static void writeDiffHeader(BufferedWriter w, String srcA, String srcB) throws IOException {
+        w.write("键值,栏位号,栏位名," + blankTo(srcA, "A") + "值," + blankTo(srcB, "B") + "值\r\n");
     }
 
     // ---- 差异 CSV（整合格式）：一条差异记录一行，全部差异栏位合并进差异明细 ----
@@ -261,8 +262,10 @@ public final class CsvExporter {
             StringBuilder sb = new StringBuilder();
             for (int col : r.diffCols) {
                 if (sb.length() > 0) sb.append('\n');
-                sb.append(recPrefix(monitor, col)).append(" @").append(col + 1).append("] A:'")
-                        .append(recVal(r, col, names, dyn, true)).append("' B:'")
+                sb.append(recPrefix(monitor, col)).append(" @").append(col + 1).append("] ")
+                        .append(blankTo(srcA, "A")).append(":'")
+                        .append(recVal(r, col, names, dyn, true)).append("' ")
+                        .append(blankTo(srcB, "B")).append(":'")
                         .append(recVal(r, col, names, dyn, false)).append("'");
             }
             if (sb.length() == 0) return false;
@@ -281,8 +284,10 @@ public final class CsvExporter {
             w.write(",");
             w.write(statusText(r.status, srcA, srcB));
             w.write(",");
-            w.write(escape(sideA ? "[仅A存在] A:'" + pk + "' B:''"
-                                 : "[仅B存在] A:'' B:'" + pk + "'"));
+            w.write(escape(sideA ? "[仅" + blankTo(srcA, "A") + "存在] " + blankTo(srcA, "A") + ":'" + pk
+                                     + "' " + blankTo(srcB, "B") + ":''"
+                                 : "[仅" + blankTo(srcB, "B") + "存在] " + blankTo(srcA, "A") + ":'' "
+                                     + blankTo(srcB, "B") + ":'" + pk + "'"));
             w.write("\r\n");
             return true;
         }

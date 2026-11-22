@@ -58,8 +58,7 @@ public final class BatchSummaryExcel {
                 {"失败", str(p.get("failed"), "0")},
                 {"无规则文件", str(p.get("no_rule_count"), "0")},
                 {"缺失文件", str(p.get("missing_count"), "0")},
-                {"A 来源命名", srcA},
-                {"B 来源命名", srcB},
+                {"A/B 来源命名", srcA + " / " + srcB},
                 {"报告生成时间", fmtTime(p.get("generated_at"))},
         };
         int r = 0;
@@ -77,8 +76,10 @@ public final class BatchSummaryExcel {
     @SuppressWarnings("unchecked")
     private static void sheetDeviation(XSSFWorkbook wb, CellStyle head, Map<String, Object> p) {
         Sheet sh = wb.createSheet("偏离度");
-        String[] heads = {"表名(昵称)", "归属组", "文件名", "内容偏离度", "内容等级",
-                "条数偏离度", "条数等级", "完全匹配", "有差异", "仅A", "仅B", "A总条数", "B总条数"};
+        String[] heads = {"表名(昵称)", "归属组", "类型", "文件名", "内容偏离度", "内容等级",
+                "条数偏离度", "条数等级", "完全匹配", "有差异", "仅" + str(p.get("src_a"), "A"),
+                "仅" + str(p.get("src_b"), "B"), str(p.get("src_a"), "A") + "总条数",
+                str(p.get("src_b"), "B") + "总条数"};
         Row r0 = sh.createRow(0);
         for (int c = 0; c < heads.length; c++) cell(r0, c, heads[c], head);
         List<Map<String, Object>> devs = (List<Map<String, Object>>) p.getOrDefault("deviations", List.of());
@@ -87,17 +88,18 @@ public final class BatchSummaryExcel {
             Row row = sh.createRow(r++);
             cell(row, 0, str(d.get("nickname")));
             cell(row, 1, str(d.get("group")));
-            cell(row, 2, str(d.get("file_name")));
-            cell(row, 3, pct(d, "content_ratio"));
-            cell(row, 4, str(d.get("content_grade")));
-            cell(row, 5, pct(d, "count_ratio"));
-            cell(row, 6, str(d.get("count_grade")));
-            cell(row, 7, num(d.get("equal")));
-            cell(row, 8, num(d.get("diff")));
-            cell(row, 9, num(d.get("only_a")));
-            cell(row, 10, num(d.get("only_b")));
-            cell(row, 11, num(d.get("total_a")));
-            cell(row, 12, num(d.get("total_b")));
+            cell(row, 2, str(d.get("parm_type")));
+            cell(row, 3, str(d.get("file_name")));
+            cell(row, 4, pct(d, "content_ratio"));
+            cell(row, 5, str(d.get("content_grade")));
+            cell(row, 6, pct(d, "count_ratio"));
+            cell(row, 7, str(d.get("count_grade")));
+            cell(row, 8, num(d.get("equal")));
+            cell(row, 9, num(d.get("diff")));
+            cell(row, 10, num(d.get("only_a")));
+            cell(row, 11, num(d.get("only_b")));
+            cell(row, 12, num(d.get("total_a")));
+            cell(row, 13, num(d.get("total_b")));
         }
         widths(sh, heads.length);
         note(sh, r, "内容偏离度=有差异条数/已匹配键值的记录数（完全匹配+有差异；无已匹配记录显示—）；"

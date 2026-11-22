@@ -57,8 +57,11 @@ public final class BatchDetailExcel {
     private static void sheetOverview(Workbook wb, CellStyle head, CellStyle wrap,
                                       List<JobRecord> jobs, com.textdiff.store.FieldMapStore maps) {
         Sheet sheet = wb.createSheet("对比总览");
-        String[] headers = {"表名昵称", "A（旧）总数", "B（新）总数", "完全匹配",
-                "键值匹配有差异", "未匹配（仅A）", "未匹配（仅B）", "状态情况", "总体评判", "增量模式", "对比配置（列号+名称）"};
+        String[] src = batchSrc(jobs); // 需求①别名：批次级来源名（首个非默认 SRCA/SRCB），缺省 A/B
+        String srcA = src[0], srcB = src[1];
+        String[] headers = {"表名昵称", srcA + " 总数", srcB + " 总数", "完全匹配",
+                "键值匹配有差异", "未匹配（仅" + srcA + "）", "未匹配（仅" + srcB + "）",
+                "状态情况", "总体评判", "增量模式", "对比配置（列号+名称）"};
         Row hr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) cell(hr, i, headers[i]).setCellStyle(head);
         sheet.setColumnWidth(0, 28 * 256);
@@ -98,6 +101,25 @@ public final class BatchDetailExcel {
     static String incrLabel(JobRecord job) {
         if (job.incrState == null || job.incrState.isEmpty()) return "";
         return "增量-空文本".equals(job.incrState) ? "过滤-增量模式（空文本）" : "过滤-增量模式";
+    }
+
+    /** 批次级来源名（需求①别名）：作业 configLine 首个非默认 SRCA/SRCB 生效，缺省 A/B。 */
+    static String[] batchSrc(List<JobRecord> jobs) {
+        String a = "A", b = "B";
+        for (JobRecord j : jobs) {
+            try {
+                CompareConfig cfg = Rules.parseLegacy(j.configLine == null ? "" : j.configLine, " | ", "|||||");
+                if ("A".equals(a) && cfg.sourceA != null && !cfg.sourceA.isBlank() && !"A".equals(cfg.sourceA)) {
+                    a = cfg.sourceA.strip();
+                }
+                if ("B".equals(b) && cfg.sourceB != null && !cfg.sourceB.isBlank() && !"B".equals(cfg.sourceB)) {
+                    b = cfg.sourceB.strip();
+                }
+            } catch (RuntimeException ignored) {
+                // JSON 等异形配置行按默认处理
+            }
+        }
+        return new String[]{a, b};
     }
 
     /** Sheet2 差异栏位：所有表存在的差异栏位清单（备注默认空）。 */

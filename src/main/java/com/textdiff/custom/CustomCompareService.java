@@ -221,7 +221,28 @@ public final class CustomCompareService implements AutoCloseable {
         out.put("label", job.label == null || job.label.isEmpty() ? job.nickname : job.label);
         out.put("finished_at", job.finishedAt);
         out.put("summary", s == null ? Map.of() : s);
+        // 需求①别名：custom 的 configLine 为 JSON（srca/srcb 附加键），解析出两侧命名供结果页展示
+        String[] src = srcNames(job.configLine);
+        out.put("source_a", src[0]);
+        out.put("source_b", src[1]);
         return out;
+    }
+
+    /** configLine（JSON）里的两侧命名（srca/srcb 附加键），缺省 A/B。 */
+    private static String[] srcNames(String configLine) {
+        String a = "A", b = "B";
+        try {
+            Map<String, String> m = Json.read(configLine == null ? "{}" : configLine, Map.class);
+            if (m != null) {
+                String va = m.get("srca");
+                String vb = m.get("srcb");
+                if (va != null && !va.isBlank()) a = va.strip();
+                if (vb != null && !vb.isBlank()) b = vb.strip();
+            }
+        } catch (RuntimeException ignored) {
+            // 无命名信息按默认处理
+        }
+        return new String[]{a, b};
     }
 
     public CustomSummary readSummary(Path resultDir) {

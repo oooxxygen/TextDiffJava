@@ -28,12 +28,19 @@ public final class HtmlReportWriter {
             .build();
 
     public static String render(String title, JobMeta meta, String markdown) {
+        return render(title, meta, markdown, "A", "B");
+    }
+
+    /** 来源名替换版（需求①别名）：报头两侧文件标签与事实条标签改用分区别名，缺省 A/B。 */
+    public static String render(String title, JobMeta meta, String markdown, String srcA, String srcB) {
         String md = markdown == null ? "" : markdown;
         String[] lead = extractVerdict(md); // 【总体结论】/【最终评判】两行 → 报头；其余进正文
         Node doc = PARSER.parse(lead[2]);
         String body = RENDERER.render(doc);
         DiffGrade.Grade grade = meta == null ? null : DiffGrade.of(meta.totalA, meta.totalB);
-        return template(title, meta, grade, lead[0], lead[1], body);
+        return template(title, meta, grade, lead[0], lead[1], body,
+                srcA == null || srcA.isBlank() ? "A" : srcA.strip(),
+                srcB == null || srcB.isBlank() ? "B" : srcB.strip());
     }
 
     /**
@@ -64,7 +71,7 @@ public final class HtmlReportWriter {
     }
 
     private static String template(String title, JobMeta meta, DiffGrade.Grade grade,
-                                   String basis, String verdict, String body) {
+                                   String basis, String verdict, String body, String srcA, String srcB) {
         String ta = meta == null ? "—" : String.valueOf(meta.totalA);
         String tb = meta == null ? "—" : String.valueOf(meta.totalB);
         String eq = meta == null ? "—" : String.valueOf(meta.equal);
@@ -204,18 +211,18 @@ footer { margin-top: 48px; padding-top: 14px; border-top: 1px solid var(--rule);
   <header class="masthead">
     <h1>%s</h1>
     <div class="files">
-      <div><b>A</b>：%s</div>
-      <div><b>B</b>：%s</div>
+      <div><b>%s</b>：%s</div>
+      <div><b>%s</b>：%s</div>
     </div>
   </header>
 
   <section class="facts">
-    <div class="cell"><div class="num">%s</div><div class="lbl">A 侧记录</div></div>
-    <div class="cell sep"><div class="num">%s</div><div class="lbl">B 侧记录</div></div>
+    <div class="cell"><div class="num">%s</div><div class="lbl">%s 侧记录</div></div>
+    <div class="cell sep"><div class="num">%s</div><div class="lbl">%s 侧记录</div></div>
     <div class="cell sep"><div class="num">%s</div><div class="lbl">完全匹配</div></div>
     <div class="cell sep"><div class="num">%s</div><div class="lbl">有差异</div></div>
-    <div class="cell sep"><div class="num">%s</div><div class="lbl">仅 A 存在</div></div>
-    <div class="cell sep"><div class="num">%s</div><div class="lbl">仅 B 存在</div></div>
+    <div class="cell sep"><div class="num">%s</div><div class="lbl">仅 %s 存在</div></div>
+    <div class="cell sep"><div class="num">%s</div><div class="lbl">仅 %s 存在</div></div>
   </section>
 
   <section class="verdict">
@@ -233,8 +240,9 @@ footer { margin-top: 48px; padding-top: 14px; border-top: 1px solid var(--rule);
 </html>
 """
                 .formatted(esc(title), esc(title),
-                        esc(meta == null ? "" : meta.fileA), esc(meta == null ? "" : meta.fileB),
-                        ta, tb, eq, df, oa, ob,
+                        esc(srcA), esc(meta == null ? "" : meta.fileA),
+                        esc(srcB), esc(meta == null ? "" : meta.fileB),
+                        ta, esc(srcA), tb, esc(srcB), eq, df, oa, esc(srcA), ob, esc(srcB),
                         basisHtml, gradeCls, esc(finalLabel),
                         body);
     }

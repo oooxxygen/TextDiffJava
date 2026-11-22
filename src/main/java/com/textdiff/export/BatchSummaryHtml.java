@@ -13,6 +13,8 @@ public final class BatchSummaryHtml {
 
     @SuppressWarnings("unchecked")
     public static String render(Map<String, Object> p) {
+        String srcA = str(p.get("src_a"), "A");
+        String srcB = str(p.get("src_b"), "B");
         StringBuilder sb = new StringBuilder(64 * 1024);
         sb.append("<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"UTF-8\">\n");
         sb.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
@@ -25,8 +27,8 @@ public final class BatchSummaryHtml {
         sb.append(esc(str(p.get("label"))));
         sb.append(" <span class=\"bid\">批次 ").append(esc(str(p.get("batch_id")))).append("</span></div>\n");
         sb.append("<div class=\"sub2\">报告生成于 ").append(esc(fmtTime(p.get("generated_at"))));
-        sb.append(" · A/B 命名：").append(esc(str(p.get("src_a"), "A")))
-                .append(" / ").append(esc(str(p.get("src_b"), "B"))).append("</div>\n");
+        sb.append(" · A/B 命名：").append(esc(srcA))
+                .append(" / ").append(esc(srcB)).append("</div>\n");
         sb.append("</header>\n");
 
         // 概览指标
@@ -43,8 +45,8 @@ public final class BatchSummaryHtml {
         metric(sb, "缺失文件", str(p.get("missing_count"), "0"),
                 Long.parseLong(str(p.get("missing_count"), "0")) > 0);
         sb.append("</div>\n");
-        kv(sb, "A 目录（" + str(p.get("src_a"), "A") + "）", str(p.get("dir_a")));
-        kv(sb, "B 目录（" + str(p.get("src_b"), "B") + "）", str(p.get("dir_b")));
+        kv(sb, srcA + " 目录", str(p.get("dir_a")));
+        kv(sb, srcB + " 目录", str(p.get("dir_b")));
         kv(sb, "对比范围", scopeText(p.get("group_name")));
         kv(sb, "对比批次 / 轮次", str(p.get("cmp_batch"), "—") + " / " + str(p.get("cmp_round"), "—"));
         sb.append("</section>\n");
@@ -56,16 +58,20 @@ public final class BatchSummaryHtml {
             sb.append("<p class=\"empty\">本批次无已完成文本（或全部完全匹配无差异行）。</p>\n");
         } else {
             searchBox(sb, "devTable", devs.size());
-            sb.append("<table id=\"devTable\"><thead><tr><th>#</th><th>表名（昵称）</th><th>归属组</th><th>文件名</th>")
+            sb.append("<table id=\"devTable\"><thead><tr><th>#</th><th>表名（昵称）</th><th>归属组</th><th>类型</th><th>文件名</th>")
                     .append("<th style=\"width:19%\">内容偏离度</th><th style=\"width:19%\">条数偏离度</th>")
-                    .append("<th>完全匹配</th><th>有差异</th><th>仅A</th><th>仅B</th></tr></thead><tbody>\n");
+                    .append("<th>完全匹配</th><th>有差异</th><th>仅").append(esc(srcA)).append("</th><th>仅")
+                    .append(esc(srcB)).append("</th></tr></thead><tbody>\n");
             int i = 1;
             for (Map<String, Object> t : devs) {
                 String nick = str(t.get("nickname"));
                 String group = str(t.get("group"));
+                String parmType = str(t.get("parm_type"));
                 sb.append("<tr data-nick=\"").append(esc(nick)).append("\" data-group=\"").append(esc(group))
+                        .append("\" data-type=\"").append(esc(parmType))
                         .append("\"><td>").append(i++).append("</td><td>").append(esc(nick))
-                        .append("</td><td>").append(esc(group)).append("</td><td>")
+                        .append("</td><td>").append(esc(group)).append("</td><td>").append(esc(parmType))
+                        .append("</td><td>")
                         .append(esc(str(t.get("file_name")))).append("</td>");
                 devCell(sb, t, "content");
                 devCell(sb, t, "count");
@@ -75,8 +81,10 @@ public final class BatchSummaryHtml {
                         .append(str(t.get("only_b"), "0")).append("</td></tr>\n");
             }
             sb.append("</tbody></table>\n");
-            sb.append("<p class=\"note\">内容偏离度 = 有差异条数 / 已匹配键值的记录数（完全匹配+有差异，不含仅A/仅B；无已匹配记录显示—）；")
-                    .append("条数偏离度 = |B选区总条数 − A选区总条数| / A选区总条数。")
+            sb.append("<p class=\"note\">内容偏离度 = 有差异条数 / 已匹配键值的记录数（完全匹配+有差异，不含仅")
+                    .append(esc(srcA)).append("/仅").append(esc(srcB))
+                    .append("；无已匹配记录显示—）；条数偏离度 = |").append(esc(srcB)).append("选区总条数 − ")
+                    .append(esc(srcA)).append("选区总条数| / ").append(esc(srcA)).append("选区总条数。")
                     .append("分级阈值（两指标同）：≥10% 微量偏移（紫）、≥20% 务必关注（黄）、≥50% 严重问题（红）。")
                     .append("按两指标较大者降序排列。</p>\n");
         }
@@ -90,13 +98,14 @@ public final class BatchSummaryHtml {
                     ? "批次仍在执行中，完成后自动采集。" : "本批次无可监测命中文本（未配置或昵称未命中监测表）。";
             sb.append("<p class=\"empty\">").append(esc(why)).append("</p>\n");
         } else {
-            String srcA = str(discard.get("src_a"), str(p.get("src_a"), "A"));
-            String srcB = str(discard.get("src_b"), str(p.get("src_b"), "B"));
+            // 需求①别名：监测分区沿用批次级来源名（discard 自带非默认命名时优先）
+            String dSrcA = str(discard.get("src_a"), srcA);
+            String dSrcB = str(discard.get("src_b"), srcB);
             List<Map<String, Object>> rows = (List<Map<String, Object>>) discard.get("rows");
             searchBox(sb, "discTable", rows == null ? 0 : rows.size());
             sb.append("<table id=\"discTable\"><thead><tr><th>昵称</th><th>归属组</th><th>实际文件名</th><th>字段序号</th><th>字段名</th><th>字段含义</th><th>字段类型</th><th>")
-                    .append(esc(srcA)).append("的所有取值</th><th>")
-                    .append(esc(srcB)).append("的所有取值</th><th>判定结果</th></tr></thead><tbody>\n");
+                    .append(esc(dSrcA)).append("的所有取值</th><th>")
+                    .append(esc(dSrcB)).append("的所有取值</th><th>判定结果</th></tr></thead><tbody>\n");
             for (Map<String, Object> r : rows) {
                 sb.append("<tr data-nick=\"").append(esc(str(r.get("nickname")))).append("\" data-group=\"")
                         .append(esc(str(r.get("group")))).append("\"><td>")
@@ -107,8 +116,8 @@ public final class BatchSummaryHtml {
                         .append(esc(str(r.get("field_name")))).append("</td><td>")
                         .append(esc(str(r.get("field_meaning")))).append("</td><td>")
                         .append(esc(str(r.get("type_label")))).append("</td><td class=\"vals\">")
-                        .append(esc(valuesHtml(r, true, srcA))).append("</td><td class=\"vals\">")
-                        .append(esc(valuesHtml(r, false, srcB))).append("</td><td>")
+                        .append(esc(valuesHtml(r, true, dSrcA))).append("</td><td class=\"vals\">")
+                        .append(esc(valuesHtml(r, false, dSrcB))).append("</td><td>")
                         .append(matchBadge(r)).append("</td></tr>\n");
             }
             sb.append("</tbody></table>\n");

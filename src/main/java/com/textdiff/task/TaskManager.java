@@ -351,7 +351,10 @@ public final class TaskManager implements AutoCloseable {
             String md = Files.readString(Path.of(job.resultDir).resolve("ai_analysis.md"),
                     StandardCharsets.UTF_8);
             String title = job.label != null && !job.label.isEmpty() ? job.label : job.nickname;
-            Files.writeString(dst, com.textdiff.export.HtmlReportWriter.render(title, meta, md),
+            // 需求①别名：报头/事实条用作业 configLine 的分区别名（SRCA/SRCB，缺省 A/B）
+            var cfg = com.textdiff.export.ExportAssembler.compareConfig(job);
+            Files.writeString(dst, com.textdiff.export.HtmlReportWriter.render(title, meta, md,
+                            cfg.sourceA, cfg.sourceB),
                     StandardCharsets.UTF_8);
             return dst;
         } catch (Exception e) {

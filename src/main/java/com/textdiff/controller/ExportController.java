@@ -47,7 +47,7 @@ public class ExportController {
      * diff（默认差异导出）= 恢复的差异 CSV（整合格式）：一条差异记录一行，全部差异栏位合并进
      * 「差异明细」（[栏位不一致 @N] A:'..' B:'..'；关注栏位 [X-YYYY @N] 前缀；单方存在写存在侧主键）。
      * fields = 仅差异栏位 CSV：一条字段差异一行（键值/栏位号/栏位名/A 值/B 值）。
-     * collect = 差异采集对比案例 xlsx（CollectComparisonCaseTemplate 20 列）。
+     * collect = 差异采集对比案例 xlsx（CollectComparisonCaseTemplate 21 列：重复轮次插入轮次与银行号之间）。
      */
     @GetMapping("/jobs/{id}/export")
     public ResponseEntity<byte[]> exportJob(@PathVariable String id,

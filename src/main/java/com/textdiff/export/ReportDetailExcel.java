@@ -33,6 +33,7 @@ public final class ReportDetailExcel {
     private ReportDetailExcel() {}
 
     public static Path write(Path out, List<JobRecord> jobs) {
+        String[] src = BatchDetailExcel.batchSrc(jobs); // 需求①别名：批次级来源名，缺省 A/B
         try (Workbook wb = new XSSFWorkbook()) {
             CellStyle head = wb.createCellStyle();
             Font bold = wb.createFont();
@@ -41,8 +42,8 @@ public final class ReportDetailExcel {
             head.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
             head.setFillPattern(FillPatternType.SOLID_FOREGROUND);
 
-            sheetOverview(wb, head, jobs);
-            sheetDiff(wb, head, jobs);
+            sheetOverview(wb, head, jobs, src);
+            sheetDiff(wb, head, jobs, src);
 
             if (out.getParent() != null) java.nio.file.Files.createDirectories(out.getParent());
             try (var fos = new java.io.FileOutputStream(out.toFile())) {
@@ -54,10 +55,13 @@ public final class ReportDetailExcel {
         }
     }
 
-    private static void sheetOverview(Workbook wb, CellStyle head, List<JobRecord> jobs) {
+    private static void sheetOverview(Workbook wb, CellStyle head, List<JobRecord> jobs, String[] src) {
+        String srcA = src[0], srcB = src[1];
         Sheet sheet = wb.createSheet("报表对比总览");
-        String[] headers = {"报表昵称", "文件名", "总条数(A)", "总条数(B)", "报表段数(A/B)",
-                "表头差异", "表尾差异", "完全匹配", "部分匹配", "仅A有", "仅B有", "状态情况", "总体评判", "条数核对", "状态"};
+        String[] headers = {"报表昵称", "文件名", srcA + "总条数", srcB + "总条数",
+                "报表段数(" + srcA + "/" + srcB + ")",
+                "表头差异", "表尾差异", "完全匹配", "部分匹配", "仅" + srcA + "有", "仅" + srcB + "有",
+                "状态情况", "总体评判", "条数核对", "状态"};
         Row hr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) cell(hr, i, headers[i]).setCellStyle(head);
         sheet.setColumnWidth(0, 24 * 256);
@@ -96,9 +100,10 @@ public final class ReportDetailExcel {
         }
     }
 
-    private static void sheetDiff(Workbook wb, CellStyle head, List<JobRecord> jobs) {
+    private static void sheetDiff(Workbook wb, CellStyle head, List<JobRecord> jobs, String[] src) {
+        String srcA = src[0], srcB = src[1];
         Sheet sheet = wb.createSheet("差异明细");
-        String[] headers = {"报表昵称", "分区", "状态", "行标识", "栏位号", "栏位名", "A值", "B值"};
+        String[] headers = {"报表昵称", "分区", "状态", "行标识", "栏位号", "栏位名", srcA + "值", srcB + "值"};
         Row hr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) cell(hr, i, headers[i]).setCellStyle(head);
         sheet.setColumnWidth(0, 24 * 256);
@@ -149,7 +154,7 @@ public final class ReportDetailExcel {
                         boolean aSide = Status.UNMATCHED_A.equals(row.status);
                         cell(sheetRow, 0, job.nickname);
                         cell(sheetRow, 1, sectionText);
-                        cell(sheetRow, 2, aSide ? "仅A有" : "仅B有");
+                        cell(sheetRow, 2, aSide ? "仅" + srcA + "有" : "仅" + srcB + "有");
                         cell(sheetRow, 3, row.key);
                         cell(sheetRow, 4, "");
                         cell(sheetRow, 5, "");
