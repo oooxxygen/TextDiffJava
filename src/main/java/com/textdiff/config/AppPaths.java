@@ -38,7 +38,9 @@ public record AppPaths(Path baseDir, Path bundleDir) {
         Path p = start.toAbsolutePath().normalize();
         if (Files.isDirectory(p.resolve("data"))) return p.resolve("data"); // 已是便携包根（data 预置）
         for (int i = 0; i < 3 && p != null; i++) {
-            if (Files.isDirectory(p.resolve("bin")) && Files.isDirectory(p.resolve("lib"))) {
+            // 文件系统根（/、C:\）天然存在 bin+lib（Linux 根目录），不参与匹配——仅识别真实包根
+            if (p.getParent() != null && Files.isDirectory(p.resolve("bin"))
+                    && Files.isDirectory(p.resolve("lib"))) {
                 Path d = p.resolve("data");
                 try {
                     Files.createDirectories(d);

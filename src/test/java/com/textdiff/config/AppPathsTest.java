@@ -86,6 +86,18 @@ class AppPathsTest {
     }
 
     @Test
+    void 文件系统根不参与匹配_Linux根有bin_lib也误判不到(@TempDir Path tmpRoot) throws Exception {
+        // CI（Linux）上 @TempDir 的祖先链会出现 /（根目录天然有 bin+lib）——根目录必须不参与匹配
+        Path deep = tmpRoot.resolve("a").resolve("b");
+        Files.createDirectories(deep);
+        // tmpRoot 本身造一个"伪包根"（bin+lib）且其父（父父）= 临时区上层——不影响 deep 向上两级即到 tmpRoot
+        Files.createDirectories(tmpRoot.resolve("bin"));
+        Files.createDirectories(tmpRoot.resolve("lib"));
+        // deep 向上 1 级 = tmpRoot/a（无 bin+lib），2 级 = tmpRoot（有 bin+lib 且父存在）→ 命中 tmpRoot
+        assertEquals(tmpRoot.resolve("data"), AppPaths.detect(deep).baseDir());
+    }
+
+    @Test
     void 非便携目录_维持CWD语义() {
         assertEquals(dir, AppPaths.detect(dir).baseDir());
         assertEquals(dir.resolve("configs"), AppPaths.detect(dir).configsDir());
