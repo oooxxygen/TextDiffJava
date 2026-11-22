@@ -10,8 +10,10 @@ rem    1) from inside the NEW package:  upgrade\upgrade.bat <OLD_DIR>
 rem    2) from inside the OLD install:  upgrade.bat <NEW_PORTABLE.zip>
 rem    Optional last arg: --no-start   (skip smoke start)
 rem
-rem  Migrated items: config.ini store results results_split configs
-rem  (data written under OLD\bin as working dir is auto-detected)
+rem  Migrated items: config.ini store results results_split configs uploads
+rem                  customcmp reportcmp  ->  NEW\data\
+rem  (v0.9.16+ layout: program files at package root, user data under data\;
+rem   data written under OLD\bin as working dir is auto-detected)
 rem
 rem  NOTE: this file MUST stay pure ASCII. cmd batch parsing with
 rem  non-ASCII bytes is unreliable even under chcp 65001 (observed:
@@ -94,34 +96,40 @@ if not errorlevel 1 (
     goto fail
 )
 
-rem ---------- locate user data (root first, else OLD\bin) ----------
-set "SRC=%OLD%"
-if not exist "%OLD%\config.ini" if exist "%OLD%\bin\config.ini" set "SRC=%OLD%\bin"
+rem ---------- locate user data (new layout data\ -> old root -> OLD\bin) ----------
+set "SRC="
+if exist "%OLD%\data\" set "SRC=%OLD%\data"
+if not defined SRC if exist "%OLD%\config.ini" set "SRC=%OLD%"
+if not defined SRC if exist "%OLD%\store\" set "SRC=%OLD%"
+if not defined SRC if exist "%OLD%\configs\" set "SRC=%OLD%"
+if not defined SRC if exist "%OLD%\bin\config.ini" set "SRC=%OLD%\bin"
+if not defined SRC set "SRC=%OLD%"
 echo [3/5] OLD install : %OLD%
 echo        data source : %SRC%
 echo        NEW install : %NEW%
 
 set "HASDATA="
 if exist "%SRC%\config.ini" set "HASDATA=1"
-for %%D in (store results results_split configs) do (
+for %%D in (store results results_split configs uploads customcmp reportcmp) do (
     if exist "%SRC%\%%D\" set "HASDATA=1"
 )
-if not defined HASDATA echo [WARN] no user data found ^(config.ini/store/results/configs^); dir switch only.
+if not defined HASDATA echo [WARN] no user data found ^(config.ini/store/results/configs etc^); dir switch only.
 
 rem ---------- migrate (copy; OLD dir stays untouched as rollback) ----------
-echo [4/5] Migrating data (copy; OLD dir kept as rollback point) ...
+echo [4/5] Migrating data (copy into NEW\data; OLD dir kept as rollback point) ...
+if not exist "%NEW%\data\" mkdir "%NEW%\data"
 if exist "%SRC%\config.ini" (
-    if exist "%NEW%\config.ini" echo        note: NEW already has config.ini, overriding with OLD data
-    copy /y "%SRC%\config.ini" "%NEW%\config.ini" >nul 2>&1
+    if exist "%NEW%\data\config.ini" echo        note: NEW\data already has config.ini, overriding with OLD data
+    copy /y "%SRC%\config.ini" "%NEW%\data\config.ini" >nul 2>&1
     if errorlevel 1 (
         echo [ERROR] copy failed: config.ini
         goto fail
     )
     echo        migrated: config.ini
 )
-for %%D in (store results results_split configs) do (
+for %%D in (store results results_split configs uploads customcmp reportcmp) do (
     if exist "%SRC%\%%D\" (
-        robocopy "%SRC%\%%D" "%NEW%\%%D" /E /NFL /NDL /NJH /NJS /NP >nul
+        robocopy "%SRC%\%%D" "%NEW%\data\%%D" /E /NFL /NDL /NJH /NJS /NP >nul
         if errorlevel 8 (
             echo [ERROR] copy failed: %%D
             goto fail

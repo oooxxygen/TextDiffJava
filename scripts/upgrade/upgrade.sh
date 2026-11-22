@@ -9,8 +9,8 @@
 #    2) 在旧安装根运行: upgrade.sh <新便携包.zip>
 #    可选尾参: --no-start  跳过冒烟启动
 #
-#  平移项: config.ini store results results_split configs
-#  （数据若曾按 bin 为工作目录运行而落在旧 bin/ 下，自动识别）
+#  平移项: config.ini store results results_split configs uploads customcmp reportcmp
+#  → 全部落到新包 data/ 下（v0.9.16+ 布局：程序件在包根、用户数据收口 data/）
 # ============================================================
 set -u
 
@@ -90,9 +90,14 @@ esac
 [ -d "$old" ] || { echo "[错误] 旧目录不存在: $old"; fail; }
 [ -d "$new/bin" ] || { echo "[错误] 新目录不像安装目录（缺 bin）: $new"; fail; }
 
-# ---------- 数据位置（根目录优先，兼容 bin 工作目录） ----------
-src="$old"
-[ -f "$old/config.ini" ] || [ -f "$old/bin/config.ini" ] && src="$old/bin"
+# ---------- 数据位置（新布局 data/ → 旧根目录 → 旧 bin 工作目录） ----------
+src=""
+[ -d "$old/data" ] && src="$old/data"
+if [ -z "$src" ] && { [ -f "$old/config.ini" ] || [ -d "$old/store" ] || [ -d "$old/configs" ]; }; then
+  src="$old"
+fi
+if [ -z "$src" ] && [ -f "$old/bin/config.ini" ]; then src="$old/bin"; fi
+[ -z "$src" ] && src="$old"
 old_abs="$(cd "$old" && pwd)"
 new_abs="$(cd "$new" && pwd)"
 src_abs="$(cd "$src" && pwd)"
@@ -102,21 +107,23 @@ echo "      新安装: $new_abs"
 
 has_data=0
 [ -f "$src_abs/config.ini" ] && has_data=1
-for d in store results results_split configs; do
+for d in store results results_split configs uploads customcmp reportcmp; do
   [ -d "$src_abs/$d" ] && has_data=1
 done
-[ "$has_data" = "0" ] && echo "[警告] 未发现任何用户数据（config.ini/store/results/configs），仅做目录切换。"
+[ "$has_data" = "0" ] && echo "[警告] 未发现任何用户数据（config.ini/store/results/configs 等），仅做目录切换。"
 
 # ---------- 平移（复制制：旧目录原样保留） ----------
-echo "[4/5] 平移数据（复制，旧目录不动作回退点）..."
+echo "[4/5] 平移数据（复制进新包 data/，旧目录不动作回退点）..."
+dest="$new_abs/data"
+mkdir -p "$dest"
 if [ -f "$src_abs/config.ini" ]; then
-  [ -f "$new_abs/config.ini" ] && echo "      注意: 新目录已有 config.ini，以旧数据覆盖"
-  cp -p "$src_abs/config.ini" "$new_abs/config.ini" && echo "      已迁移: config.ini"
+  [ -f "$dest/config.ini" ] && echo "      注意: 新包 data/ 已有 config.ini，以旧数据覆盖"
+  cp -p "$src_abs/config.ini" "$dest/config.ini" && echo "      已迁移: config.ini"
 fi
-for d in store results results_split configs; do
+for d in store results results_split configs uploads customcmp reportcmp; do
   if [ -d "$src_abs/$d" ]; then
-    mkdir -p "$new_abs/$d"
-    cp -a "$src_abs/$d/." "$new_abs/$d/" && echo "      已迁移: $d/"
+    mkdir -p "$dest/$d"
+    cp -a "$src_abs/$d/." "$dest/$d/" && echo "      已迁移: $d/"
   fi
 done
 

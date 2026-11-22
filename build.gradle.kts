@@ -1,3 +1,7 @@
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
+
 plugins {
     java
     id("org.springframework.boot") version "3.3.4"
@@ -46,10 +50,13 @@ tasks.startScripts {
                         && (it.contains("printf") || it.contains("eval set --"))
             }
             if (idx < 0) fail("unix", text)
-            lines[idx] = lines[idx].replace("\$DEFAULT_JVM_OPTS", "\$DEFAULT_JVM_OPTS \$CONFIG_JVM_OPTS")
+            lines[idx] = lines[idx].replace("\$DEFAULT_JVM_OPTS",
+                    "\$DEFAULT_JVM_OPTS \$BASE_DIR_PROP \$CONFIG_JVM_OPTS")
             val block = """
                 |CONFIG_JVM_OPTS=""
-                |for INI_FILE in "${'$'}PWD/config.ini" "${'$'}APP_HOME/config.ini"; do
+                |BASE_DIR_PROP=""
+                |if [ -d "${'$'}APP_HOME/data" ]; then BASE_DIR_PROP="-Dtextdiff.base.dir=${'$'}APP_HOME/data"; fi
+                |for INI_FILE in "${'$'}PWD/config.ini" "${'$'}APP_HOME/data/config.ini" "${'$'}APP_HOME/config.ini"; do
                 |  if [ -f "${'$'}INI_FILE" ]; then
                 |    CONFIG_JVM_OPTS=${'$'}(sed -n 's/^[[:space:]]*jvm_opts[[:space:]]*=[[:space:]]*//p' "${'$'}INI_FILE" | tail -n 1 | tr -d '\r')
                 |    [ -n "${'$'}CONFIG_JVM_OPTS" ] && break
@@ -69,11 +76,16 @@ tasks.startScripts {
                 it.contains("%JAVA_EXE%") && it.contains("%DEFAULT_JVM_OPTS%")
             }
             if (idx < 0) fail("windows", text)
-            lines[idx] = lines[idx].replace("%DEFAULT_JVM_OPTS%", "%DEFAULT_JVM_OPTS% %CONFIG_JVM_OPTS%")
+            lines[idx] = lines[idx].replace("%DEFAULT_JVM_OPTS%",
+                    "%DEFAULT_JVM_OPTS% %BASE_DIR_PROP% %CONFIG_JVM_OPTS%")
             val block = """
-                |@rem JVM 参数注入：读取 config.ini [jvm] jvm_opts（CWD 优先，其次 APP_HOME；等号两侧可有空格）
+                |@rem JVM 参数注入：读取 config.ini [jvm] jvm_opts（CWD 优先，其次 APP_HOME\data、APP_HOME；等号两侧可有空格）
+                |@rem 便携布局（APP_HOME\data 存在）时显式指定数据根——Windows 启动器工作目录不定，双保险
                 |set "CONFIG_JVM_OPTS="
+                |set "BASE_DIR_PROP="
+                |if exist "%APP_HOME%\data\" set "BASE_DIR_PROP=-Dtextdiff.base.dir=%APP_HOME%\data"
                 |if exist "config.ini" for /f "usebackq eol=# tokens=1,* delims== " %%a in (`findstr /i /b "jvm_opts" "config.ini"`) do set "CONFIG_JVM_OPTS=%%b"
+                |if not defined CONFIG_JVM_OPTS if exist "%APP_HOME%\data\config.ini" for /f "usebackq eol=# tokens=1,* delims== " %%a in (`findstr /i /b "jvm_opts" "%APP_HOME%\data\config.ini"`) do set "CONFIG_JVM_OPTS=%%b"
                 |if not defined CONFIG_JVM_OPTS if exist "%APP_HOME%\config.ini" for /f "usebackq eol=# tokens=1,* delims== " %%a in (`findstr /i /b "jvm_opts" "%APP_HOME%\config.ini"`) do set "CONFIG_JVM_OPTS=%%b"
             """.trimMargin()
             lines.addAll(idx, block.lines().filter { it.isNotEmpty() })
@@ -122,13 +134,43 @@ runtime {
     }
 }
 
-// 平移升级脚本随包携带（解压后在 upgrade/ 下，见 scripts/upgrade/）：
-// jpackage 产出 image 后补入脚本目录，runtimeZip 随链压缩（doLast 写入以避开输出目录重叠校验）
-tasks.named("jpackageImage") {
+// 便携包装配（v0.9.16+ 布局）——以 beryx runtimeZip 产物为基础后处理重打包：
+//   剥掉其 zip 根目录（image/），把程序件（bin/conf/legal/lib/release）收进顶层文件夹 v$version（=版本 tag 号），
+//   补入 upgrade/（平移升级脚本，见 scripts/upgrade/）与 data/（用户数据根，首次启动由 AppPaths 自动
+//   识别收口；包内预置 README 说明各目录用处）与顶层 README.txt。
+// 产物名保持 build/image.zip——CI 的改名上传流程不变。
+tasks.register("portableZip") {
+    dependsOn("runtimeZip")
     doLast {
-        copy {
-            from("scripts/upgrade")
-            into(layout.buildDirectory.dir("image/upgrade"))
+        val beryxZip = layout.buildDirectory.file("image.zip").get().asFile
+        val outZip = layout.buildDirectory.file("image.portable.zip").get().asFile
+        val newTop = "v${project.version}"
+        val src = ZipFile(beryxZip)
+        val entries = src.entries().asSequence().toList()
+        val roots = entries.map { it.name.split("/").first() }.toSet()
+        if (roots.size != 1) throw GradleException("runtimeZip 产物顶层异常（$roots），无法装配便携包")
+        val oldRoot = roots.first()
+        ZipOutputStream(outZip.outputStream()).use { zos ->
+            fun put(name: String, content: ByteArray) {
+                zos.putNextEntry(ZipEntry(name))
+                zos.write(content)
+                zos.closeEntry()
+            }
+            for (e in entries) {
+                if (e.isDirectory) continue
+                val rel = e.name.removePrefix("$oldRoot/")
+                if (rel.isBlank()) continue
+                put("$newTop/$rel", src.getInputStream(e).readBytes())
+            }
+            fileTree("scripts/upgrade").forEach { f ->
+                put("$newTop/upgrade/${f.name}", f.readBytes())
+            }
+            put("$newTop/README.txt", file("scripts/portable/README.txt").readBytes())
+            put("$newTop/data/README.txt", file("scripts/portable/data/README.txt").readBytes())
         }
+        src.close()
+        outZip.copyTo(beryxZip, overwrite = true)
+        outZip.delete()
+        println("portableZip: 顶层 $newTop/（程序件 + upgrade/ + data/），产物 ${beryxZip.name}")
     }
 }
