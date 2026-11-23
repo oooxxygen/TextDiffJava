@@ -442,7 +442,16 @@ public final class TaskManager implements AutoCloseable {
                 if (!aiPending(job)) continue;
                 String sub = e.getKey() + "_" + zipSafe(
                         job.label != null && !job.label.isEmpty() ? job.label : job.nickname);
-                putZipEntry(zos, sub + "/prompt.md", ensurePrompt(job));
+                byte[] prompt;
+                try {
+                    prompt = ensurePrompt(job);
+                } catch (RuntimeException | java.io.IOException ex) {
+                    // 历史作业结果目录缺失/损坏：跳过该作业，不拖垮整个导出
+                    System.getLogger(TaskManager.class.getName())
+                            .log(System.Logger.Level.WARNING, "AI 导出跳过作业 " + e.getKey() + ": " + ex);
+                    continue;
+                }
+                putZipEntry(zos, sub + "/prompt.md", prompt);
                 Map<String, Object> meta = new LinkedHashMap<>();
                 meta.put("task_id", e.getValue().taskId);
                 meta.put("job_id", job.id);
