@@ -3189,12 +3189,42 @@ const TaskManagerPage = {
     };
     const childGo = (id, n) => { const st = childState(id); st.page = Math.min(Math.max(1, (n | 0) || 1), childPages(id)); };
     const childResize = (id, s) => { const st = childState(id); st.size = s; st.page = 1; };
+    // ---- AI 待执行任务导出/导入（跨环境补跑：无 AI 环境导出 prompt → 外部大模型执行 → 导入结果回填） ----
+    const aiExportHref = computed(() => {
+      // 勾选含 AI 任务时按所选作业导出；否则导出全部待执行
+      const jobs = [...new Set(tasks.value
+        .filter(t => selTasks.has(t.task_id) && t.task_type === "ai_analysis")
+        .map(t => t.job_id))];
+      return "/api/tasks/ai-export" + (jobs.length ? "?job_ids=" + jobs.join(",") : "");
+    });
+    const aiImporting = ref(false);
+    async function importAi(ev) {
+      const fs = ev.target.files;
+      if (!fs || !fs.length) return;
+      const fd = new FormData();
+      for (const f of fs) fd.append("files", f);
+      aiImporting.value = true;
+      try {
+        const r = await api("/api/tasks/ai-import", { method: "POST", body: fd });
+        const fails = (r.results || []).filter(x => !x.ok);
+        let msg = `导入完成：成功 ${r.ok}/${r.total}。`;
+        if (fails.length) {
+          msg += "\n失败明细：\n" + fails.map(x => `· ${x.file}（${x.job_id || "未识别"}）：${x.reason}`).join("\n");
+        } else {
+          msg += "作业已标记为 AI 已完成，可在结果页查看报告。";
+        }
+        await askConfirm(msg, { okText: "关闭", title: r.ok === r.total ? "✓ 导入成功" : "导入结果（部分失败）" });
+        await load();
+      } catch (e) { notify("导入失败: " + e.message, "error"); }
+      finally { aiImporting.value = false; ev.target.value = ""; }
+    }
     return { batches, standalone, openBatches, openJobs, q, tasksOf, typeText, statusText, fileName,
              durTask, durJob, durBatch,
              fBatches, fStandalone, pgBatches, pgJobs,
              toggle, toggleBatch, batchChildren, regen, delTask, fmtTime,
              childTotal, childPages, childPaged, childGo, childResize,
              selTasks, runAt, jobAllSel, toggleJobSel, batchRegen,
+             aiExportHref, aiImporting, importAi,
              openTaskFiles, toggleTaskFiles, fileNameOf, fmtSize, taskZipUrl,
              open: (id) => emit("open", id), openBatch: (id) => emit("open-batch", id) };
   },
@@ -3208,6 +3238,10 @@ const TaskManagerPage = {
         <input type="datetime-local" v-model="runAt" style="width:210px;" title="留空 = 立即执行；选择未来时间 = 定时执行" />
         <button class="mini-btn" @click="batchRegen" :disabled="!selTasks.size">⚡ 批量重新生成（差异CSV / AI分析）</button>
         <button class="mini-btn" @click="selTasks.clear()" :disabled="!selTasks.size">清空选择</button>
+        <a class="mini-btn" :href="aiExportHref" download
+           title="导出待执行 AI 分析任务的 prompt.md（勾选 AI 任务则仅导出所选作业，未勾选导出全部待执行）；可把 prompt 投喂外部大模型补跑后，用「导入 AI 分析结果」回填">⬇ 导出待执行 AI 任务</a>
+        <label class="mini-btn" :class="{ disabled: aiImporting }"
+               title="导入外部大模型产出的 AI 分析结果（zip 或多个 .md）：按 task.json 或文件名中 8 位作业 id 匹配，回填后作业标记为 AI 已完成">⬆ 导入 AI 分析结果<input type="file" accept=".zip,.md" multiple style="display:none;" @change="importAi" :disabled="aiImporting" /></label>
         <span class="toolbar-note">勾选作业后提交；填了时间则到点自动执行（重启后仍恢复）</span>
         <ListPager :page="pgBatches.page" :pages="pgBatches.pages" :total="pgBatches.total" :size="pgBatches.size"
                    @go="pgBatches.go" @resize="pgBatches.resize" />

@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "com.textdiff"
-version = "0.9.16"
+version = "0.9.17"
 
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(21) }

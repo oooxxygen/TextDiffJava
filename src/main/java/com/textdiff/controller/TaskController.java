@@ -166,6 +166,74 @@ public class TaskController {
         }
     }
 
+    /**
+     * 导出待执行 AI 任务（zip：每任务 {jobId}_{昵称}/prompt.md + task.json）——无 AI 环境可把
+     * prompt.md 投喂外部大模型补跑。job_ids 可选（逗号分隔，任务页勾选限定作业）；缺省 = 全部待执行
+     * （作业已完成且 aiStatus 非 done/running 的任务，含无 AI 配置下 disabled 的任务）。
+     */
+    @GetMapping("/tasks/ai-export")
+    public org.springframework.http.ResponseEntity<byte[]> aiExport(
+            @RequestParam(name = "job_ids", required = false) String jobIds) throws Exception {
+        List<String> wanted = jobIds == null || jobIds.isBlank() ? List.of()
+                : java.util.Arrays.stream(jobIds.split(",")).map(String::strip).filter(s -> !s.isEmpty()).toList();
+        Path zip = java.nio.file.Files.createTempFile("ai-export", ".zip");
+        Path out = tasks.exportPendingAi(zip, wanted);
+        if (out == null) {
+            java.nio.file.Files.deleteIfExists(zip);
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "无待执行的 AI 分析任务（已完成或将进行中的任务不导出）");
+        }
+        byte[] body = java.nio.file.Files.readAllBytes(out);
+        java.nio.file.Files.deleteIfExists(out);
+        String name = "AI待执行任务_" + java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
+                .format(java.time.LocalDateTime.now()) + ".zip";
+        return org.springframework.http.ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename*=UTF-8''"
+                        + java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8)
+                                .replace("+", "%20"))
+                .contentType(org.springframework.http.MediaType.parseMediaType("application/zip"))
+                .body(body);
+    }
+
+    /**
+     * 导入 AI 分析结果（zip 或多个 .md）：按 zip 内 task.json 或文件名中的 8 位作业 id 匹配作业 →
+     * 回填 ai_analysis.md + 导出目录按命名规则生成 .md/.html + 作业 aiStatus=done + 任务记录置 DONE。
+     * 逐文件返回 {file, job_id, ok, reason}。
+     */
+    @PostMapping("/tasks/ai-import")
+    public Map<String, Object> aiImport(
+            @RequestParam("files") List<org.springframework.web.multipart.MultipartFile> files)
+            throws java.io.IOException {
+        List<TaskManager.AiImportFile> inputs = new ArrayList<>();
+        for (org.springframework.web.multipart.MultipartFile f : files) {
+            if (f == null || f.isEmpty()) continue;
+            String raw = f.getOriginalFilename() == null ? "file.md" : f.getOriginalFilename();
+            String name = Path.of(raw).getFileName().toString();
+            byte[] content = f.getBytes();
+            if (name.toLowerCase().endsWith(".zip")) {
+                inputs.addAll(TaskManager.expandAiZip(name, content));
+            } else if (name.toLowerCase().endsWith(".md")) {
+                inputs.add(new TaskManager.AiImportFile(name, content, null));
+            }
+        }
+        if (inputs.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "未发现可导入的 .md 结果文件（prompt.md 为待执行输入不会被导入；请导入外部大模型输出的分析 Markdown）");
+        }
+        List<Map<String, Object>> results = new ArrayList<>();
+        long ok = 0;
+        for (TaskManager.AiImportResult r : tasks.importAiResults(inputs)) {
+            if (r.ok()) ok++;
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("file", r.file());
+            m.put("job_id", r.jobId());
+            m.put("ok", r.ok());
+            m.put("reason", r.reason());
+            results.add(m);
+        }
+        return Map.of("ok", ok, "total", results.size(), "results", results);
+    }
+
     private List<String> outputsOf(String id) {
         TaskRecord t = require(id);
         return t.outputs == null ? List.of() : t.outputs;

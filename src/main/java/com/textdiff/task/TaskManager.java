@@ -13,6 +13,7 @@ import com.textdiff.store.TaskStore;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +48,7 @@ public final class TaskManager implements AutoCloseable {
     private final com.textdiff.store.FieldMapStore aiFieldMaps; // 可空：AI 产物归属组命名
     private final Path resultsRoot;
     private final Path settingsFile;
+    private final Path aiTemplateDir; // configs/analysis-template.md 覆盖目录（导出补产 prompt.md 用）
     private volatile TaskDirs dirs = TaskDirs.empty();
     private volatile int aiConcurrency;
     private volatile java.util.concurrent.Semaphore aiPermits;
@@ -83,6 +85,7 @@ public final class TaskManager implements AutoCloseable {
                     return t;
                 });
         this.settingsFile = paths.baseDir().resolve("store").resolve("task_settings.json");
+        this.aiTemplateDir = paths.baseDir().resolve("configs");
         loadSettings();
         backfill();
         // 定时调度：周期扫描到点的 pending 任务（含重启恢复的未来定时任务）
@@ -387,6 +390,199 @@ public final class TaskManager implements AutoCloseable {
             Thread.sleep(50);
         }
         return false;
+    }
+
+    // ---- AI 待执行任务导出/导入（跨环境补跑）：无 AI 环境导出 prompt → 外部大模型执行 → 导入结果回填 ----
+
+    /** AI 待执行判定：作业已完成且 aiStatus 未完成（pending/failed/disabled 等；running/done 不导出）。 */
+    public boolean aiPending(JobRecord job) {
+        return job != null && JobRecord.DONE.equals(job.status)
+                && !"done".equals(job.aiStatus) && !"running".equals(job.aiStatus);
+    }
+
+    private static String zipSafe(String s) {
+        String v = s == null || s.strip().isEmpty() ? "job" : s.strip();
+        return v.replaceAll("[\\\\/:*?\"<>|]", "_");
+    }
+
+    /** prompt.md 读取；缺失时按完整预算现产（导出物自足，可直接投喂任何大模型）。 */
+    private byte[] ensurePrompt(JobRecord job) throws Exception {
+        Path dir = Path.of(job.resultDir == null ? "" : job.resultDir);
+        Path p = dir.resolve("prompt.md");
+        if (Files.isRegularFile(p)) return Files.readAllBytes(p);
+        Path written = com.textdiff.ai.PromptRenderer.render(dir, job,
+                ResultFiles.readMeta(dir), ResultFiles.readSummary(dir), aiTemplateDir, aiFieldMaps);
+        return Files.readAllBytes(written);
+    }
+
+    private static void putZipEntry(java.util.zip.ZipOutputStream zos, String name, byte[] content)
+            throws java.io.IOException {
+        zos.putNextEntry(new java.util.zip.ZipEntry(name));
+        zos.write(content);
+        zos.closeEntry();
+    }
+
+    /**
+     * 导出待执行 AI 任务 zip：每个任务一个子目录 {@code {jobId}_{净化标签或昵称}/}（prompt.md + task.json）。
+     * jobIds 非空 = 仅导出选中作业（任务页勾选限定），空集 = 全部待执行任务。
+     * 无任何待执行任务返回 null（调用方 404）。
+     */
+    public Path exportPendingAi(Path zipFile, java.util.Collection<String> jobIds) throws Exception {
+        java.util.Set<String> wanted = jobIds == null ? java.util.Set.of() : new java.util.HashSet<>(jobIds);
+        Map<String, TaskRecord> aiTasks = new LinkedHashMap<>();
+        for (TaskRecord t : tasks.listAll()) {
+            if (!TaskRecord.AI_ANALYSIS.equals(t.taskType)) continue;
+            if (!wanted.isEmpty() && !wanted.contains(t.jobId)) continue;
+            aiTasks.putIfAbsent(t.jobId, t);
+        }
+        int exported = 0;
+        try (var zos = new java.util.zip.ZipOutputStream(Files.newOutputStream(zipFile), StandardCharsets.UTF_8)) {
+            for (Map.Entry<String, TaskRecord> e : aiTasks.entrySet()) {
+                JobRecord job = store.getJob(e.getKey());
+                if (!aiPending(job)) continue;
+                String sub = e.getKey() + "_" + zipSafe(
+                        job.label != null && !job.label.isEmpty() ? job.label : job.nickname);
+                putZipEntry(zos, sub + "/prompt.md", ensurePrompt(job));
+                Map<String, Object> meta = new LinkedHashMap<>();
+                meta.put("task_id", e.getValue().taskId);
+                meta.put("job_id", job.id);
+                meta.put("nickname", job.nickname);
+                meta.put("label", job.label);
+                meta.put("file_a", job.fileA);
+                meta.put("file_b", job.fileB);
+                meta.put("ai_status", job.aiStatus);
+                meta.put("exported_at", System.currentTimeMillis() / 1000);
+                putZipEntry(zos, sub + "/task.json", Json.write(meta).getBytes(StandardCharsets.UTF_8));
+                exported++;
+            }
+        }
+        if (exported == 0) {
+            Files.deleteIfExists(zipFile);
+            return null;
+        }
+        return zipFile;
+    }
+
+    /** 导入单文件结果（逐文件反馈给任务页）。 */
+    public record AiImportResult(String file, String jobId, boolean ok, String reason) {}
+
+    /** 待导入文件：name 含扩展名；jobIdHint 来自 zip 内同目录 task.json（可空，文件名兜底识别）。 */
+    public record AiImportFile(String name, byte[] content, String jobIdHint) {}
+
+    /** zip 展开为待导入清单：收集 .md 内容（跳过 prompt.md——那是待执行输入不是结果），同目录 task.json 的 job_id 作匹配提示。 */
+    public static List<AiImportFile> expandAiZip(String zipName, byte[] content) throws java.io.IOException {
+        Map<String, String> jobByDir = new LinkedHashMap<>();
+        Map<String, byte[]> mds = new LinkedHashMap<>();
+        try (var zis = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(content), StandardCharsets.UTF_8)) {
+            java.util.zip.ZipEntry e;
+            while ((e = zis.getNextEntry()) != null) {
+                if (e.isDirectory()) continue;
+                String n = e.getName();
+                byte[] data = zis.readAllBytes();
+                if (n.endsWith("task.json")) {
+                    try {
+                        Map<?, ?> m = Json.read(new String(data, StandardCharsets.UTF_8), Map.class);
+                        String jid = m == null ? null : (String) m.get("job_id");
+                        if (jid != null && !jid.isBlank()) {
+                            String dirName = n.contains("/") ? n.substring(0, n.lastIndexOf('/')) : "";
+                            jobByDir.put(dirName, jid.strip());
+                        }
+                    } catch (RuntimeException ignored) {
+                        // 损坏的 task.json 忽略，走文件名兜底
+                    }
+                } else if (n.toLowerCase().endsWith(".md")
+                        && !"prompt.md".equalsIgnoreCase(Path.of(n).getFileName().toString())) {
+                    mds.put(n, data);
+                }
+            }
+        }
+        List<AiImportFile> out = new ArrayList<>();
+        for (Map.Entry<String, byte[]> e : mds.entrySet()) {
+            String n = e.getKey();
+            String dirName = n.contains("/") ? n.substring(0, n.lastIndexOf('/')) : "";
+            out.add(new AiImportFile(n, e.getValue(), jobByDir.get(dirName)));
+        }
+        return out;
+    }
+
+    /**
+     * 导入 AI 分析结果：按 task.json 提示或文件名中的 8 位作业 id 匹配作业 →
+     * 原样写 {@code results/{jobId}/ai_analysis.md}（缺一级标题自动补作业命名标题）→
+     * 导出目录按「[归属组]文件昵称_实际文件名」命名生成 .md/.html（与原生 AI 产物同位同名）→
+     * 作业 aiStatus=done、对应 AI 任务记录置 DONE。重复导入覆盖重渲染。逐文件返回结果。
+     */
+    public List<AiImportResult> importAiResults(List<AiImportFile> files) {
+        List<AiImportResult> out = new ArrayList<>();
+        java.util.regex.Pattern HEX8 = java.util.regex.Pattern.compile("[0-9a-f]{8}");
+        for (AiImportFile f : files) {
+            String jobId = f.jobIdHint();
+            if (jobId == null || store.getJob(jobId) == null) {
+                jobId = null;
+                java.util.regex.Matcher m = HEX8.matcher(f.name() == null ? "" : f.name().toLowerCase());
+                while (m.find()) {
+                    String cand = m.group();
+                    if (store.getJob(cand) != null) { jobId = cand; break; }
+                }
+            }
+            if (jobId == null) {
+                out.add(new AiImportResult(f.name(), null, false,
+                        "无法识别作业（文件名需含 8 位作业 id，或 zip 内同目录附 task.json）"));
+                continue;
+            }
+            try {
+                applyAiResult(jobId, f);
+                out.add(new AiImportResult(f.name(), jobId, true, "已导入"));
+            } catch (Exception e) {
+                out.add(new AiImportResult(f.name(), jobId, false,
+                        e.getMessage() == null ? e.toString() : e.getMessage()));
+            }
+        }
+        return out;
+    }
+
+    /** 单作业回填：写 ai_analysis.md + 导出目录 .md/.html + 作业/任务状态置完成。 */
+    private void applyAiResult(String jobId, AiImportFile f) throws Exception {
+        JobRecord job = store.getJob(jobId);
+        if (job == null) throw new IllegalStateException("作业不存在");
+        if (!JobRecord.DONE.equals(job.status)) {
+            throw new IllegalStateException("作业未完成（status=" + job.status + "），仅已完成作业可导入 AI 结果");
+        }
+        if (com.textdiff.report.ReportCompareService.JOB_TYPE.equals(job.jobType)
+                || com.textdiff.custom.CustomCompareService.JOB_TYPE.equals(job.jobType)) {
+            throw new IllegalStateException("该作业类型（报表/自定义对比）不衍生 AI 分析任务");
+        }
+        Path dir = Path.of(job.resultDir == null ? "" : job.resultDir);
+        Files.createDirectories(dir);
+        String md = new String(f.content(), StandardCharsets.UTF_8);
+        if (md.lines().noneMatch(l -> l.strip().startsWith("#"))) {
+            md = "# " + com.textdiff.ai.AiReportNamer.title(job, aiFieldMaps) + "\n\n" + md;
+        }
+        Files.writeString(dir.resolve("ai_analysis.md"), md, StandardCharsets.UTF_8);
+        Path exportTo = exportDir(job);
+        Files.createDirectories(exportTo);
+        String base = com.textdiff.ai.AiReportNamer.fileName(job, aiFieldMaps);
+        Path mdOut = exportTo.resolve(base + ".md");
+        Files.writeString(mdOut, md, StandardCharsets.UTF_8);
+        Path htmlOut = writeHtmlReport(job, exportTo.resolve(base + ".html")); // 原样导入也走本地渲染（失败仅少 HTML）
+        job.aiStatus = "done";
+        if (job.error != null && job.error.startsWith("AI 分析失败")) job.error = null;
+        store.saveJob(job);
+        TaskRecord t = tasks.listForJob(jobId).stream()
+                .filter(x -> TaskRecord.AI_ANALYSIS.equals(x.taskType))
+                .reduce((a, b) -> a.createdAt >= b.createdAt ? a : b).orElse(null);
+        if (t != null) {
+            long now = System.currentTimeMillis() / 1000;
+            t.status = TaskRecord.DONE;
+            t.error = "";
+            if (t.startedAt <= 0) t.startedAt = now;
+            t.finishedAt = now;
+            List<String> outs = new ArrayList<>();
+            outs.add(mdOut.toAbsolutePath().toString());
+            if (htmlOut != null) outs.add(htmlOut.toAbsolutePath().toString());
+            t.outputs = outs;
+            t.outputPath = htmlOut != null ? outs.get(1) : outs.get(0);
+            tasks.save(t);
+        }
     }
 
     @Override
