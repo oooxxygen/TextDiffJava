@@ -89,16 +89,17 @@ function fmtDur(sec) {
 function srcA(cfg) { return (cfg && cfg.source_a) ? cfg.source_a : "A"; }
 function srcB(cfg) { return (cfg && cfg.source_b) ? cfg.source_b : "B"; }
 
-/* ---------- 工具：数量偏离总体评判（与导出 Excel 的 DiffGrade 同规则）----------
-   偏离率 = |totalA-totalB| / ((totalA+totalB)/2)；≥50% 严重问题、≥20% 差异明显、≥10% 保持关注 */
-function gradeOf(ta, tb) {
-  ta = ta || 0; tb = tb || 0;
+/* ---------- 工具：状态评判（与导出 Excel 的 DiffGrade 同规则）----------
+   偏离率 = |totalA-totalB| / ((totalA+totalB)/2)；≥50% 严重问题、≥20% 差异明显；
+   v0.9.17 验收需求③：只要存在差异记录（含缺失）即「有差异」，无差异才「正常」 */
+function gradeOf(s) {
+  const ta = (s && s.total_a) || 0, tb = (s && s.total_b) || 0;
   const d = Math.abs(ta - tb), sum = ta + tb;
-  if (!sum) return { label: "正常", cls: "ok", pct: 0, diff: 0 };
-  const pct = Math.round(d * 2000 / sum) / 10; // 相对总和一半的百分比
+  const pct = sum ? Math.round(d * 2000 / sum) / 10 : 0; // 相对总和一半的百分比
+  const hasDiff = ((s && s.diff) || 0) + ((s && s.only_a) || 0) + ((s && s.only_b) || 0) > 0;
   if (pct >= 50) return { label: "严重问题", cls: "severe", pct, diff: d };
   if (pct >= 20) return { label: "差异明显", cls: "mark", pct, diff: d };
-  if (pct >= 10) return { label: "保持关注", cls: "watch", pct, diff: d };
+  if (hasDiff) return { label: "有差异", cls: "watch", pct, diff: d };
   return { label: "正常", cls: "ok", pct, diff: d };
 }
 
@@ -1606,7 +1607,8 @@ const ResultView = {
       <template v-if="summary">
         <ZonePanel :job-id="jobId" zone="diff" label="🔴 匹配但有差异" :total="zoneCounts.diff||0"
                    :skip-set="skipSet" :column-names="columnNames" :dyn-cols="dynCols" :source-a="sourceA" :source-b="sourceB" :open-by-default="true" :records-open="false" :page-size="10"
-                   :export-url="'/api/jobs/' + jobId + '/export?mode=diff'" export-label="⬇ 差异CSV"
+                   :export-url="'/api/jobs/' + jobId + '/export?mode=diff'" export-label="⬇ 差异对比Excel"
+                   export-title="差异对比 Excel：Sheet1 总览（配置/时间/数量对比/头部字段对照/差异栏位分布）+ Sheet2 差异记录详情"
                    :extra-exports="[
                      { url: '/api/jobs/' + jobId + '/export?mode=fields', label: '⬇ 仅差异栏位', title: '仅差异栏位导出：一条字段差异一行（键值/栏位号/栏位名/两侧取值）' },
                      { url: '/api/jobs/' + jobId + '/export?mode=collect', label: '⬇ 差异采集表(xlsx)', title: '差异采集对比案例 Excel（CollectComparisonCaseTemplate 20 列）' }]"
@@ -2312,7 +2314,7 @@ const JobList = {
           <span class="files">{{ j.file_a }} ↔ {{ j.file_b }}</span>
           <span class="group-badge" v-if="j.label" :title="j.label">🏷 {{ j.label }}</span>
           <span class="meta-time">{{ fmtTime(j.created_at) }}</span>
-          <span v-if="j.summary" class="badge-grade" :class="gradeOf(j.summary.total_a, j.summary.total_b).cls" :title="'状态情况：数量差 ' + gradeOf(j.summary.total_a, j.summary.total_b).diff + '（偏离 ' + gradeOf(j.summary.total_a, j.summary.total_b).pct + '%）'">{{ gradeOf(j.summary.total_a, j.summary.total_b).label }}</span>
+          <span v-if="j.summary" class="badge-grade" :class="gradeOf(j.summary).cls" :title="'状态情况：数量差 ' + gradeOf(j.summary).diff + '（偏离 ' + gradeOf(j.summary).pct + '%）'">{{ gradeOf(j.summary).label }}</span>
           <span v-if="j.summary" class="count">匹配 {{ j.summary.equal }} · 差异 <b style="color:var(--diff-bar)">{{ j.summary.diff }}</b> · 缺失 {{ j.summary.only_a + j.summary.only_b }}（{{ srcA(j.config) }}有{{ srcB(j.config) }}无 {{ j.summary.only_a }} / {{ srcB(j.config) }}有{{ srcA(j.config) }}无 {{ j.summary.only_b }}）</span>
           <span class="lock-ico" v-if="j.locked" title="已锁定">🔒</span>
           <span class="row-actions" @click.stop>
@@ -2517,7 +2519,7 @@ const BatchView = {
           <a class="mini-btn" :href="exportHref"
              title="导出批次明细 Excel：文件昵称 / 归属组 / 对比配置 / 对比详情（记录总数与差异情况）。已选归属组时只导出该组">⬇ 导出明细 Excel{{ groupFilter ? '（' + groupFilter + '）' : '' }}</a>
           <a class="mini-btn" :href="exportAllHref"
-             title="打包下载批次内每个表的全量导出 Excel（zip）">📦 打包下载全部表</a>
+             title="打包下载批次内每个表：全量差异CSV（与单作业导出同逻辑，含尾部区）+ 差异对比 Excel（总览+差异记录详情）（zip）">📦 打包下载全部表</a>
           <ListPager :page="pgChildren.page" :pages="pgChildren.pages" :total="pgChildren.total" :size="pgChildren.size"
                      @go="pgChildren.go" @resize="pgChildren.resize" />
         </div>
@@ -2547,7 +2549,7 @@ const BatchView = {
           <span class="jid">{{ baseName(c.file_a) }}</span>
           <span class="group-badge" v-if="(c.config||{}).group">{{ c.config.group }}</span>
           <span class="badge-status" :class="c.status">{{ c.status }}</span><span v-if="c.incr_state" class="badge-incr" :class="{ 'incr-empty': c.incr_state === '增量-空文本' }" title="增量过滤（ADDMOD）已生效">⤴ {{ c.incr_state }}</span><span v-if="c.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
-          <span v-if="c.summary" class="badge-grade" :class="gradeOf(c.summary.total_a, c.summary.total_b).cls" :title="'状态情况：数量差 ' + gradeOf(c.summary.total_a, c.summary.total_b).diff + '（偏离 ' + gradeOf(c.summary.total_a, c.summary.total_b).pct + '%）'">{{ gradeOf(c.summary.total_a, c.summary.total_b).label }}</span>
+          <span v-if="c.summary" class="badge-grade" :class="gradeOf(c.summary).cls" :title="'状态情况：数量差 ' + gradeOf(c.summary).diff + '（偏离 ' + gradeOf(c.summary).pct + '%）'">{{ gradeOf(c.summary).label }}</span>
           <span class="count" v-if="c.summary">匹配 {{ c.summary.equal }} · 差异 <b style="color:var(--diff-bar)">{{ c.summary.diff }}</b> · 缺失 {{ c.summary.only_a + c.summary.only_b }}（{{ srcA(c.config) }}有{{ srcB(c.config) }}无 {{ c.summary.only_a }} / {{ srcB(c.config) }}有{{ srcA(c.config) }}无 {{ c.summary.only_b }}）</span>
           <span class="lock-ico" v-if="c.locked" title="已锁定">🔒</span>
         </div>

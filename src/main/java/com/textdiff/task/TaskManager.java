@@ -305,13 +305,13 @@ public final class TaskManager implements AutoCloseable {
                 : Path.of(configured);
     }
 
-    /** 差异 CSV 导出：写导出目录（默认 results/{batchId}/export），同时保留全量 CSV 以维持既有行为；超 2 万条各自分片。
-     *  差异采集表（21 列）：存在差异数据行才生成（无差异不产空表）；数据行超 5 万分片直接落盘本目录。 */
+    /** 差异导出：写导出目录（默认 results/{batchId}/export），导出逻辑与页面下载一致（v0.9.17 验收需求①②：
+     *  全量 CSV 含尾部区 + 差异对比 Excel[总览+差异记录详情]）；差异采集表（21 列）：存在差异数据行才生成。 */
     private List<Path> runExport(JobRecord job) throws Exception {
         Path dir = exportDir(job);
         Files.createDirectories(dir);
-        List<Path> out = new java.util.ArrayList<>(ExportAssembler.writeFullCsv(dir, job, ExportAssembler.DATA));
-        out.addAll(ExportAssembler.writeDiffCsv(dir, job, ExportAssembler.DATA));
+        List<Path> out = new java.util.ArrayList<>(ExportAssembler.writeFullCsv(dir, job, ExportAssembler.ALL));
+        out.add(ExportAssembler.writeDiffExcel(dir, job, ExportAssembler.ALL, null));
         long caseRows = (long) job.diffCount + job.onlyACount + job.onlyBCount;
         if (caseRows <= 0 && job.diffCount < 0) { // 旧记录无完成快照 → 回退 meta.json
             JobMeta meta = ResultFiles.readMeta(Path.of(job.resultDir == null ? "" : job.resultDir));

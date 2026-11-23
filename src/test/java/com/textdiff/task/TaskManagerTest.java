@@ -34,7 +34,8 @@ class TaskManagerTest {
             for (TaskRecord t : list) {
                 if (TaskRecord.EXPORT_DIFF.equals(t.taskType)) {
                     assertEquals(TaskRecord.DONE, t.status, t.error);
-                    assertTrue(t.outputPath.endsWith("_差异.csv"), t.outputPath);
+                    // v0.9.17 验收需求②：差异导出升级为 Excel（总览+差异记录详情）
+                    assertTrue(t.outputPath.endsWith("_差异对比.xlsx"), t.outputPath);
                     assertTrue(Files.exists(Path.of(t.outputPath)));
                     assertEquals(TaskRecord.TRIGGER_AUTO, t.trigger);
                 } else {

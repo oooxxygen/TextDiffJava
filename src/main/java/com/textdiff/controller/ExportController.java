@@ -57,8 +57,10 @@ public class ExportController {
         Predicate<com.textdiff.engine.RowDiff> filter = zoneFilter(zone);
         Path dir = tmpDir().resolve("job_" + id + "_" + System.nanoTime());
         if ("diff".equals(mode)) {
-            List<Path> parts = ExportAssembler.writeDiffCsv(dir, job, filter, monitorMap(job));
-            return csvOrZip(dir, parts);
+            // v0.9.17 验收需求②：差异导出升级为 Excel——Sheet1 总览 + Sheet2 差异记录详情（原差异CSV内容）
+            Path out = ExportAssembler.writeDiffExcel(dir, job, filter, monitorMap(job));
+            return fileDownload(out,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         }
         if ("fields".equals(mode)) {
             List<Path> parts = ExportAssembler.writeDiffFieldsCsv(dir, job, filter);
@@ -104,13 +106,13 @@ public class ExportController {
         return m;
     }
 
-    /** 单作业合并包：全量 + 差异（各含分片）。 */
+    /** 单作业合并包：全量 + 差异对比 Excel（导出逻辑与页面单作业导出一致，zone=all 含尾部区）。 */
     @GetMapping("/jobs/{id}/export-all")
     public ResponseEntity<byte[]> exportJobAll(@PathVariable String id) {
         JobRecord job = require(id);
         Path dir = tmpDir().resolve("joball_" + id + "_" + System.nanoTime());
-        List<Path> files = new ArrayList<>(ExportAssembler.writeFullCsv(dir, job, ExportAssembler.DATA));
-        files.addAll(ExportAssembler.writeDiffCsv(dir, job, ExportAssembler.DATA, monitorMap(job)));
+        List<Path> files = new ArrayList<>(ExportAssembler.writeFullCsv(dir, job, ExportAssembler.ALL));
+        files.add(ExportAssembler.writeDiffExcel(dir, job, ExportAssembler.ALL, monitorMap(job)));
         Path zip = dir.resolve("导出_" + job.id + ".zip");
         ExportAssembler.zip(zip, files);
         return zipDownload(zip);
@@ -146,10 +148,14 @@ public class ExportController {
         if (jobs.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "无可导出的子作业");
         Path dir = tmpDir().resolve("batchdetail_" + id + "_" + System.nanoTime());
         Path out = dir.resolve("批次明细_" + id + ".xlsx");
-        com.textdiff.export.BatchDetailExcel.write(out, jobs, fieldMaps);
+        com.textdiff.export.BatchDetailExcel.write(out, jobs, fieldMaps, this::groupOfJob);
         return fileDownload(out, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     }
 
+    /**
+     * 批次打包（需求①）：每个子作业导出逻辑与页面单作业导出一致——全量 CSV（zone=all，含尾部区）+
+     * 差异对比 Excel（Sheet1 总览 + Sheet2 差异记录详情），打 ZIP。
+     */
     private ResponseEntity<byte[]> batchZip(String id, String group, boolean includeFull) {
         var batch = store.getBatch(id);
         if (batch == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "批次不存在: " + id);
@@ -158,9 +164,9 @@ public class ExportController {
         for (JobRecord j : store.listJobs(id)) {
             if (group != null && !group.isBlank() && !group.equals(groupOfJob(j))) continue;
             if (includeFull) {
-                files.addAll(ExportAssembler.writeFullCsv(dir, j, ExportAssembler.DATA));
+                files.addAll(ExportAssembler.writeFullCsv(dir, j, ExportAssembler.ALL));
             }
-            files.addAll(ExportAssembler.writeDiffCsv(dir, j, ExportAssembler.DATA, monitorMap(j)));
+            files.add(ExportAssembler.writeDiffExcel(dir, j, ExportAssembler.ALL, monitorMap(j)));
         }
         if (files.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "无可导出的子作业");
         Path zip = dir.resolve("批次_" + id + ".zip");

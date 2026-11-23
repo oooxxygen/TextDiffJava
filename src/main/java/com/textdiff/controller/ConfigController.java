@@ -74,6 +74,7 @@ public class ConfigController {
         java.util.Set<String> seen = new java.util.HashSet<>();
         int bad = 0;
         boolean bySource = source != null && !source.isBlank();
+        boolean searching = q != null && !q.isBlank(); // 需求⑤：搜索覆盖全部配置文件，不去重（另存为文件的同名条目也可见）
         // 同（昵称+通配名）规则在多个文件共存的清单（需求⑤提示用：use_all 生效优先级=来源文件所列者）
         Map<String, java.util.List<String>> fileHits = new java.util.LinkedHashMap<>();
         for (Map.Entry<String, String> e : readAllOrdered().entrySet()) {
@@ -91,8 +92,8 @@ public class ConfigController {
                     if (q != null && !q.isBlank()
                             && !cfg.nickname.contains(q) && !cfg.fileGlob.contains(q)) continue;
                     // 指定 source = 逐文件展平（新增配置条目选择器：列出该文件全部条目，不做跨文件去重——
-                    // 同名规则被独立文件遮蔽时仍可从 current.conf 带入）
-                    if (!bySource && !seen.add(cfg.nickname + "\u0000" + cfg.fileGlob)) continue;
+                    // 同名规则被独立文件遮蔽时仍可从 current.conf 带入）；搜索时同样展示全部匹配条目
+                    if (!bySource && !searching && !seen.add(cfg.nickname + "\u0000" + cfg.fileGlob)) continue;
                     Map<String, Object> m = ApiPayloads.configMap(cfg, e.getKey());
                     m.put("line_no", lineNo);
                     out.add(m);

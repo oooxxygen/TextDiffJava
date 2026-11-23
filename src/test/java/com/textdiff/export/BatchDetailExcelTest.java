@@ -42,32 +42,34 @@ class BatchDetailExcelTest {
                 "a.txt", "b.txt", dir.resolve("missing").toString());
 
         Path out = dir.resolve("批次明细.xlsx");
-        BatchDetailExcel.write(out, java.util.List.of(j1, j2), null);
+        BatchDetailExcel.write(out, java.util.List.of(j1, j2), null, j -> "j1".equals(j.id) ? "bocs_dep" : "");
 
         try (Workbook wb = new XSSFWorkbook(out.toFile())) {
             assertEquals("对比总览", wb.getSheetName(0));
             assertEquals("差异栏位", wb.getSheetName(1));
+            assertEquals("归属组", wb.getSheetAt(0).getRow(0).getCell(1).getStringCellValue());
+            assertEquals("bocs_dep", wb.getSheetAt(0).getRow(1).getCell(1).getStringCellValue());
 
             Sheet ov = wb.getSheet("对比总览");
             Row head = ov.getRow(0);
             assertEquals("表名昵称", head.getCell(0).getStringCellValue());
-            assertEquals("键值匹配有差异", head.getCell(4).getStringCellValue());
-            assertEquals("状态情况", head.getCell(7).getStringCellValue());
-            assertEquals("总体评判", head.getCell(8).getStringCellValue());
-            assertEquals("增量模式", head.getCell(9).getStringCellValue());
-            assertEquals("对比配置（列号+名称）", head.getCell(10).getStringCellValue());
+            assertEquals("键值匹配有差异", head.getCell(5).getStringCellValue());
+            assertEquals("状态情况", head.getCell(8).getStringCellValue());
+            assertEquals("总体评判", head.getCell(9).getStringCellValue());
+            assertEquals("增量模式", head.getCell(10).getStringCellValue());
+            assertEquals("对比配置（列号+名称）", head.getCell(11).getStringCellValue());
             Row r1 = ov.getRow(1);
             assertEquals("INCT0101 · 01A3020D.v01", r1.getCell(0).getStringCellValue());
-            assertEquals(100, (long) r1.getCell(1).getNumericCellValue());
-            assertEquals(98, (long) r1.getCell(2).getNumericCellValue());
-            assertEquals(40, (long) r1.getCell(3).getNumericCellValue());
-            assertEquals(55, (long) r1.getCell(4).getNumericCellValue());
-            assertEquals(3, (long) r1.getCell(5).getNumericCellValue());
-            assertEquals(2, (long) r1.getCell(6).getNumericCellValue());
-            assertTrue(r1.getCell(7).getStringCellValue().contains("数量差 2"));
-            assertEquals("正常", r1.getCell(8).getStringCellValue()); // |100-98|/(198/2)≈2%
-            assertEquals("", r1.getCell(9).getStringCellValue()); // 未启用增量
-            String cfg1 = r1.getCell(10).getStringCellValue();
+            assertEquals(100, (long) r1.getCell(2).getNumericCellValue());
+            assertEquals(98, (long) r1.getCell(3).getNumericCellValue());
+            assertEquals(40, (long) r1.getCell(4).getNumericCellValue());
+            assertEquals(55, (long) r1.getCell(5).getNumericCellValue());
+            assertEquals(3, (long) r1.getCell(6).getNumericCellValue());
+            assertEquals(2, (long) r1.getCell(7).getNumericCellValue());
+            assertTrue(r1.getCell(8).getStringCellValue().contains("数量差 2"));
+            assertEquals("正常", r1.getCell(9).getStringCellValue()); // |100-98|/(198/2)≈2%
+            assertEquals("", r1.getCell(10).getStringCellValue()); // 未启用增量
+            String cfg1 = r1.getCell(11).getStringCellValue();
             assertTrue(cfg1.contains("主键 KEYSEQ="), cfg1);
             assertTrue(cfg1.contains("共 3 列"), cfg1);
             assertTrue(cfg1.contains("第3列"), cfg1);
@@ -75,7 +77,7 @@ class BatchDetailExcelTest {
             assertTrue(cfg1.contains("分隔符"), cfg1);
             Row r2 = ov.getRow(2);
             assertEquals("NORESULT · x.txt", r2.getCell(0).getStringCellValue());
-            assertEquals("（无结果数据）", r2.getCell(1).getStringCellValue());
+            assertEquals("（无结果数据）", r2.getCell(2).getStringCellValue());
 
             Sheet dc = wb.getSheet("差异栏位");
             assertEquals("表名昵称", dc.getRow(0).getCell(0).getStringCellValue());

@@ -255,7 +255,26 @@ public final class CsvExporter {
                                           List<com.textdiff.store.JobMeta.DynCol> dyn,
                                           java.util.Map<Integer, com.textdiff.store.DiscardField> monitor,
                                           String srcA, String srcB) throws IOException {
-        if (Status.SECTION_TRAILER.equals(r.section)) return false;
+        String[] parts = diffRecParts(r, colNames, dyn, monitor, srcA, srcB);
+        if (parts == null) return false;
+        w.write(escape(parts[0]));
+        w.write(",");
+        w.write(parts[1]);
+        w.write(",");
+        w.write(escape(parts[2]));
+        w.write("\r\n");
+        return true;
+    }
+
+    /**
+     * 差异记录内容（CSV/Excel 导出共用）：{@code [键值, 状态, 差异明细]}，非差异记录返回 null。
+     * 差异明细格式与 writeDiffRecRow 一致：{@code [栏位不一致 @N] A:'x' B:'y'}（关注栏位 [X-YYYY @N] 前缀）。
+     */
+    public static String[] diffRecParts(RowDiff r, List<String> colNames,
+                                        List<com.textdiff.store.JobMeta.DynCol> dyn,
+                                        java.util.Map<Integer, com.textdiff.store.DiscardField> monitor,
+                                        String srcA, String srcB) {
+        if (Status.SECTION_TRAILER.equals(r.section)) return null;
         List<String> names = colNames == null ? List.of() : colNames;
         String key = displayKey(r.key);
         if (Status.DIFF.equals(r.status)) {
@@ -268,30 +287,19 @@ public final class CsvExporter {
                         .append(blankTo(srcB, "B")).append(":'")
                         .append(recVal(r, col, names, dyn, false)).append("'");
             }
-            if (sb.length() == 0) return false;
-            w.write(escape(key));
-            w.write(",");
-            w.write(statusText(r.status, srcA, srcB));
-            w.write(",");
-            w.write(escape(sb.toString()));
-            w.write("\r\n");
-            return true;
+            if (sb.length() == 0) return null;
+            return new String[]{key, statusText(r.status, srcA, srcB), sb.toString()};
         }
         if (Status.UNMATCHED_A.equals(r.status) || Status.UNMATCHED_B.equals(r.status)) {
             boolean sideA = Status.UNMATCHED_A.equals(r.status);
             String pk = pkOf(r, sideA);
-            w.write(escape(key.isEmpty() ? pk : key));
-            w.write(",");
-            w.write(statusText(r.status, srcA, srcB));
-            w.write(",");
-            w.write(escape(sideA ? "[仅" + blankTo(srcA, "A") + "存在] " + blankTo(srcA, "A") + ":'" + pk
-                                     + "' " + blankTo(srcB, "B") + ":''"
-                                 : "[仅" + blankTo(srcB, "B") + "存在] " + blankTo(srcA, "A") + ":'' "
-                                     + blankTo(srcB, "B") + ":'" + pk + "'"));
-            w.write("\r\n");
-            return true;
+            return new String[]{key.isEmpty() ? pk : key, statusText(r.status, srcA, srcB),
+                    sideA ? "[仅" + blankTo(srcA, "A") + "存在] " + blankTo(srcA, "A") + ":'" + pk
+                             + "' " + blankTo(srcB, "B") + ":''"
+                          : "[仅" + blankTo(srcB, "B") + "存在] " + blankTo(srcA, "A") + ":'' "
+                              + blankTo(srcB, "B") + ":'" + pk + "'"};
         }
-        return false;
+        return null;
     }
 
     /** 差异明细行前缀：关注栏位（类型 1~4）→ [X-YYYY，否则 [栏位不一致（与 @N 在调用处拼接）。 */

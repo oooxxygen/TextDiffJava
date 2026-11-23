@@ -39,6 +39,25 @@ public final class PromptRenderer {
 
     private PromptRenderer() {}
 
+    /**
+     * 作业栏位映射匹配（v0.9.17 验收需求⑥）：对比配置昵称（configLine 首段）精确命中 type_parm 优先，
+     * 其次文件名通配宽匹配（含 #占位符 回退）——映射按昵称/文件名通配/配置文件关联，
+     * 不要求映射的 report_file_name 与实际对比文件名完全一致。maps 可空；文件名为空时仅按昵称。
+     */
+    public static String reportIdForJob(JobRecord job, com.textdiff.store.FieldMapStore maps) {
+        if (maps == null || job == null) return null;
+        String nick = null;
+        try {
+            nick = com.textdiff.engine.Rules.parseLegacy(job.configLine == null ? "" : job.configLine,
+                    " | ", "|||||").nickname;
+        } catch (RuntimeException ignored) {
+        }
+        if (nick == null || nick.isBlank()) nick = job.nickname;
+        if (nick != null && !nick.isBlank() && maps.typeByReport(nick.strip()) != null) return nick.strip();
+        return job.fileA == null || job.fileA.isBlank() ? null : maps.reportIdForFileWide(job.fileA);
+    }
+
+
     /** 渲染并写入 prompt.md（全量预算），返回文件路径。fieldMaps 可空（无栏位属性段）。 */
     public static Path render(Path resultDir, JobRecord job, JobMeta meta, Summary summary,
                               Path overrideTemplateDir, com.textdiff.store.FieldMapStore fieldMaps) {
@@ -254,10 +273,10 @@ public final class PromptRenderer {
     }
 
     public static String fieldAttributeTable(JobRecord job, com.textdiff.store.FieldMapStore maps, Budget budget) {
-        if (maps == null || job.fileA == null || job.fileA.isBlank()) {
+        if (maps == null) {
             return "（未导入源系统字段配置，无栏位属性）";
         }
-        String reportId = maps.reportIdForFile(job.fileA);
+        String reportId = reportIdForJob(job, maps);
         java.util.List<com.textdiff.store.FieldMaps.ReportField> fs =
                 reportId == null ? java.util.List.of() : maps.fieldsFor(reportId);
         if (fs.isEmpty()) return "（该文件未匹配到源系统字段配置，无栏位属性）";
@@ -333,8 +352,8 @@ public final class PromptRenderer {
                                                            com.textdiff.store.FieldMapStore maps) {
         java.util.Map<Integer, String> out = new java.util.HashMap<>();
         for (int i = 0; i < cfg.columnNames.size(); i++) out.put(i, cfg.columnNames.get(i));
-        if (maps != null && job.fileA != null && !job.fileA.isBlank()) {
-            String reportId = maps.reportIdForFile(job.fileA);
+        if (maps != null) {
+            String reportId = reportIdForJob(job, maps);
             if (reportId != null) {
                 for (com.textdiff.store.FieldMaps.ReportField f : maps.fieldsFor(reportId)) {
                     out.putIfAbsent(f.colIndex(), f.fieldName());

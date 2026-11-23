@@ -29,7 +29,8 @@ public final class BatchDetailExcel {
 
     private BatchDetailExcel() {}
 
-    public static Path write(Path out, List<JobRecord> jobs, com.textdiff.store.FieldMapStore maps) {
+    public static Path write(Path out, List<JobRecord> jobs, com.textdiff.store.FieldMapStore maps,
+                             java.util.function.Function<JobRecord, String> groupOf) {
         try (Workbook wb = new XSSFWorkbook()) {
             CellStyle head = wb.createCellStyle();
             Font bold = wb.createFont();
@@ -40,7 +41,7 @@ public final class BatchDetailExcel {
             CellStyle wrap = wb.createCellStyle();
             wrap.setWrapText(true);
 
-            sheetOverview(wb, head, wrap, jobs, maps);
+            sheetOverview(wb, head, wrap, jobs, maps, groupOf);
             sheetDiffCols(wb, head, jobs, maps);
 
             if (out.getParent() != null) java.nio.file.Files.createDirectories(out.getParent());
@@ -53,46 +54,50 @@ public final class BatchDetailExcel {
         }
     }
 
-    /** Sheet1 对比总览：每表数量对比 + 状态情况/总体评判 + 对比配置。 */
+    /** Sheet1 对比总览：每表数量对比 + 状态情况/总体评判 + 对比配置（v0.9.17 验收需求④：新增归属组列）。 */
     private static void sheetOverview(Workbook wb, CellStyle head, CellStyle wrap,
-                                      List<JobRecord> jobs, com.textdiff.store.FieldMapStore maps) {
+                                      List<JobRecord> jobs, com.textdiff.store.FieldMapStore maps,
+                                      java.util.function.Function<JobRecord, String> groupOf) {
         Sheet sheet = wb.createSheet("对比总览");
         String[] src = batchSrc(jobs); // 需求①别名：批次级来源名（首个非默认 SRCA/SRCB），缺省 A/B
         String srcA = src[0], srcB = src[1];
-        String[] headers = {"表名昵称", srcA + " 总数", srcB + " 总数", "完全匹配",
+        String[] headers = {"表名昵称", "归属组", srcA + " 总数", srcB + " 总数", "完全匹配",
                 "键值匹配有差异", "未匹配（仅" + srcA + "）", "未匹配（仅" + srcB + "）",
                 "状态情况", "总体评判", "增量模式", "对比配置（列号+名称）"};
         Row hr = sheet.createRow(0);
         for (int i = 0; i < headers.length; i++) cell(hr, i, headers[i]).setCellStyle(head);
         sheet.setColumnWidth(0, 28 * 256);
-        for (int i = 1; i <= 6; i++) sheet.setColumnWidth(i, 13 * 256);
-        sheet.setColumnWidth(7, 26 * 256);
-        sheet.setColumnWidth(8, 12 * 256);
-        sheet.setColumnWidth(9, 20 * 256);
-        sheet.setColumnWidth(10, 100 * 256);
+        sheet.setColumnWidth(1, 16 * 256);
+        for (int i = 2; i <= 7; i++) sheet.setColumnWidth(i, 13 * 256);
+        sheet.setColumnWidth(8, 26 * 256);
+        sheet.setColumnWidth(9, 12 * 256);
+        sheet.setColumnWidth(10, 20 * 256);
+        sheet.setColumnWidth(11, 100 * 256);
 
         int r = 1;
         for (JobRecord job : jobs) {
             Row row = sheet.createRow(r++);
             cell(row, 0, job.nickname);
+            String group = groupOf == null ? null : groupOf.apply(job);
+            cell(row, 1, group == null || group.isBlank() ? "" : group);
             Summary s = readSummary(job);
             if (s != null) {
-                cell(row, 1, s.totalA);
-                cell(row, 2, s.totalB);
-                cell(row, 3, s.equal);
-                cell(row, 4, s.diff);
-                cell(row, 5, s.onlyA);
-                cell(row, 6, s.onlyB);
+                cell(row, 2, s.totalA);
+                cell(row, 3, s.totalB);
+                cell(row, 4, s.equal);
+                cell(row, 5, s.diff);
+                cell(row, 6, s.onlyA);
+                cell(row, 7, s.onlyB);
                 DiffGrade.Grade g = DiffGrade.of(s.totalA, s.totalB);
-                cell(row, 7, g.desc());
-                cell(row, 8, g.label());
+                cell(row, 8, g.desc());
+                cell(row, 9, g.label());
             } else {
-                for (int i = 1; i <= 6; i++) cell(row, i, "（无结果数据）");
-                cell(row, 7, "—");
+                for (int i = 2; i <= 7; i++) cell(row, i, "（无结果数据）");
                 cell(row, 8, "—");
+                cell(row, 9, "—");
             }
-            cell(row, 9, incrLabel(job)); // 增量模式：过滤-增量模式（空文本）/ 过滤-增量模式 / 空
-            Cell cfg = cell(row, 10, configDesc(job, maps));
+            cell(row, 10, incrLabel(job)); // 增量模式：过滤-增量模式（空文本）/ 过滤-增量模式 / 空
+            Cell cfg = cell(row, 11, configDesc(job, maps));
             cfg.setCellStyle(wrap);
         }
     }

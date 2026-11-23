@@ -111,6 +111,17 @@ public final class ExportAssembler {
     }
 
     /**
+     * 差异对比 Excel（v0.9.17 验收需求②）：{base}_差异对比.xlsx——Sheet1「总览」（配置/时间/数量对比/
+     * 头部字段对照/差异栏位分布）+ Sheet2「差异记录详情」（差异CSV整合格式同构内容）。
+     * 单文件不切片（SXSSF 流式，差异行上限为 Excel 单表 104 万行）。
+     */
+    public static Path writeDiffExcel(Path dir, JobRecord job, Predicate<RowDiff> filter,
+                                      java.util.Map<Integer, com.textdiff.store.DiscardField> monitor) {
+        Path out = dir.resolve(base(job) + "_差异对比.xlsx");
+        return DiffDetailExcel.write(out, job, filter, monitor);
+    }
+
+    /**
      * 仅差异栏位 CSV 导出（分片，流式）：一条字段差异一行（键值/栏位号/栏位名/{srcA}值/{srcB}值）。
      * ≤2 万行单文件，超出切 {base}_仅差异栏位_001.csv…。
      */

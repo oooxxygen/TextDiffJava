@@ -42,8 +42,8 @@ public final class AiReportNamer {
     }
 
     private static String ownershipGroup(JobRecord job, FieldMapStore maps) {
-        if (maps != null && job.fileA != null && !job.fileA.isBlank()) {
-            String reportId = maps.reportIdForFile(job.fileA);
+        if (maps != null) {
+            String reportId = PromptRenderer.reportIdForJob(job, maps);
             FieldMaps.ReportType t = reportId == null ? null : maps.typeByReport(reportId);
             if (t != null && t.ownershipGroup() != null && !t.ownershipGroup().isBlank()) {
                 return t.ownershipGroup().strip();

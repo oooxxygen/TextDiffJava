@@ -162,16 +162,31 @@ class CaseExportApiTest {
             assertTrue(meta.contains("\"status\":\"done\""), meta);
             String jobId = meta.replaceAll(".*\"job_id\":\"([^\"]+)\".*", "$1");
 
-            // mode=diff：一条差异记录一行，k2 两个差异栏位整合 + [1-废弃字段 @2] 前缀；k3 单方存在主键
-            String diff = mvc.perform(get("/api/jobs/" + jobId + "/export").param("mode", "diff"))
+            // mode=diff（v0.9.17 验收需求②）：差异对比 Excel——Sheet1 总览 + Sheet2 差异记录详情
+            // （与原差异CSV整合格式同构：一条差异记录一行 + [X-YYYY @N] 前缀 + 单方存在主键）
+            byte[] diffX = mvc.perform(get("/api/jobs/" + jobId + "/export").param("mode", "diff"))
                     .andExpect(status().isOk())
-                    .andExpect(content().contentTypeCompatibleWith("text/csv"))
-                    .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-            assertTrue(diff.contains("键值,状态,差异明细"), diff);
-            assertTrue(diff.contains("[1-废弃字段 @2] A:'2' B:'9'"), diff);
-            assertTrue(diff.contains("[栏位不一致 @3] A:'b' B:'c'"), diff);
-            assertTrue(diff.contains("k3,仅A存在,[仅A存在] A:'k3' B:''"), diff); // 主键来自 key_seq 解析
-            assertFalse(diff.contains("[2-"), diff); // 栏位2 是唯一监测配置，其余走 [栏位不一致]
+                    .andExpect(content().contentType(
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                    .andReturn().getResponse().getContentAsByteArray();
+            try (XSSFWorkbook wb = new XSSFWorkbook(new ByteArrayInputStream(diffX))) {
+                assertEquals("总览", wb.getSheetName(0));
+                Sheet det = wb.getSheet("差异记录详情");
+                assertEquals("键值", det.getRow(0).getCell(0).getStringCellValue());
+                assertEquals("状态", det.getRow(0).getCell(1).getStringCellValue());
+                assertEquals("差异明细", det.getRow(0).getCell(2).getStringCellValue());
+                var rows = new java.util.LinkedHashMap<String, String[]>();
+                for (int i = 1; i <= det.getLastRowNum(); i++) {
+                    Row rr = det.getRow(i);
+                    rows.put(rr.getCell(0).getStringCellValue(),
+                            new String[]{rr.getCell(1).getStringCellValue(),
+                                    rr.getCell(2).getStringCellValue()});
+                }
+                assertEquals(2, rows.size(), "k1 完全匹配不出现：" + rows.keySet());
+                assertArrayEquals(new String[]{"有差异", "[1-废弃字段 @2] A:'2' B:'9'\n[栏位不一致 @3] A:'b' B:'c'"},
+                        rows.get("k2")); // 栏位2 是唯一监测配置，其余走 [栏位不一致]
+                assertArrayEquals(new String[]{"仅A存在", "[仅A存在] A:'k3' B:''"}, rows.get("k3"));
+            }
 
             // mode=fields：一条字段差异一行（键值/栏位号/栏位名/A值/B值）
             String fields = mvc.perform(get("/api/jobs/" + jobId + "/export").param("mode", "fields"))
