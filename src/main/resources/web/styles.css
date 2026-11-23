@@ -627,6 +627,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .toolbar .toolbar-note { font-size: 12px; color: var(--text-faint); }
 .toolbar .toolbar-count { font-size: 12px; color: var(--text-soft); white-space: nowrap; }
 
+/* 任务页工具条：两行分组——首行搜索+统计+分页，次行选中操作 | AI 跨环境传输 */
+.tasks-toolbar { flex-direction: column; align-items: stretch; gap: 0; }
+.tasks-toolbar .toolbar-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tasks-toolbar .toolbar-row + .toolbar-row { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); }
+.tasks-toolbar .toolbar-spacer { flex: 1; }
+.tasks-toolbar .toolbar-sep { width: 1px; height: 22px; background: var(--border-strong); }
+.tasks-toolbar .toolbar-group { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
 /* ---------- 按钮尺寸档位（替代内联 padding 补丁） ---------- */
 .btn.sm { padding: 5px 14px; font-size: 13px; }
 .btn.primary { background: var(--accent); color: #fff; }

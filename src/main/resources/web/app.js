@@ -3232,19 +3232,28 @@ const TaskManagerPage = {
   <div>
     <PageHeader title="任务管理" sub="对比完成后自动生成的产物任务（差异CSV导出 / AI分析）的统一重生成与清理入口" />
     <div class="card">
-      <div class="toolbar">
-        <input class="search-input" v-model="q" placeholder="🔎 搜索任务（按批次/作业/文件/产物路径）" />
-        <span class="toolbar-count">批次 {{ fBatches.length }} · 单文件作业 {{ fStandalone.length }} · 已选 {{ selTasks.size }} 项任务</span>
-        <input type="datetime-local" v-model="runAt" style="width:210px;" title="留空 = 立即执行；选择未来时间 = 定时执行" />
-        <button class="mini-btn" @click="batchRegen" :disabled="!selTasks.size">⚡ 批量重新生成（差异CSV / AI分析）</button>
-        <button class="mini-btn" @click="selTasks.clear()" :disabled="!selTasks.size">清空选择</button>
-        <a class="mini-btn" :href="aiExportHref" download
-           title="导出待执行 AI 分析任务的 prompt.md（勾选 AI 任务则仅导出所选作业，未勾选导出全部待执行）；可把 prompt 投喂外部大模型补跑后，用「导入 AI 分析结果」回填">⬇ 导出待执行 AI 任务</a>
-        <label class="mini-btn" :class="{ disabled: aiImporting }"
-               title="导入外部大模型产出的 AI 分析结果（zip 或多个 .md）：按 task.json 或文件名中 8 位作业 id 匹配，回填后作业标记为 AI 已完成">⬆ 导入 AI 分析结果<input type="file" accept=".zip,.md" multiple style="display:none;" @change="importAi" :disabled="aiImporting" /></label>
-        <span class="toolbar-note">勾选作业后提交；填了时间则到点自动执行（重启后仍恢复）</span>
-        <ListPager :page="pgBatches.page" :pages="pgBatches.pages" :total="pgBatches.total" :size="pgBatches.size"
-                   @go="pgBatches.go" @resize="pgBatches.resize" />
+      <div class="toolbar tasks-toolbar">
+        <div class="toolbar-row">
+          <input class="search-input" v-model="q" placeholder="🔎 搜索任务（按批次/作业/文件/产物路径）" />
+          <span class="toolbar-count">批次 {{ fBatches.length }} · 单文件作业 {{ fStandalone.length }} · 已选 {{ selTasks.size }} 项任务</span>
+          <span class="toolbar-spacer"></span>
+          <ListPager :page="pgBatches.page" :pages="pgBatches.pages" :total="pgBatches.total" :size="pgBatches.size"
+                     @go="pgBatches.go" @resize="pgBatches.resize" />
+        </div>
+        <div class="toolbar-row">
+          <input type="datetime-local" v-model="runAt" style="width:200px;" title="留空 = 立即执行；选择未来时间 = 定时执行" />
+          <button class="mini-btn" @click="batchRegen" :disabled="!selTasks.size">⚡ 批量重新生成（差异CSV / AI分析）</button>
+          <button class="mini-btn" @click="selTasks.clear()" :disabled="!selTasks.size">清空选择</button>
+          <span class="toolbar-note">勾选作业后提交；填了时间则到点自动执行（重启后仍恢复）</span>
+          <span class="toolbar-spacer"></span>
+          <span class="toolbar-sep"></span>
+          <span class="toolbar-group">
+            <a class="mini-btn" :href="aiExportHref" download
+               title="导出待执行 AI 分析任务的 prompt.md（勾选 AI 任务则仅导出所选作业，未勾选导出全部待执行）；可把 prompt 投喂外部大模型补跑后，用「导入 AI 分析结果」回填">⬇ 导出待执行 AI 任务</a>
+            <label class="mini-btn" :class="{ disabled: aiImporting }"
+                   title="导入外部大模型产出的 AI 分析结果（zip 或多个 .md）：按 task.json 或文件名中 8 位作业 id 匹配，回填后作业标记为 AI 已完成">⬆ 导入 AI 分析结果<input type="file" accept=".zip,.md" multiple style="display:none;" @change="importAi" :disabled="aiImporting" /></label>
+          </span>
+        </div>
       </div>
     </div>
 
