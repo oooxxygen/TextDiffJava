@@ -148,6 +148,13 @@ public final class TaskManager implements AutoCloseable {
         return o == null ? "" : o.toString();
     }
 
+    /** 不衍生默认任务（差异 CSV + AI 分析）的作业类型：报表/自定义/普通文本比对各自有专属结果页与导出。 */
+    private static boolean noDeriveType(JobRecord job) {
+        return com.textdiff.report.ReportCompareService.JOB_TYPE.equals(job.jobType)
+                || com.textdiff.custom.CustomCompareService.JOB_TYPE.equals(job.jobType)
+                || com.textdiff.textline.TextLineCompareService.JOB_TYPE.equals(job.jobType);
+    }
+
     /** 启动重放：DONE 作业补登记缺失任务；中断残留的 running/pending 重新入队（未来定时任务留给调度器到点执行）。 */
     private void backfill() {
         long now = System.currentTimeMillis() / 1000;
@@ -155,6 +162,7 @@ public final class TaskManager implements AutoCloseable {
             if (!JobRecord.DONE.equals(job.status)) continue;
             var existing = tasks.listForJob(job.id);
             if (existing.isEmpty()) {
+                if (noDeriveType(job)) continue; // 专属类型不衍生默认任务（防重启补登记 AI/CSV）
                 createDefaults(job);
                 continue;
             }
@@ -172,8 +180,7 @@ public final class TaskManager implements AutoCloseable {
     /** JobManager 完成回调：登记两条默认任务（差异 CSV 导出 + AI 分析）并执行。 */
     public void registerDefaults(JobRecord job) {
         if (!JobRecord.DONE.equals(job.status)) return;
-        if (com.textdiff.report.ReportCompareService.JOB_TYPE.equals(job.jobType)) return; // 报表对比不衍生 AI/CSV 任务
-        if (com.textdiff.custom.CustomCompareService.JOB_TYPE.equals(job.jobType)) return; // 自定义格式对比同上
+        if (noDeriveType(job)) return; // 报表/自定义/普通文本比对不衍生 AI/CSV 任务
         if (!tasks.listForJob(job.id).isEmpty()) return; // 重新触发时避免重复登记
         for (TaskRecord t : createDefaults(job)) enqueue(t);
     }
@@ -556,9 +563,8 @@ public final class TaskManager implements AutoCloseable {
         if (!JobRecord.DONE.equals(job.status)) {
             throw new IllegalStateException("作业未完成（status=" + job.status + "），仅已完成作业可导入 AI 结果");
         }
-        if (com.textdiff.report.ReportCompareService.JOB_TYPE.equals(job.jobType)
-                || com.textdiff.custom.CustomCompareService.JOB_TYPE.equals(job.jobType)) {
-            throw new IllegalStateException("该作业类型（报表/自定义对比）不衍生 AI 分析任务");
+        if (noDeriveType(job)) {
+            throw new IllegalStateException("该作业类型（报表/自定义/普通文本比对）不衍生 AI 分析任务");
         }
         Path dir = Path.of(job.resultDir == null ? "" : job.resultDir);
         Files.createDirectories(dir);

@@ -201,6 +201,7 @@ public final class BatchSummaryExcel {
             case "file", "" -> "目录对比";
             case "report" -> "报表对比";
             case "custom" -> "自定义格式对比";
+            case "textline" -> "普通文本比对";
             case "ctis" -> "CTIS对比";
             default -> String.valueOf(t);
         };

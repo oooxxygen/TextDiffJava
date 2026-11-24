@@ -195,6 +195,10 @@ public final class DiscardColsService {
             rows.addAll(coverageRows(job, fields, "自定义格式段对比不参与栏位监测"));
             return;
         }
+        if ("textline".equals(job.jobType)) {
+            rows.addAll(coverageRows(job, fields, "普通文本比对不参与栏位监测"));
+            return;
+        }
         Map<Integer, ValSet> valsA = new LinkedHashMap<>();
         Map<Integer, ValSet> valsB = new LinkedHashMap<>();
         for (DiscardField f : fields) {
@@ -310,12 +314,20 @@ public final class DiscardColsService {
     }
 
     /**
-     * 监测匹配键 = configLine 首段裸昵称。报表作业 JobRecord.nickname 为
-     * 「昵称 · 文件名」复合串，直接匹配会漏；custom 的 JSON configLine 解析失败回退原值。
+     * 昵称键：legacy 配置行取解析昵称（报表作业 JobRecord.nickname 为「昵称 · 文件名」复合串，
+     * 故不经 nickname）；JSON 配置行（普通文本比对/自定义格式，legacy 解析得「{"keypos"」之类
+     * 伪昵称）回退作业标签（配置组模式=配置昵称）或作业昵称（剥「· 整行比对」等后缀）。
      */
     public static String monitorKey(JobRecord job) {
+        String line = job.configLine == null ? "" : job.configLine;
+        if (line.strip().startsWith("{")) {
+            if (job.label != null && !job.label.isEmpty()) return job.label;
+            String nick = job.nickname == null ? "" : job.nickname;
+            int cut = nick.indexOf(" · ");
+            return cut > 0 ? nick.substring(0, cut) : nick;
+        }
         try {
-            return Rules.parseLegacy(job.configLine == null ? "" : job.configLine, " | ", "|||||").nickname;
+            return Rules.parseLegacy(line, " | ", "|||||").nickname;
         } catch (RuntimeException e) {
             return job.nickname;
         }

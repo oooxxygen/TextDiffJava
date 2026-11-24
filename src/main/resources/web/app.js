@@ -192,7 +192,7 @@ const AppToast = {
   setup() { return { t: toastState }; },
   template: `
   <transition name="toast">
-    <div v-if="t.open" class="toast toast-app" :class="t.type">{{ t.message }}</div>
+    <div v-if="t.open" class="toast-app" :class="t.type">{{ t.message }}</div>
   </transition>`,
 };
 
@@ -2100,7 +2100,7 @@ const SubmitForm = {
 
 /* ---------- 作业列表（批次条目 + 独立作业，均可搜索过滤） ---------- */
 const JobList = {
-  emits: ["open", "open-batch", "open-split", "open-report-batch", "open-custom-batch"],
+  emits: ["open", "open-batch", "open-split", "open-report-batch", "open-custom-batch", "open-textline-batch"],
   setup(props, { emit }) {
     const batches = ref([]); const standalone = ref([]); const splitJobs = ref([]);
     const q = ref("");
@@ -2130,12 +2130,13 @@ const JobList = {
     const fBatches = computed(() => !ql.value ? batches.value : batches.value.filter(b =>
       (b.batch.batch_id + " " + b.batch.dir_a + " " + b.batch.dir_b + " " + b.batch.config_source
        + " " + (b.batch.label || "")).toLowerCase().includes(ql.value)));
-    // 报表对比批次：徽标区分 + 点击进报表批次视图；自定义格式对比批次同理；CTIS 批次走普通文件批次视图
+    // 报表对比批次：徽标区分 + 点击进报表批次视图；自定义格式对比批次同理；普通文本比对批次同理；CTIS 批次走普通文件批次视图
     const isReport = (b) => (b.batch || {}).batch_type === "report";
     const isCustom = (b) => (b.batch || {}).batch_type === "custom";
+    const isTextLine = (b) => (b.batch || {}).batch_type === "textline";
     const isCtis = (b) => (b.batch || {}).batch_type === "ctis";
     const openBatchEntry = (b) => emit(isReport(b) ? "open-report-batch"
-        : isCustom(b) ? "open-custom-batch" : "open-batch", b.batch.batch_id);
+        : isCustom(b) ? "open-custom-batch" : isTextLine(b) ? "open-textline-batch" : "open-batch", b.batch.batch_id);
     // 需求：报表对比结果在结果界面独立成卡，与文件/段对比一并查看；from 标记让返回键回到本页
     const fReportBatches = computed(() => fBatches.value.filter(isReport));
     const fFileBatches = computed(() => fBatches.value.filter(b => !isReport(b)));
@@ -2216,7 +2217,7 @@ const JobList = {
     return { batches, standalone, splitJobs, q, fBatches, fFileBatches, fReportBatches, fJobs, fSplit,
              pgReport, pgFile, pgJobs, pgSplit,
              fmtTime, srcA, srcB, gradeOf,
-             isReport, isCustom, isCtis, openBatchEntry, openReportBatchFromList,
+             isReport, isCustom, isCtis, isTextLine, openBatchEntry, openReportBatchFromList,
              open: (id) => emit("open", id), openBatch: (id) => emit("open-batch", id),
              openSplit: (id) => emit("open-split", id),
              lockJob, unlockJob, delJob, lockBatch, unlockBatch, delBatch,
@@ -2279,6 +2280,7 @@ const JobList = {
           <input class="row-check" type="checkbox" :checked="isBatchSel(b.batch.batch_id)" @click.stop="toggleBatch(b.batch.batch_id)" />
           <span class="nick-badge" v-if="isCtis(b)" title="CTIS 文本对比批次">🔀 CTIS</span>
           <span class="nick-badge" v-else-if="isCustom(b)" title="自定义格式对比批次">📐 段对比</span>
+          <span class="nick-badge" v-else-if="isTextLine(b)" title="普通文本比对批次">📄 整行比对</span>
           <span class="jid">{{ b.batch.batch_id }}</span>
           <span class="badge-status" :class="b.status">{{ b.status }}</span>
           <span class="files">{{ b.batch.dir_a }} ↔ {{ b.batch.dir_b }}</span>
@@ -2837,6 +2839,25 @@ const SettingsPage = {
       catch (e) { notify(e.message, "error"); }
     }
 
+    // ---- 普通文本比对配置 导入/导出（需求⑤：设置页独立 section）----
+    const tl = reactive({ busy: false, ok: null, msg: "" });
+    async function importTl(ev) {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      tl.busy = true; tl.msg = ""; tl.ok = null;
+      try {
+        const text = await f.text();
+        const parsed = JSON.parse(text);
+        const items = Array.isArray(parsed) ? parsed : (parsed.configs || parsed.items);
+        if (!Array.isArray(items) || !items.length) throw new Error("文件内无 configs 数组");
+        const r = await jpost("/api/textline-configs/import", { configs: items });
+        tl.ok = true;
+        tl.msg = "导入完成：保存 " + r.saved + " 条" + ((r.errors || []).length
+            ? "；失败 " + r.errors.length + " 条（" + r.errors.join("；") + "）" : "");
+      } catch (e) { tl.ok = false; tl.msg = "导入失败: " + e.message; }
+      finally { tl.busy = false; ev.target.value = ""; }
+    }
+
     return { providers, form, apiKeySet, busy, toast, test, curModels, pickProvider, save, testConn,
              splitCfgs, loadSplitConfigs, delSplitConfig,
              rt, saveRuntime, imp, onImpFiles, importStructure,
@@ -2846,7 +2867,8 @@ const SettingsPage = {
              discard, onDiscardFile, importDiscard, clearDiscard,
              dirs, loadDirs, saveDirs,
              extract, loadExtract, saveExtract,
-             jvm, loadJvm, saveJvm };
+             jvm, loadJvm, saveJvm,
+             tl, importTl };
   },
   template: `
   <div>
@@ -3001,6 +3023,18 @@ const SettingsPage = {
           <button class="btn" @click="exportConfigs('xlsx')">⬇ 导出配置 Excel</button>
           <span v-if="base.msg" :style="{ color: base.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ base.msg }}</span>
           <span v-if="xl.msg" :style="{ color: xl.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ xl.msg }}</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">📄 普通文本比对配置 导入/导出</div>
+      <div class="card-body">
+        <p class="ai-hint" style="margin-top:0;">
+          普通文本比对（每行字符位置区间主键 · 整行逐字核对）的命名配置存于独立存储 <code>textline_configs.jsonl</code>，本节用于跨环境迁移：<b>导出</b>下载全部配置（昵称/配置组/文件名正则/主键区间/编码/来源）为 JSON；<b>导入</b>按昵称合并覆盖（非法条目逐条报错不中断）。</p>
+        <div class="btn-row">
+          <a class="btn" href="/api/textline-configs/export" download>⬇ 导出配置 JSON</a>
+          <label class="btn ghost" style="margin:0;">⬆ 导入配置 JSON<input type="file" accept=".json" style="display:none;" @change="importTl" :disabled="tl.busy" /></label>
+          <span v-if="tl.msg" :style="{ color: tl.ok===false ? 'var(--diff-bar)' : 'var(--eq-bar)', fontSize:'13px' }">{{ tl.msg }}</span>
         </div>
       </div>
     </div>
@@ -3646,11 +3680,66 @@ const SplitResultView = {
   <div v-else class="empty">加载中…</div>`,
 };
 
-/* ---------- 报表对比（header 模板核对） ---------- */
+/* 报表对比（header 模板核对） */
 const REPORT_STATUS = { pending: "待开始", running: "进行中", done: "已完成", error: "失败", stopped: "已终止" };
+
+/**
+ * 字符标尺（普通文本比对行明细）：每 1 字符一格的刻度条——1、5、10…间隔位置显示数字
+ * （数字右端对齐到刻度），其余为短竖线（CSS 渐变绘制，零 DOM）；光标在同一刻度上停留
+ * 超过 2 秒浮出「第 N 位」提示。随所在 .cv 横向滚动，与正文列精确对齐（同字体 1ch 步进）。
+ */
+const CharRuler = {
+  props: { len: { type: Number, default: 0 } },
+  setup(props) {
+    const tip = ref(null); // { x, y, pos }（视口坐标，fixed 定位）
+    let cur = -1, timer = null;
+    const ticks = computed(() => {
+      const out = [];
+      for (let p = 1; p <= props.len; p++) {
+        if (p === 1 || p % 5 === 0) out.push(p);
+      }
+      return out;
+    });
+    function charWidth(el) {
+      const probe = el.querySelector(".rt-probe");
+      return probe ? probe.offsetWidth : 0;
+    }
+    function onMove(e) {
+      const el = e.currentTarget;
+      const w = charWidth(el);
+      if (!w) return;
+      const r = el.getBoundingClientRect();
+      const pos = Math.min(props.len, Math.max(1, Math.floor((e.clientX - r.left) / w) + 1));
+      if (pos !== cur) {
+        cur = pos;
+        clearTimeout(timer);
+        tip.value = null;
+        timer = setTimeout(() => {
+          const rr = el.getBoundingClientRect();
+          tip.value = { x: rr.left + (cur - 1) * w + w / 2, y: rr.top - 4, pos: cur };
+        }, 2000);
+      }
+    }
+    function onLeave() {
+      clearTimeout(timer);
+      cur = -1;
+      tip.value = null;
+    }
+    onBeforeUnmount(() => clearTimeout(timer));
+    return { tip, ticks, onMove, onLeave };
+  },
+  template: `
+  <div class="cruler" @mousemove="onMove" @mouseleave="onLeave" :style="{ minWidth: len + 'ch' }">
+    <span class="rt-probe" aria-hidden="true"></span>
+    <span v-for="p in ticks" :key="p" class="rt-num" :class="{ first: p === 1 }"
+          :style="{ left: 'calc(' + (p - 1) + 'ch)' }">{{ p }}</span>
+    <span v-if="tip" class="cruler-tip" :style="{ left: tip.x + 'px', top: tip.y + 'px' }">第 {{ tip.pos }} 位</span>
+  </div>`,
+};
 
 /* 报表行渲染：业务行按栏位双栏对照（差异栏位字符级高亮），表头/表尾整行对照。 */
 const ReportRowRec = {
+  components: { CharRuler },
   props: ["row", "sourceA", "sourceB", "section", "fieldNames", "monitorMap"],
   setup(props) {
     const isOpen = ref(false); // 条目一律默认收起，点击展开（含表头/表尾块）
@@ -3696,7 +3785,11 @@ const ReportRowRec = {
     // 表头/表尾块：整块单柄横向滚动（格内容不再各自出滚动条，天然两侧联动）；
     // 业务行/折行的 A、B 格各自滚动，经 useScrollSync 跨侧联动（拖任一侧，另一侧同步）
     const isBlock = computed(() => props.section === 'header' || props.section === 'footer');
-    return { isOpen, rootRef, toggle, maxLen, isLine, isFolded, isBlock, showLcol, diffSet, segs, statusLabel, aDisp, bDisp, colName, colLabel, diffLabelText };
+    // 普通文本比对（section=line）整行对照：行内容上方显示字符标尺
+    const showRuler = computed(() => isLine.value && props.section === 'line');
+    const rulerLen = computed(() => Math.max(((aDisp.value[0] || '') + '').length,
+                                             ((bDisp.value[0] || '') + '').length));
+    return { isOpen, rootRef, toggle, maxLen, isLine, isFolded, isBlock, showLcol, diffSet, segs, statusLabel, aDisp, bDisp, colName, colLabel, diffLabelText, showRuler, rulerLen };
   },
   template: `
   <div class="rec" ref="rootRef" :class="['s-' + row.status, isOpen ? 'open' : '']">
@@ -3716,10 +3809,10 @@ const ReportRowRec = {
             <span class="lcol-item" v-for="c in row.diff_cols" :key="c" :title="colName(c)">{{ colLabel(c) }}</span>
           </div>
           <div class="gcell col-a" :class="{ diff: diffSet.has(0) }">
-            <span class="cv"><span v-for="(s,si) in segs('a', 0)" :key="si" :class="s.cls">{{ s.text }}</span></span>
+            <span class="cv"><CharRuler v-if="showRuler && rulerLen" :len="rulerLen" /><span v-for="(s,si) in segs('a', 0)" :key="si" :class="s.cls">{{ s.text }}</span></span>
           </div>
           <div class="gcell col-b" :class="{ diff: diffSet.has(0) }">
-            <span class="cv"><span v-for="(s,si) in segs('b', 0)" :key="si" :class="s.cls">{{ s.text }}</span></span>
+            <span class="cv"><CharRuler v-if="showRuler && rulerLen" :len="rulerLen" /><span v-for="(s,si) in segs('b', 0)" :key="si" :class="s.cls">{{ s.text }}</span></span>
           </div>
         </template>
         <template v-else>
@@ -4440,6 +4533,380 @@ const CustomResultView = {
   <div v-else class="loading">加载中…</div>`,
 };
 
+/* ---------- 普通文本比对：目录/文件路径 + 每行字符位置区间主键 + 整行逐字比对 ---------- */
+const TextLinePage = {
+  emits: ["open-batch"],
+  props: ["encodings"],
+  setup(props, { emit }) {
+    const mode = ref("path");
+    const form = reactive({ key_positions: "", file_regex: "", group: "", encoding_a: "auto", encoding_b: "auto",
+                            dir_a: "", dir_b: "", label: "", source_a: "", source_b: "" });
+    const up = reactive({ files_a: [], files_b: [] });
+    const busy = ref(false); const err = ref("");
+    const cfgs = ref([]); const cfgNick = ref("");
+    const groupNick = ref(""); // 按配置组对比：选中组名非空即组模式
+    const groupMode = computed(() => !!groupNick.value);
+    const groups = computed(() => [...new Set((cfgs.value || [])
+        .map(c => c.group_name).filter(g => g && g.trim()))]);
+    function onFiles(ev, target) { up[target] = Array.from(ev.target.files); }
+    async function loadConfigs() {
+      try { cfgs.value = (await api("/api/textline-configs")).configs || []; } catch (e) {}
+    }
+    onMounted(loadConfigs);
+    function applyCfg(c) {
+      form.key_positions = c.key_positions || "";
+      form.file_regex = c.file_regex || "";
+      form.group = c.group_name || "";
+      form.encoding_a = c.encoding_a || "auto";
+      form.encoding_b = c.encoding_b || "auto";
+      form.source_a = c.source_a || "";
+      form.source_b = c.source_b || "";
+      if (c.label) form.label = c.label;
+      err.value = "";
+      notify("已载入配置「" + c.nickname + "」");
+    }
+    async function loadCfg() {
+      if (!cfgNick.value) return;
+      try { applyCfg((await api("/api/textline-configs/get?nickname=" + encodeURIComponent(cfgNick.value))).config); }
+      catch (e) { notify(e.message, "error"); }
+    }
+    async function saveCfg() {
+      const nick = await askInput({ title: "保存普通文本比对配置", message: "为当前主键区间/文件名正则/编码/来源命名配置", value: cfgNick.value, placeholder: "配置名称" });
+      if (nick === null) return;
+      if (!nick.trim()) { notify("配置名称不能为空", "error"); return; }
+      try {
+        await jpost("/api/textline-configs", {
+          nickname: nick.trim(), key_positions: form.key_positions || "",
+          file_regex: form.file_regex || "", group_name: form.group || "",
+          encoding_a: form.encoding_a || "auto", encoding_b: form.encoding_b || "auto",
+          source_a: form.source_a || "", source_b: form.source_b || "", label: form.label || "",
+        });
+        cfgNick.value = nick.trim();
+        await loadConfigs();
+        notify("配置已保存：" + nick.trim() + (form.group ? "（组：" + form.group + "）" : ""));
+      } catch (e) { notify(e.message, "error"); }
+    }
+    async function delCfg() {
+      if (!cfgNick.value) { notify("请先选择要删除的配置", "error"); return; }
+      if (!(await askConfirm("确认删除配置「" + cfgNick.value + "」？", { danger: true }))) return;
+      try {
+        await api("/api/textline-configs?nickname=" + encodeURIComponent(cfgNick.value), { method: "DELETE" });
+        cfgNick.value = ""; await loadConfigs();
+        notify("配置已删除");
+      } catch (e) { notify(e.message, "error"); }
+    }
+    function payload(dirA, dirB) {
+      // 组模式：参数全部来自组内配置，仅传组名 + 路径 + 标签
+      if (groupMode.value) {
+        return { config_group: groupNick.value, dir_a: dirA, dir_b: dirB, label: form.label || null };
+      }
+      return {
+        key_positions: form.key_positions || null, file_regex: form.file_regex || null,
+        encoding_a: form.encoding_a || null, encoding_b: form.encoding_b || null,
+        dir_a: dirA, dir_b: dirB, label: form.label || null,
+        source_a: form.source_a || null, source_b: form.source_b || null,
+      };
+    }
+    async function submitPath() {
+      err.value = "";
+      if (!form.dir_a || !form.dir_b) { err.value = "请填写文本路径 A / B（目录或单个文件）"; return; }
+      busy.value = true;
+      try {
+        const r = await jpost("/api/textline-compare", payload(form.dir_a, form.dir_b));
+        emit("open-batch", r.batch_id);
+      } catch (e) { err.value = e.message; } finally { busy.value = false; }
+    }
+    async function submitUpload() {
+      err.value = "";
+      if (!up.files_a.length || !up.files_b.length) { err.value = "请选择 A / B 两侧文本文件"; return; }
+      busy.value = true;
+      try {
+        const fd = new FormData();
+        up.files_a.forEach(f => fd.append("files_a", f));
+        up.files_b.forEach(f => fd.append("files_b", f));
+        const r = await api("/api/textline-compare/upload", { method: "POST", body: fd });
+        const r2 = await jpost("/api/textline-compare", payload(r.dir_a, r.dir_b));
+        emit("open-batch", r2.batch_id);
+      } catch (e) { err.value = e.message; } finally { busy.value = false; }
+    }
+    return { mode, form, up, busy, err, cfgs, cfgNick, groupNick, groupMode, groups,
+             onFiles, loadCfg, saveCfg, delCfg,
+             submitPath, submitUpload, encs: computed(() => props.encodings || ["auto", "utf-8"]) };
+  },
+  template: `
+  <div>
+    <PageHeader title="普通文本比对" sub="目录/文件路径指定文本，按每行字符位置区间提取主键配对，整行逐字核对（不触发 AI 分析）" />
+    <div class="card">
+      <div class="card-head">📄 新建普通文本比对（逐行主键配对 · 整行逐字比对）</div>
+      <div class="card-body">
+        <div class="star-filter" style="margin-bottom:12px;">
+          <button :class="{active: mode==='path'}" @click="mode='path'">📁 设置比对路径</button>
+          <button :class="{active: mode==='upload'}" @click="mode='upload'">⬆ 上传文件对比</button>
+        </div>
+
+        <div class="section-title">对比配置</div>
+        <div class="form-grid" style="grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:14px;">
+          <label class="field">命名配置（载入复用 · 另存当前项）
+            <div style="display:flex;gap:8px;">
+              <select v-model="cfgNick" style="flex:1;" @change="loadCfg">
+                <option value="">（未选择：直接在下方填写参数）</option>
+                <option v-for="c in cfgs" :key="c.nickname" :value="c.nickname">{{ c.nickname }}<template v-if="c.group_name"> · 组:{{ c.group_name }}</template></option>
+              </select>
+              <button class="mini-btn" style="align-self:center;" @click="saveCfg" title="将当前主键区间/文件名正则/编码/来源保存为命名配置">💾 保存</button>
+              <button class="mini-btn" style="align-self:center;" @click="delCfg" :disabled="!cfgNick" title="删除选中的命名配置">🗑 删除</button>
+            </div>
+          </label>
+          <label class="field">配置组选择（整组提交：按组内各配置的文件名正则圈定文本自动纳入核对）
+            <select v-model="groupNick">
+              <option value="">（不按组：使用下方单条参数）</option>
+              <option v-for="g in groups" :key="g" :value="g">配置组：{{ g }}（{{ cfgs.filter(c => c.group_name === g).length }} 条配置）</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="section-title">匹配参数<span v-if="groupMode" style="font-weight:400;color:var(--text-faint);">（已选配置组——参数由组内配置决定，此处忽略）</span></div>
+        <div class="form-grid" style="grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:14px;">
+          <label class="field">主键字符位置区间（可空 = 整行作主键；1-based，如 3-5；多区间 1-3,8-10）
+            <input v-model="form.key_positions" placeholder="如 3-5（每行第 3~5 位字符作主键）" spellcheck="false" :disabled="groupMode" />
+          </label>
+          <label class="field">文件名正则（可空 = 全部；支持正则或 * ? 通配，目录模式下仅命中文本纳入核对）
+            <input v-model="form.file_regex" placeholder="如 ^TRXDTA.*\.dat$ 或 *ATMP*" spellcheck="false" :disabled="groupMode" />
+          </label>
+          <label class="field">A 侧编码
+            <select v-model="form.encoding_a" :disabled="groupMode"><option v-for="e in encs" :value="e">{{ e }}</option></select>
+          </label>
+          <label class="field">B 侧编码
+            <select v-model="form.encoding_b" :disabled="groupMode"><option v-for="e in encs" :value="e">{{ e }}</option></select>
+          </label>
+        </div>
+
+        <div class="section-title">文本来源</div>
+        <div class="form-grid" style="grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:14px;">
+          <label class="field">文本路径 A（旧）
+            <input v-if="mode==='path'" v-model="form.dir_a" placeholder="目录（目录下文本统一比对）或单个文件路径" spellcheck="false" />
+            <input v-else type="file" multiple @change="onFiles($event,'files_a')" />
+          </label>
+          <label class="field">文本路径 B（新）
+            <input v-if="mode==='path'" v-model="form.dir_b" placeholder="按同名/同逻辑名配对（压缩文件解压后参与）" spellcheck="false" />
+            <input v-else type="file" multiple @change="onFiles($event,'files_b')" />
+          </label>
+        </div>
+
+        <div class="section-title">批次标识</div>
+        <div class="form-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:14px;">
+          <label class="field">批次标签（可选，显示在批次任务中）
+            <input v-model="form.label" placeholder="如 日报文本核对" />
+          </label>
+          <label class="field">A 来源名称（可选，替代“A”显示于总结报告）
+            <input v-model="form.source_a" placeholder="默认 A，如 旧线/IBM" :disabled="groupMode" />
+          </label>
+          <label class="field">B 来源名称（可选，替代“B”显示于总结报告）
+            <input v-model="form.source_b" placeholder="默认 B，如 新线/X86" :disabled="groupMode" />
+          </label>
+        </div>
+        <div class="btn-row" style="margin-top:4px;">
+          <button v-if="mode==='path'" class="btn primary" :disabled="busy" @click="submitPath">{{ busy ? '提交中…' : (groupMode ? '按配置组开始比对' : '开始整行比对') }}</button>
+          <button v-else class="btn primary" :disabled="busy" @click="submitUpload">{{ busy ? '上传并比对中…' : (groupMode ? '上传并按配置组比对' : '上传并开始整行比对') }}</button>
+          <span class="count" style="align-self:center;">{{ groupMode ? '按组：文本按文件名正则命中组内配置自动纳入核对（作业带配置昵称）' : '主键 = 每行区间提取字符串；命中行整行逐字符比对，逐字符高亮差异' }}</span>
+        </div>
+        <div class="error-box" v-if="err">{{ err }}</div>
+      </div>
+    </div>
+  </div>`,
+};
+
+/* 普通文本比对批次详情：总览 + 子作业（行数/匹配统计）。 */
+const TextLineBatchView = {
+  emits: ["open", "back", "summary"],
+  props: ["batchId"],
+  setup(props, { emit }) {
+    const ov = ref(null); const q = ref(""); let timer = null; let stopped = false;
+    async function load() {
+      if (stopped) return;
+      try {
+        ov.value = await api("/api/batches/" + props.batchId);
+        const running = (ov.value.children || []).some(c => c.status === "pending" || c.status === "running");
+        if (running) timer = setTimeout(load, 2000);
+      } catch (e) {}
+    }
+    onMounted(load);
+    onBeforeUnmount(() => { stopped = true; clearTimeout(timer); });
+    const children = computed(() => {
+      const ql = q.value.trim().toLowerCase();
+      let list = (ov.value && ov.value.children) || [];
+      return !ql ? list : list.filter(c =>
+        ((c.label || "") + baseName2(c.file_a)).toLowerCase().includes(ql));
+    });
+    async function editLabel() {
+      const cur = (ov.value && ov.value.batch && ov.value.batch.label) || "";
+      const v = await askInput({ title: "设置批次标签", message: "留空即清除标签", value: cur, placeholder: "标签内容" });
+      if (v === null) return;
+      try { await jpost("/api/batches/" + props.batchId + "/label", { label: v });
+            if (ov.value && ov.value.batch) ov.value.batch.label = v; }
+      catch (e) { notify(e.message, "error"); }
+    }
+    function baseName2(p) { return (p || "").split(/[\\/]/).pop(); }
+    const pgChildren = usePager(() => children.value, 100);
+    watch(q, () => pgChildren.reset());
+    const srcA = computed(() => {
+      for (const c of (ov.value && ov.value.children) || []) {
+        const s = (c.config || {}).source_a;
+        if (s && s !== "A") return s;
+      }
+      return "A";
+    });
+    // config_source（JSON 行）转友好文案：主键区间 + 编码
+    const cfgText = computed(() => {
+      const raw = (ov.value && ov.value.batch && ov.value.batch.config_source) || "";
+      try {
+        const j = JSON.parse(raw);
+        return (j.keypos ? "主键区间 " + j.keypos : "整行作主键")
+            + " · 编码 " + (j.enca || "auto") + " / " + (j.encb || "auto");
+      } catch (e) {
+        return raw;
+      }
+    });
+    const srcB = computed(() => {
+      for (const c of (ov.value && ov.value.children) || []) {
+        const s = (c.config || {}).source_b;
+        if (s && s !== "B") return s;
+      }
+      return "B";
+    });
+    return { ov, q, children, pgChildren, fmtTime, baseName: baseName2, editLabel, REPORT_STATUS, srcA, srcB, cfgText,
+             open: (id) => emit("open", id), goBack: () => emit("back") };
+  },
+  template: `
+  <div v-if="ov">
+    <PageHeader back-text="返回普通文本比对" @back="goBack" title="普通文本比对批次">
+      <template #meta>
+        <span class="jid">{{ ov.batch.batch_id }}</span>
+        <span class="group-badge" v-if="ov.batch.label">🏷 {{ ov.batch.label }}</span>
+        <button class="mini-btn" @click="editLabel">{{ ov.batch.label ? '改标签' : '加标签' }}</button>
+        <span class="badge-status" :class="ov.status">{{ REPORT_STATUS[ov.status] || ov.status }}</span>
+      </template>
+      <template #actions>
+        <button class="mini-btn" @click="$emit('summary')"
+                title="打开批次情况总结（概览 / 偏离度 Top / 关注字段监测，可下载 HTML）">📋 批次情况总结</button>
+      </template>
+    </PageHeader>
+    <div class="card">
+      <div class="card-head">📄 批次概况</div>
+      <div class="card-body">
+        <div class="summary-metrics">
+          <div class="metric total"><div class="num">{{ ov.total_files }}</div><div class="lbl">文件数</div></div>
+          <div class="metric diff"><div class="num">{{ ov.diff_files }}</div><div class="lbl">存在差异</div></div>
+          <div class="metric"><div class="num">{{ ov.done }}</div><div class="lbl">已完成</div></div>
+        </div>
+        <div style="margin-top:12px;font-size:12px;color:var(--text-soft);">
+          {{ srcA }}：{{ ov.batch.dir_a }}<br/>{{ srcB }}：{{ ov.batch.dir_b }}<br/>{{ cfgText }}
+        </div>
+        <div v-if="ov.batch.no_rule_files && ov.batch.no_rule_files.length" class="no-rule" style="margin-top:10px;">
+          ⚠ 未纳入核对 {{ ov.batch.no_rule_files.length }} 条：{{ ov.batch.no_rule_files.join('；') }}
+        </div>
+      </div>
+    </div>
+    <DiscardCard :batch-id="ov.batch.batch_id" />
+    <div class="card">
+      <div class="card-head">📄 整行比对结果（点击查看单文件详情）
+        <div class="head-actions">
+          <ListPager :page="pgChildren.page" :pages="pgChildren.pages" :total="pgChildren.total" :size="pgChildren.size"
+                     @go="pgChildren.go" @resize="pgChildren.resize" />
+        </div>
+      </div>
+      <div class="card-body" style="padding:12px 18px;">
+        <div class="field"><input v-model="q" placeholder="🔎 按文件名模糊搜索" /></div>
+      </div>
+      <div>
+        <div class="empty" v-if="!children.length">无匹配文本</div>
+        <div class="job-row" v-for="c in pgChildren.paged" :key="c.job_id" @click="open(c.job_id)">
+          <span class="jid">{{ baseName(c.file_a) }}</span>
+          <span class="badge-status" :class="c.status">{{ REPORT_STATUS[c.status] || c.status }}</span>
+          <span v-if="c.error" class="count" style="color:var(--diff-bar);" :title="c.error">✗ {{ c.error }}</span>
+          <span class="count" v-else-if="c.summary">
+            行数 {{ c.summary.equal + c.summary.diff + c.summary.only_a }}↔{{ c.summary.equal + c.summary.diff + c.summary.only_b }} ·
+            一致 {{ c.summary.equal }} · 有差异 <b style="color:var(--diff-bar)">{{ c.summary.diff }}</b> ·
+            仅{{ srcA }} {{ c.summary.only_a }} / 仅{{ srcB }} {{ c.summary.only_b }}
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div v-else class="loading">加载中…</div>`,
+};
+
+/* 普通文本比对结果页：摘要卡（行数/匹配统计/配置回显）+ 行差异分区（逐字符高亮）。 */
+const TextLineResultView = {
+  components: { ReportZone },
+  emits: ["back"],
+  props: ["jobId"],
+  setup(props, { emit }) {
+    const { scrollSyncOn, toggle: toggleScrollSync } = useScrollSyncToggle();
+    const sum = ref(null); let timer = null;
+    async function load() {
+      try {
+        sum.value = await api(`/api/textline-jobs/${props.jobId}/summary`);
+        const st = sum.value.status;
+        if (st === "pending" || st === "running") timer = setTimeout(load, 2000);
+      } catch (e) {}
+    }
+    onMounted(load);
+    const s = computed(() => (sum.value && sum.value.summary) || null);
+    const fileName = (p) => (p || "").split(/[\\/]/).pop();
+    const exportHref = computed(() => `/api/textline-jobs/${props.jobId}/export`);
+    const sourceA = computed(() => (sum.value && sum.value.source_a) || "A");
+    const sourceB = computed(() => (sum.value && sum.value.source_b) || "B");
+    return { sum, s, fileName, exportHref, REPORT_STATUS, sourceA, sourceB, scrollSyncOn, toggleScrollSync, goBack: () => emit("back") };
+  },
+  template: `
+  <div v-if="sum">
+    <PageHeader back-text="返回批次" @back="goBack" :title="sum.label || '普通文本比对结果'">
+      <template #meta>
+        <span class="jid">{{ fileName(sum.file_a) }} ↔ {{ fileName(sum.file_b) }}</span>
+        <span class="badge-status" :class="sum.status">{{ REPORT_STATUS[sum.status] || sum.status }}</span>
+      </template>
+      <template #actions>
+        <button class="mini-btn sync-toggle" :class="{ off: !scrollSyncOn }" @click="toggleScrollSync"
+                :title="scrollSyncOn ? '明细展开后 A/B 两侧横向滚动联动中；点击改为两侧独立滚动' : '当前两侧独立滚动；点击恢复联动'">
+          {{ scrollSyncOn ? '🔗 两侧联动：开' : '🔗 两侧联动：关' }}</button>
+        <a class="mini-btn" :href="exportHref"
+           title="仅导出有差异行与单侧行（一条一行，整行原文）">⬇ 导出差异 CSV</a>
+      </template>
+    </PageHeader>
+    <div class="card" v-if="sum.status === 'error'">
+      <div class="card-head">❌ 对比失败</div>
+      <div class="card-body"><div class="error-box">{{ sum.error }}</div></div>
+    </div>
+    <template v-else>
+      <div class="card">
+        <div class="card-head">📄 对比概览</div>
+        <div class="card-body" v-if="s">
+          <div class="summary-metrics">
+            <div class="metric total"><div class="num">{{ s.total_a }}</div><div class="lbl">行数 {{ sourceA }}</div></div>
+            <div class="metric total"><div class="num">{{ s.total_b }}</div><div class="lbl">行数 {{ sourceB }}</div></div>
+            <div class="metric"><div class="num">{{ s.equal }}</div><div class="lbl">完全一致</div></div>
+            <div class="metric diff"><div class="num">{{ s.diff }}</div><div class="lbl">有差异</div></div>
+            <div class="metric only"><div class="num">{{ s.only_a }}</div><div class="lbl">仅{{ sourceA }}有</div></div>
+            <div class="metric only"><div class="num">{{ s.only_b }}</div><div class="lbl">仅{{ sourceB }}有</div></div>
+          </div>
+          <div style="margin-top:10px;font-size:12px;color:var(--text-soft);">
+            <div>主键区间：<code>{{ s.key_positions || '（未配置：整行作主键）' }}</code>；编码 {{ sourceA }}/{{ sourceB }}：<code>{{ s.encoding_a }} / {{ s.encoding_b }}</code></div>
+            <div v-if="s.warnings && s.warnings.length" style="margin-top:4px;">⚠ {{ [...new Set(s.warnings)].join('；') }}</div>
+          </div>
+        </div>
+      </div>
+
+      <ReportZone :job-id="jobId" base="textline-jobs" section="line" zone="diff" title="行差异（主键相同、内容不同，逐字符高亮）" tone="diff"
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :key="'td' + jobId" />
+      <ReportZone :job-id="jobId" base="textline-jobs" section="line" zone="unmatched" title="行 · 单侧不匹配（仅一侧有）" tone="unmatched"
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :key="'tu' + jobId" />
+      <ReportZone :job-id="jobId" base="textline-jobs" section="line" zone="equal" title="行 · 完全一致" tone="equal"
+                  :default-open="false" :source-a="sourceA" :source-b="sourceB" :key="'te' + jobId" />
+    </template>
+  </div>
+  <div v-else class="loading">加载中…</div>`,
+};
+
 /* ---------- 配置管理页：全部文本对比配置（查询/修改/新增/删除）+ 对比配置分组（管理与 Excel 导入） ---------- */
 const ConfigManagePage = {
   components: { SeqField, ListPager },
@@ -4688,6 +5155,50 @@ const ConfigManagePage = {
       ev.target.value = "";
     }
 
+    // ---- 普通文本比对配置（textline_configs.jsonl 专属存储，需求⑤）----
+    const tlConfigs = ref([]); const tlErr = ref(""); const tlBusy = ref(false);
+    async function loadTlConfigs() {
+      tlBusy.value = true;
+      try { tlConfigs.value = (await api("/api/textline-configs")).configs || []; tlErr.value = ""; }
+      catch (e) { tlErr.value = e.message; }
+      finally { tlBusy.value = false; }
+    }
+    onMounted(loadTlConfigs);
+    const tlModal = reactive({ open: false, mode: "new", err: "",
+      form: { nickname: "", group_name: "", file_regex: "", key_positions: "",
+              encoding_a: "auto", encoding_b: "auto", source_a: "", source_b: "" } });
+    function newTlConfig() {
+      tlModal.mode = "new"; tlModal.err = "";
+      Object.assign(tlModal.form, { nickname: "", group_name: "", file_regex: "", key_positions: "",
+        encoding_a: "auto", encoding_b: "auto", source_a: "", source_b: "" });
+      tlModal.open = true;
+    }
+    function editTlConfig(c) {
+      tlModal.mode = "edit"; tlModal.err = "";
+      Object.assign(tlModal.form, { nickname: c.nickname || "", group_name: c.group_name || "",
+        file_regex: c.file_regex || "", key_positions: c.key_positions || "",
+        encoding_a: c.encoding_a || "auto", encoding_b: c.encoding_b || "auto",
+        source_a: c.source_a || "", source_b: c.source_b || "" });
+      tlModal.open = true;
+    }
+    async function saveTlConfig() {
+      tlModal.err = "";
+      if (!tlModal.form.nickname.trim()) { tlModal.err = "昵称不能为空"; return; }
+      try {
+        await jpost("/api/textline-configs", JSON.parse(JSON.stringify(tlModal.form)));
+        tlModal.open = false; loadTlConfigs();
+        notify("普通文本比对配置「" + tlModal.form.nickname + "」已保存");
+      } catch (e) { tlModal.err = "保存失败: " + e.message; }
+    }
+    async function deleteTlConfig(c) {
+      const ok = await askConfirm("删除普通文本比对配置「" + c.nickname + "」？", { danger: true });
+      if (!ok) return;
+      try {
+        await api("/api/textline-configs?nickname=" + encodeURIComponent(c.nickname), { method: "DELETE" });
+        notify("配置「" + c.nickname + "」已删除"); loadTlConfigs();
+      } catch (e) { notify("删除失败: " + e.message, "err"); }
+    }
+
     return { cfgQuery, configs, badLines, cfgErr, busy, loadConfigs, cfgPg, dups, dupMap,
              confFiles, selFile, selFileInfo,
              fileModal, newConfFile, renameConfFile, saveConfFile, deleteConfFile, loadConfFiles,
@@ -4695,7 +5206,9 @@ const ConfigManagePage = {
              saveAsModal, openSaveAs, saveAs,
              cfgModal, newConfig, editConfig, saveConfig, deleteConfig, configNicks, missCount,
              groups, grpErr, grpBusy, loadGroups, grpModal, newGroup, editGroup, saveGroup,
-             deleteGroup, importGroups, fmtTime };
+             deleteGroup, importGroups, fmtTime,
+             tlConfigs, tlErr, tlBusy, loadTlConfigs,
+             tlModal, newTlConfig, editTlConfig, saveTlConfig, deleteTlConfig };
   },
   template: `
   <div>
@@ -4788,6 +5301,41 @@ const ConfigManagePage = {
           </table>
         </div>
         <p class="hint" style="margin:8px 0 0;">e.g. 分组「日常对比配置」成员 INXH、INVM、INVM_FACC：目录对比选定该分组后，仅这三类文本读取对比，名单外文本不操作。</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">📄 普通文本比对配置（{{ tlConfigs.length }} 条 · 独立存储 textline_configs.jsonl）
+        <div class="head-actions">
+          <button class="mini-btn" @click="loadTlConfigs" :disabled="tlBusy">↻ 刷新</button>
+          <button class="mini-btn" @click="newTlConfig">＋ 新增配置</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="error-box" v-if="tlErr">{{ tlErr }}</div>
+        <div class="empty" v-if="!tlConfigs.length">尚无普通文本比对配置。可在「普通文本比对」页签提交时保存，或在此新增；配置组 = 多条配置按文件名正则圈定各自文本，提交页选组即整组核对。</div>
+        <div v-else style="overflow-x:auto;">
+          <table class="discard-table">
+            <thead><tr><th>昵称</th><th>配置组</th><th>文件名正则</th><th>主键区间</th><th>编码A/B</th>
+              <th>来源A/B</th><th>保存时间</th><th style="width:130px;">操作</th></tr></thead>
+            <tbody>
+              <tr v-for="c in tlConfigs" :key="c.nickname">
+                <td><b>{{ c.nickname }}</b></td>
+                <td>{{ c.group_name || '—' }}</td>
+                <td class="mono">{{ c.file_regex || '（全部）' }}</td>
+                <td class="mono">{{ c.key_positions || '整行' }}</td>
+                <td>{{ c.encoding_a }} / {{ c.encoding_b }}</td>
+                <td>{{ c.source_a || 'A' }} / {{ c.source_b || 'B' }}</td>
+                <td>{{ c.created_at ? fmtTime(c.created_at) : '—' }}</td>
+                <td>
+                  <button class="mini-btn" @click="editTlConfig(c)">✏️ 修改</button>
+                  <button class="mini-btn" @click="deleteTlConfig(c)">🗑 删除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hint" style="margin:8px 0 0;">普通文本比对 = 每行按字符位置区间提取主键、整行逐字核对；同组内按落库顺序求值（首条正则命中的配置生效）；导入/导出入口在「设置」页。</p>
       </div>
     </div>
 
@@ -4911,6 +5459,39 @@ const ConfigManagePage = {
         </div>
       </div>
     </div>
+
+    <!-- 普通文本比对配置 新增/修改 弹框 -->
+    <div class="modal-mask" v-if="tlModal.open" @click.self="tlModal.open=false">
+      <div class="modal">
+        <div class="modal-head">{{ tlModal.mode === 'new' ? '新增普通文本比对配置' : '修改普通文本比对配置「' + tlModal.form.nickname + '」' }}
+          <button class="modal-x" @click="tlModal.open=false">✕</button></div>
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="field"><label>昵称</label>
+              <input v-model="tlModal.form.nickname" placeholder="如 TRXDTA整行" /></div>
+            <div class="field"><label>配置组（可空；同组配置提交页可整组选择）</label>
+              <input v-model="tlModal.form.group_name" placeholder="如 日报组" /></div>
+            <div class="field mono"><label>文件名正则（可空 = 全部；支持正则或 * ? 通配）</label>
+              <input v-model="tlModal.form.file_regex" placeholder="如 ^TRXDTA.*\.dat$ 或 *ATMP*" /></div>
+            <div class="field mono"><label>主键字符位置区间（可空 = 整行作主键；1-based 如 3-5，多区间 1-3,8-10）</label>
+              <input v-model="tlModal.form.key_positions" placeholder="如 3-5" /></div>
+            <div class="field"><label>编码 A</label>
+              <select v-model="tlModal.form.encoding_a"><option v-for="e in (encodings || ['auto','utf-8','cp037','cp500','cp1047','gb18030','latin-1'])" :value="e">{{ e }}</option></select></div>
+            <div class="field"><label>编码 B</label>
+              <select v-model="tlModal.form.encoding_b"><option v-for="e in (encodings || ['auto','utf-8','cp037','cp500','cp1047','gb18030','latin-1'])" :value="e">{{ e }}</option></select></div>
+            <div class="field"><label>A 来源名称（可选）</label>
+              <input v-model="tlModal.form.source_a" placeholder="默认 A" /></div>
+            <div class="field"><label>B 来源名称（可选）</label>
+              <input v-model="tlModal.form.source_b" placeholder="默认 B" /></div>
+          </div>
+          <div class="error-box" v-if="tlModal.err">{{ tlModal.err }}</div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn ghost" @click="tlModal.open=false">取消</button>
+          <button class="btn primary" @click="saveTlConfig">保存</button>
+        </div>
+      </div>
+    </div>
   </div>`,
 };
 
@@ -4918,6 +5499,7 @@ const App = {
   components: { SubmitForm, JobList, BatchView, ResultView, SettingsPage, SplitPage, SplitResultView,
                 TaskManagerPage, ReportPage, ReportBatchView, ReportResultView,
                 CustomPage, CustomBatchView, CustomResultView, BatchSummaryPage, ConfigManagePage,
+                TextLinePage, TextLineBatchView, TextLineResultView,
                 AppDialog, AppChoice, AppBusy, AppToast },
   setup() {
     const tab = ref("submit");
@@ -4966,8 +5548,13 @@ const App = {
     const customJobId = ref(null);   // 当前查看的自定义格式对比作业
     function openCustomBatch(id) { customBatchId.value = id; tab.value = "custombatch"; }
     function openCustomJob(id) { customJobId.value = id; tab.value = "customresult"; }
+    // 普通文本比对导航
+    const textLineBatchId = ref(null); // 当前查看的普通文本比对批次
+    const textLineJobId = ref(null);   // 当前查看的普通文本比对作业
+    function openTextLineBatch(id) { textLineBatchId.value = id; tab.value = "textlinebatch"; }
+    function openTextLineJob(id) { textLineJobId.value = id; tab.value = "textlineresult"; }
     // 批次情况总结页导航：记录来源批次 tab，返回时回到对应批次详情
-    const SUMMARY_BACK = { batch: "返回批次详情", reportbatch: "返回报表批次", custombatch: "返回自定义批次" };
+    const SUMMARY_BACK = { batch: "返回批次详情", reportbatch: "返回报表批次", custombatch: "返回自定义批次", textlinebatch: "返回普通文本比对批次" };
     function openSummary(id, back) {
       summaryBatchId.value = id;
       summaryBackTab.value = back || "jobs";
@@ -4976,10 +5563,12 @@ const App = {
     const summaryBackText = computed(() => SUMMARY_BACK[summaryBackTab.value] || "返回作业列表");
     return { tab, jobId, batchId, backBatch, backTab, resultNonce, splitJobId, encodings, splitEditNick, editSplitConfig,
              reportBatchId, reportJobId, reportBackTab, customBatchId, customJobId,
+             textLineBatchId, textLineJobId,
              summaryBatchId, summaryBackTab, summaryBackText,
              onSubmitted, onBatched, openJob, openBatch, openChild, openJobFromTasks,
              openBatchFromTasks, onRerun, onResultBack, backToJobs, openSplit,
-             openReportBatch, openReportJob, openCustomBatch, openCustomJob, openSummary };
+             openReportBatch, openReportJob, openCustomBatch, openCustomJob, openSummary,
+             openTextLineBatch, openTextLineJob };
   },
   template: `
   <div class="app-header">
@@ -4988,6 +5577,7 @@ const App = {
     <button class="nav-btn" :class="tab==='ctis'?'active':''" @click="tab='ctis'">CTIS对比</button>
     <button class="nav-btn" :class="['report','reportbatch','reportresult'].includes(tab)?'active':''" @click="tab='report'">报表对比</button>
     <button class="nav-btn" :class="['custom','custombatch','customresult'].includes(tab)?'active':''" @click="tab='custom'">自定义格式对比</button>
+    <button class="nav-btn" :class="['textline','textlinebatch','textlineresult'].includes(tab)?'active':''" @click="tab='textline'">普通文本比对</button>
     <button class="nav-btn" :class="['split','splitresult'].includes(tab)?'active':''" @click="tab='split'">文本拆分</button>
     <div class="spacer"></div>
     <button class="nav-btn" :class="['jobs','batch','batchreport'].includes(tab)?'active':''" @click="tab='jobs'">作业列表</button>
@@ -5011,8 +5601,14 @@ const App = {
                      @open="openCustomJob" @summary="openSummary(customBatchId, 'custombatch')" @back="tab='custom'" />
     <CustomResultView v-else-if="tab==='customresult' && customJobId" :job-id="customJobId" :key="customJobId"
                       @back="tab='custombatch'" />
+    <TextLinePage v-else-if="tab==='textline'" :encodings="encodings" @open-batch="openTextLineBatch" />
+    <TextLineBatchView v-else-if="tab==='textlinebatch' && textLineBatchId" :batch-id="textLineBatchId" :key="textLineBatchId"
+                       @open="openTextLineJob" @summary="openSummary(textLineBatchId, 'textlinebatch')" @back="tab='textline'" />
+    <TextLineResultView v-else-if="tab==='textlineresult' && textLineJobId" :job-id="textLineJobId" :key="textLineJobId"
+                        @back="tab='textlinebatch'" />
     <JobList v-else-if="tab==='jobs'" @open="openJob" @open-batch="openBatch" @open-split="openSplit"
-             @open-report-batch="openReportBatch" @open-custom-batch="openCustomBatch" />
+             @open-report-batch="openReportBatch" @open-custom-batch="openCustomBatch"
+             @open-textline-batch="openTextLineBatch" />
     <TaskManagerPage v-else-if="tab==='tasks'" @open="openJobFromTasks" @open-batch="openBatchFromTasks" />
     <SplitPage v-else-if="tab==='split'" @open-split="openSplit" :edit-nick="splitEditNick" />
     <SplitResultView v-else-if="tab==='splitresult' && splitJobId" :job-id="splitJobId" :key="splitJobId" @back="backToJobs" />

@@ -56,11 +56,15 @@ final class ApiViews {
 
         CompareConfig cfg = Rules.parseLegacy(job.configLine,
                 ApiPayloads.JobDefaults.DELIM, ApiPayloads.JobDefaults.TRAILER);
+        // JSON 配置行（普通文本比对/自定义格式）legacy 解析得伪昵称（"{"keypos"）→ 回退作业标签/昵称
+        boolean jsonLine = job.configLine != null && job.configLine.strip().startsWith("{");
+        String displayNick = jsonLine ? jsonNick(job) : cfg.nickname;
         Map<String, Object> config = new LinkedHashMap<>();
-        config.put("nickname", cfg.nickname);
-        String owner = groupOf != null ? groupOf.apply(cfg.nickname) : null;
+        config.put("nickname", displayNick);
+        String owner = groupOf != null ? groupOf.apply(displayNick) : null;
         config.put("group", owner != null && !owner.isEmpty() ? owner
-                : (cfg.group == null || cfg.group.isEmpty() ? cfg.nickname : cfg.group));
+                : jsonLine ? displayNick
+                : (cfg.group == null || cfg.group.isEmpty() ? displayNick : cfg.group));
         String[] src = srcNamesOf(job.configLine);
         config.put("source_a", src[0]);
         config.put("source_b", src[1]);
@@ -123,6 +127,15 @@ final class ApiViews {
      * 读 srca/srcb 附加键——注意 Rules.parseLegacy 对 JSON 行<b>不抛错</b>只回默认 A/B，
      * 必须按 "{ " 前缀分流，否则 JSON 回退永不生效；均缺省 A/B。
      */
+    /** JSON 配置行（普通文本比对/自定义格式）的展示昵称：作业标签（配置组模式=配置昵称）
+     *  优先，回退作业昵称（剥「· 整行比对 / · 段对比」等后缀）；legacy 行调用方自行解析。 */
+    static String jsonNick(JobRecord job) {
+        if (job.label != null && !job.label.isEmpty()) return job.label;
+        String nick = job.nickname == null ? "" : job.nickname;
+        int cut = nick.indexOf(" · ");
+        return cut > 0 ? nick.substring(0, cut) : nick;
+    }
+
     static String[] srcNamesOf(String configLine) {
         String a = "A", b = "B";
         String line = configLine == null ? "" : configLine.strip();

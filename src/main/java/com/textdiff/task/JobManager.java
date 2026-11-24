@@ -59,6 +59,8 @@ public final class JobManager implements AutoCloseable {
     public volatile java.util.function.Consumer<String> reportRunner;
     /** 自定义格式对比作业执行器（CustomCompareService 挂载点；jobType=custom 的作业路由到这里）。 */
     public volatile java.util.function.Consumer<String> customRunner;
+    /** 普通文本比对作业执行器（TextLineCompareService 挂载点；jobType=textline 的作业路由到这里）。 */
+    public volatile java.util.function.Consumer<String> textlineRunner;
     /** 特殊编码字段映射（可空：测试/未导入场景）。作业运行时按文件名解析混合编码栏位转码。 */
     private final com.textdiff.store.CharsetMapStore charsetMaps;
     /** CTIS 动态栏位配置（可空：测试/未导入场景）。作业运行时按文件名解析虚拟子列展开规格。 */
@@ -512,6 +514,11 @@ public final class JobManager implements AutoCloseable {
         if (job != null && com.textdiff.custom.CustomCompareService.JOB_TYPE.equals(job.jobType)) {
             java.util.function.Consumer<String> cr = customRunner;
             if (cr != null) cr.accept(job.id); // 自定义格式对比作业由专用执行器消费
+            return;
+        }
+        if (job != null && com.textdiff.textline.TextLineCompareService.JOB_TYPE.equals(job.jobType)) {
+            java.util.function.Consumer<String> tr = textlineRunner;
+            if (tr != null) tr.accept(job.id); // 普通文本比对作业由专用执行器消费（压缩件自解压，不走预解压池）
             return;
         }
         if (extractService != null && extractService.shouldExtract(job)) {

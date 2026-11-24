@@ -177,6 +177,22 @@ public class WebBeansConfig {
         return svc;
     }
 
+    /** 普通文本比对命名配置存储（自定义名称保存、载入复用，JSONL）。 */
+    @Bean(destroyMethod = "close")
+    public com.textdiff.store.TextLineConfigStore textLineConfigStore(AppPaths paths) {
+        return new com.textdiff.store.TextLineConfigStore(paths.baseDir().resolve("store"));
+    }
+
+    /** 普通文本比对服务（【普通文本比对】：目录/文件路径 + 每行字符位置区间主键、整行逐字比对）；作业经 JobManager.submit 路由执行。 */
+    @Bean(destroyMethod = "close")
+    public com.textdiff.textline.TextLineCompareService textLineCompareService(
+            DualJobStore store, AppPaths paths, AppConfig cfg, JobManager jobManager) {
+        com.textdiff.textline.TextLineCompareService svc = new com.textdiff.textline.TextLineCompareService(
+                store, paths.resultsDir(), Math.max(1, cfg.engine().maxThreads()));
+        jobManager.textlineRunner = svc::run;
+        return svc;
+    }
+
     /** 关注字段监测采集（DISCARD_COLS 懒生成 + 缓存）：依赖报表服务复用其解析分支。 */
     @Bean
     public com.textdiff.export.DiscardColsService discardColsService(
