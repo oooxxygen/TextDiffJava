@@ -64,11 +64,13 @@ body {
 .app-header .spacer { flex: 1; }
 .nav-btn {
   border: 1px solid var(--border); background: var(--surface);
-  padding: 7px 14px; border-radius: var(--radius-sm); cursor: pointer;
+  padding: 7px 13px; border-radius: 999px; cursor: pointer;
   color: var(--text-soft); font-size: 13px; transition: .15s;
+  display: inline-flex; align-items: center; gap: 5px; line-height: 1;
 }
 .nav-btn:hover { border-color: var(--border-strong); color: var(--text); }
-.nav-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.nav-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); box-shadow: 0 1px 4px rgba(59, 91, 219, .25); }
+.nav-btn:disabled { opacity: .45; cursor: not-allowed; }
 
 .container { max-width: 1320px; margin: 0 auto; padding: 24px; }
 
@@ -752,6 +754,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 /* ---------- 偏离度双指标徽标（微量偏移紫 / 务必关注黄 / 严重问题红 / 正常绿）与分区搜索 ---------- */
 .badge-grade.purple { background: #ede9fe; color: #6d28d9; }
 .badge-grade.yellow { background: #fef9c3; color: #a16207; }
+/* 差异兜底（偏离度>0 但未达分级阈值，或键值不匹配）：淡黄底，淡于「务必关注」 */
+.badge-grade.fallback { background: #fdf8e7; color: #8f7405; }
 .sec-search { display: flex; align-items: center; gap: 14px; margin: 0 0 10px; flex-wrap: wrap; }
 .sec-search label { font-size: 12.5px; color: var(--text-soft); display: inline-flex; align-items: center; gap: 6px; }
 .sec-search input { border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px;

@@ -246,15 +246,17 @@ public class DiscardController {
             String nickname = DiscardColsService.monitorKey(j);
             Deviation.Metric content = Deviation.content(diff, equal);
             Deviation.Metric count = Deviation.count(totalA, totalB);
+            // 兜底标注：偏离度 >0 但未达分级阈值，或键值不匹配（单方存在）→ 先标「差异」，
+            // 已触发分级（紫/黄/红）的按原等级展示
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("nickname", nickname);
             m.put("group", discardService.groupOfNickname(nickname));
             m.put("parm_type", discardService.parmTypeOf(nickname)); // 需求②：type_parm.parm_report_type（C64/ORI 等）
             m.put("file_name", fileName(j.fileA) == null ? fileName(j.fileB) : fileName(j.fileA));
             m.put("content_ratio", Double.isNaN(content.ratio()) ? null : round4(content.ratio()));
-            m.put("content_grade", content.grade());
+            m.put("content_grade", fallbackGrade(content.grade(), content.ratio(), diff, onlyA, onlyB));
             m.put("count_ratio", round4(count.ratio()));
-            m.put("count_grade", count.grade());
+            m.put("count_grade", fallbackGrade(count.grade(), count.ratio(), diff, onlyA, onlyB));
             m.put("equal", equal);
             m.put("diff", diff);
             m.put("only_a", onlyA);
@@ -270,6 +272,14 @@ public class DiscardController {
             return Long.compare(((Number) y.get("diff")).longValue(), ((Number) x.get("diff")).longValue());
         });
         return out;
+    }
+
+    /** 兜底等级：无分级（正常/—）且偏离度 >0 或存在键值不匹配（有差异/单方存在）→「差异」；其余原样。 */
+    private static String fallbackGrade(String grade, double ratio, long diff, long onlyA, long onlyB) {
+        if (!"正常".equals(grade) && !"—".equals(grade)) return grade;
+        boolean hasDiff = diff > 0 || onlyA > 0 || onlyB > 0;
+        boolean ratioPos = !Double.isNaN(ratio) && ratio > 0;
+        return (hasDiff || ratioPos) ? "差异" : grade;
     }
 
     /** 内容偏离度比值（无已匹配记录时为 null → 按 -1 排序垫底）。 */

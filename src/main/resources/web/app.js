@@ -952,8 +952,8 @@ const BatchSummaryPage = {
     const xlsxHref = computed(() => "/api/batches/" + props.batchId + "/summary-report.xlsx");
     const STATUS_TEXT = { done: "已完成", running: "执行中", preparing: "准备中", error: "异常" };
     const d = computed(() => (p.value && p.value.discard) || {});
-    // 偏离度双指标徽标：微量偏移（紫）/ 务必关注（黄）/ 严重问题（红）/ 正常（绿）
-    const GRADE_CLS = { "微量偏移": "purple", "务必关注": "yellow", "严重问题": "severe", "正常": "ok" };
+    // 偏离度双指标徽标：微量偏移（紫）/ 务必关注（黄）/ 严重问题（红）/ 差异兜底（淡黄）/ 正常（绿）
+    const GRADE_CLS = { "微量偏移": "purple", "务必关注": "yellow", "严重问题": "severe", "差异": "fallback", "正常": "ok" };
     function gradeCls(g) { return GRADE_CLS[g] || "ok"; }
     function pct(v) { return (v * 100).toFixed(1); }
     // 分区搜索（表名 + 归属组 + 类型，AND 组合；类型为下拉选本批次出现的取值，需求②）
@@ -1056,7 +1056,7 @@ const BatchSummaryPage = {
                       <b style="margin-left:6px;">{{ pct(t.content_ratio) }}%</b>
                       <span class="badge-grade" :class="gradeCls(t.content_grade)">{{ t.content_grade }}</span>
                     </template>
-                    <template v-else>—</template>
+                    <template v-else>— <span v-if="t.content_grade === '差异'" class="badge-grade fallback">差异</span></template>
                   </td>
                   <td>
                     <span class="conc-bar count-bar" style="width:90px;"><span :style="{ width: Math.min(100, pct(t.count_ratio)) + '%' }"></span></span>
@@ -2317,7 +2317,7 @@ const JobList = {
           <span class="group-badge" v-if="j.label" :title="j.label">🏷 {{ j.label }}</span>
           <span class="meta-time">{{ fmtTime(j.created_at) }}</span>
           <span v-if="j.summary" class="badge-grade" :class="gradeOf(j.summary).cls" :title="'状态情况：数量差 ' + gradeOf(j.summary).diff + '（偏离 ' + gradeOf(j.summary).pct + '%）'">{{ gradeOf(j.summary).label }}</span>
-          <span v-if="j.summary" class="count">匹配 {{ j.summary.equal }} · 差异 <b style="color:var(--diff-bar)">{{ j.summary.diff }}</b> · 缺失 {{ j.summary.only_a + j.summary.only_b }}（{{ srcA(j.config) }}有{{ srcB(j.config) }}无 {{ j.summary.only_a }} / {{ srcB(j.config) }}有{{ srcA(j.config) }}无 {{ j.summary.only_b }}）</span>
+          <span v-if="j.summary" class="count">匹配 {{ j.summary.equal }} · 差异 <b style="color:var(--diff-bar)">{{ j.summary.diff }}</b> · <span :style="j.summary.only_a + j.summary.only_b > 0 ? 'color:var(--diff-text);font-weight:700;' : ''">缺失 {{ j.summary.only_a + j.summary.only_b }}（{{ srcA(j.config) }}有{{ srcB(j.config) }}无 {{ j.summary.only_a }} / {{ srcB(j.config) }}有{{ srcA(j.config) }}无 {{ j.summary.only_b }}）</span></span>
           <span class="lock-ico" v-if="j.locked" title="已锁定">🔒</span>
           <span class="row-actions" @click.stop>
             <button class="mini-btn" @click="editJobLabel(j)">标签</button>
@@ -2408,9 +2408,10 @@ const BatchView = {
     // 导出明细 Excel（Sheet1 对比总览：数量+配置；Sheet2 差异栏位）：随当前归属组筛选导出
     const exportHref = computed(() => "/api/batches/" + (ov.value ? ov.value.batch.batch_id : "")
       + "/export-detail" + (groupFilter.value ? "?group=" + encodeURIComponent(groupFilter.value) : ""));
-    // 打包下载：批次内每表的全量导出 Excel（zip）
+    // 打包下载：批次内每表的全量导出 Excel（zip）；已选归属组时只导该组（与导出明细一致）
     const exportAllHref = computed(() => "/api/batches/"
-      + (ov.value ? ov.value.batch.batch_id : "") + "/export-all");
+      + (ov.value ? ov.value.batch.batch_id : "") + "/export-all"
+      + (groupFilter.value ? "?group=" + encodeURIComponent(groupFilter.value) : ""));
     async function editLabel() {
       const cur = (ov.value && ov.value.batch && ov.value.batch.label) || "";
       const v = await askInput({ title: "设置批次标签", message: "留空即清除标签", value: cur, placeholder: "标签内容" });
@@ -2552,7 +2553,7 @@ const BatchView = {
           <span class="group-badge" v-if="(c.config||{}).group">{{ c.config.group }}</span>
           <span class="badge-status" :class="c.status">{{ c.status }}</span><span v-if="c.incr_state" class="badge-incr" :class="{ 'incr-empty': c.incr_state === '增量-空文本' }" title="增量过滤（ADDMOD）已生效">⤴ {{ c.incr_state }}</span><span v-if="c.key_warning" class="badge-keywarn" title="主键配置在新旧文本中存在重复键，无法唯一定位记录，该对比配置需要重检">⚠ 主键重复·配置需重检</span>
           <span v-if="c.summary" class="badge-grade" :class="gradeOf(c.summary).cls" :title="'状态情况：数量差 ' + gradeOf(c.summary).diff + '（偏离 ' + gradeOf(c.summary).pct + '%）'">{{ gradeOf(c.summary).label }}</span>
-          <span class="count" v-if="c.summary">匹配 {{ c.summary.equal }} · 差异 <b style="color:var(--diff-bar)">{{ c.summary.diff }}</b> · 缺失 {{ c.summary.only_a + c.summary.only_b }}（{{ srcA(c.config) }}有{{ srcB(c.config) }}无 {{ c.summary.only_a }} / {{ srcB(c.config) }}有{{ srcA(c.config) }}无 {{ c.summary.only_b }}）</span>
+          <span class="count" v-if="c.summary">匹配 {{ c.summary.equal }} · 差异 <b style="color:var(--diff-bar)">{{ c.summary.diff }}</b> · <span :style="c.summary.only_a + c.summary.only_b > 0 ? 'color:var(--diff-text);font-weight:700;' : ''">缺失 {{ c.summary.only_a + c.summary.only_b }}（{{ srcA(c.config) }}有{{ srcB(c.config) }}无 {{ c.summary.only_a }} / {{ srcB(c.config) }}有{{ srcA(c.config) }}无 {{ c.summary.only_b }}）</span></span>
           <span class="lock-ico" v-if="c.locked" title="已锁定">🔒</span>
         </div>
       </div>
@@ -3835,11 +3836,11 @@ const ReportRowRec = {
 /* 报表分区面板：懒加载分页读取某一 section/zone（base 可换 custom-jobs 等同构端点）。 */
 const ReportZone = {
   components: { ReportRowRec },
-  props: ["jobId", "section", "zone", "title", "tone", "defaultOpen", "sourceA", "sourceB", "base", "fieldNames", "monitorMap"],
+  props: ["jobId", "section", "zone", "title", "tone", "defaultOpen", "sourceA", "sourceB", "base", "fieldNames", "monitorMap", "initialTotal"],
   setup(props) {
     const apiBase = computed(() => props.base || "report-jobs");
     const open = ref(!!props.defaultOpen);
-    const rows = ref([]); const total = ref(0);
+    const rows = ref([]); const total = ref(props.initialTotal != null ? Number(props.initialTotal) || 0 : 0);
     const page = ref(1); const pageSize = ref(20);
     const loading = ref(false);
     async function loadPage(p) {
@@ -3850,9 +3851,19 @@ const ReportZone = {
         rows.value = r.rows || []; total.value = r.total || 0; page.value = p;
       } catch (e) {} finally { loading.value = false; }
     }
+    // 收起态即时显示实际数量：仅取 total（limit=1），不拉明细行
+    async function loadCount() {
+      try {
+        const r = await api(`/api/${apiBase.value}/${props.jobId}/result?section=${props.section}&zone=${props.zone}&offset=0&limit=1`);
+        total.value = r.total || 0;
+      } catch (e) {}
+    }
     function ensureOpen() { if (open.value && !rows.value.length && !loading.value) loadPage(1); }
     function toggle() { open.value = !open.value; if (open.value) ensureOpen(); }
-    onMounted(() => { if (open.value) ensureOpen(); }); // 默认展开的分区挂载即加载
+    onMounted(() => {
+      if (open.value) ensureOpen();               // 默认展开的分区挂载即加载
+      else if (props.initialTotal == null) loadCount(); // 收起且无预估数量：轻量请求取 total
+    });
     const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
     return { open, toggle, ensureOpen, rows, total, page, totalPages, loadPage, loading };
   },
@@ -4523,11 +4534,11 @@ const CustomResultView = {
       </div>
 
       <ReportZone :job-id="jobId" base="custom-jobs" section="segment" zone="diff" title="段差异（主键相同、内容不同）" tone="diff"
-                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :key="'cd' + jobId" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? s.diff : null" :key="'cd' + jobId" />
       <ReportZone :job-id="jobId" base="custom-jobs" section="segment" zone="unmatched" title="段 · 单侧不匹配（按主键配对后多余/缺失）" tone="unmatched"
-                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :key="'cu' + jobId" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? (s.only_a + s.only_b) : null" :key="'cu' + jobId" />
       <ReportZone :job-id="jobId" base="custom-jobs" section="segment" zone="equal" title="段 · 完全一致" tone="equal"
-                  :default-open="false" :source-a="sourceA" :source-b="sourceB" :key="'ce' + jobId" />
+                  :default-open="false" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? s.equal : null" :key="'ce' + jobId" />
     </template>
   </div>
   <div v-else class="loading">加载中…</div>`,
@@ -4897,11 +4908,11 @@ const TextLineResultView = {
       </div>
 
       <ReportZone :job-id="jobId" base="textline-jobs" section="line" zone="diff" title="行差异（主键相同、内容不同，逐字符高亮）" tone="diff"
-                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :key="'td' + jobId" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? s.diff : null" :key="'td' + jobId" />
       <ReportZone :job-id="jobId" base="textline-jobs" section="line" zone="unmatched" title="行 · 单侧不匹配（仅一侧有）" tone="unmatched"
-                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :key="'tu' + jobId" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? (s.only_a + s.only_b) : null" :key="'tu' + jobId" />
       <ReportZone :job-id="jobId" base="textline-jobs" section="line" zone="equal" title="行 · 完全一致" tone="equal"
-                  :default-open="false" :source-a="sourceA" :source-b="sourceB" :key="'te' + jobId" />
+                  :default-open="false" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? s.equal : null" :key="'te' + jobId" />
     </template>
   </div>
   <div v-else class="loading">加载中…</div>`,
@@ -5573,19 +5584,19 @@ const App = {
   template: `
   <div class="app-header">
     <div class="logo"><span class="dot"></span> TextDiff</div>
-    <button class="nav-btn" :class="tab==='submit'?'active':''" @click="tab='submit'">新建对比</button>
-    <button class="nav-btn" :class="tab==='ctis'?'active':''" @click="tab='ctis'">CTIS对比</button>
-    <button class="nav-btn" :class="['report','reportbatch','reportresult'].includes(tab)?'active':''" @click="tab='report'">报表对比</button>
-    <button class="nav-btn" :class="['custom','custombatch','customresult'].includes(tab)?'active':''" @click="tab='custom'">自定义格式对比</button>
-    <button class="nav-btn" :class="['textline','textlinebatch','textlineresult'].includes(tab)?'active':''" @click="tab='textline'">普通文本比对</button>
-    <button class="nav-btn" :class="['split','splitresult'].includes(tab)?'active':''" @click="tab='split'">文本拆分</button>
+    <button class="nav-btn" :class="tab==='submit'?'active':''" @click="tab='submit'">🆚 新建对比</button>
+    <button class="nav-btn" :class="tab==='ctis'?'active':''" @click="tab='ctis'">🗂 CTIS对比</button>
+    <button class="nav-btn" :class="['report','reportbatch','reportresult'].includes(tab)?'active':''" @click="tab='report'">🧾 报表对比</button>
+    <button class="nav-btn" :class="['custom','custombatch','customresult'].includes(tab)?'active':''" @click="tab='custom'">📐 自定义格式对比</button>
+    <button class="nav-btn" :class="['textline','textlinebatch','textlineresult'].includes(tab)?'active':''" @click="tab='textline'">📄 普通文本比对</button>
+    <button class="nav-btn" :class="['split','splitresult'].includes(tab)?'active':''" @click="tab='split'">🪓 文本拆分</button>
     <div class="spacer"></div>
-    <button class="nav-btn" :class="['jobs','batch','batchreport'].includes(tab)?'active':''" @click="tab='jobs'">作业列表</button>
-    <button class="nav-btn" :class="tab==='tasks'?'active':''" @click="tab='tasks'">任务管理</button>
-    <button class="nav-btn" :class="tab==='configmgr'?'active':''" @click="tab='configmgr'">配置管理</button>
+    <button class="nav-btn" :class="['jobs','batch','batchreport'].includes(tab)?'active':''" @click="tab='jobs'">📋 作业列表</button>
+    <button class="nav-btn" :class="tab==='tasks'?'active':''" @click="tab='tasks'">🗂 任务管理</button>
+    <button class="nav-btn" :class="tab==='configmgr'?'active':''" @click="tab='configmgr'">⚙️ 配置管理</button>
     <span class="nav-divider"></span>
-    <button class="nav-btn" :class="tab==='result'?'active':''" @click="tab='result'" :disabled="!jobId">结果</button>
-    <button class="nav-btn" :class="tab==='settings'?'active':''" @click="tab='settings'">设置</button>
+    <button class="nav-btn" :class="tab==='result'?'active':''" @click="tab='result'" :disabled="!jobId">📊 结果</button>
+    <button class="nav-btn" :class="tab==='settings'?'active':''" @click="tab='settings'">🔧 设置</button>
   </div>
   <div class="container">
     <SubmitForm v-if="tab==='submit'" :encodings="encodings" @submitted="onSubmitted" @batched="onBatched" />

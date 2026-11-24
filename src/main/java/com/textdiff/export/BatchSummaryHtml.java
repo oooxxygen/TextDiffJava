@@ -148,11 +148,13 @@ public final class BatchSummaryHtml {
                 .append("<span class=\"hit\" data-hits=\"").append(tableId).append("\"></span></div>\n");
     }
 
-    /** 偏离度单元格：占比条 + 百分比 + 等级徽章（紫/黄/红/绿）；无已匹配记录（content_ratio=null）显示「—」。 */
+    /** 偏离度单元格：占比条 + 百分比 + 等级徽章（紫/黄/红/淡黄/绿）；无已匹配记录（content_ratio=null）
+     *  显示「—」，兜底标注「差异」（键值不匹配）时徽章跟随。 */
     private static void devCell(StringBuilder sb, Map<String, Object> t, String kind) {
         Object raw = t.get(kind + "_ratio");
         if (raw == null) {
-            sb.append("<td>—</td>");
+            String grade = str(t.get(kind + "_grade"), "正常");
+            sb.append("<td>—").append("差异".equals(grade) ? badge(grade) : "").append("</td>");
             return;
         }
         double ratio = Double.parseDouble(String.valueOf(raw));
@@ -340,6 +342,7 @@ public final class BatchSummaryHtml {
                 .b-green { background: #dcfce7; color: #15803d; }
                 .b-purple { background: #ede9fe; color: #6d28d9; }
                 .b-yellow { background: #fef9c3; color: #a16207; }
+                .b-fallback { background: #fdf8e7; color: #8f7405; } /* 差异兜底：淡于务必关注 */
                 .b-red { background: #fee2e2; color: #b91c1c; }
                 .empty { color: #64748b; font-size: 13.5px; padding: 14px 4px; }
                 .note { margin-top: 10px; font-size: 12px; color: #94a3b8; line-height: 1.7; }

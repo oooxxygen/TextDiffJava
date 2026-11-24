@@ -125,10 +125,11 @@ public class ExportController {
         return batchZip(id, group, false);
     }
 
-    /** 批次全量包：每个子作业全量+差异。 */
+    /** 批次全量包：每个子作业全量+差异。group 过滤归属组（已选归属组时只导该组）。 */
     @GetMapping("/batches/{id}/export-all")
-    public ResponseEntity<byte[]> exportBatchAll(@PathVariable String id) {
-        return batchZip(id, null, true);
+    public ResponseEntity<byte[]> exportBatchAll(@PathVariable String id,
+                                                 @RequestParam(required = false) String group) {
+        return batchZip(id, group, true);
     }
 
     /**
@@ -176,8 +177,15 @@ public class ExportController {
 
     /** 作业的归属组（需求③换源）：配置行昵称 → type_parm ownership_group，查不到回退昵称本身。 */
     private String groupOfJob(JobRecord j) {
-        String nick = j.configLine != null && j.configLine.contains(":")
-                ? j.configLine.split(":", 2)[0].strip() : j.nickname;
+        // JSON 配置行（普通文本比对/自定义格式）：legacy 首段解析得「{"keypos"」伪昵称，
+        // 归属组键与展示一致（ApiViews.jsonNick：作业标签 → 作业昵称剥后缀）
+        String line = j.configLine == null ? "" : j.configLine.strip();
+        if (line.startsWith("{")) {
+            String nick = com.textdiff.controller.ApiViews.jsonNick(j);
+            String owner = fieldMaps == null ? null : fieldMaps.ownershipGroupOf(nick);
+            return owner != null && !owner.isEmpty() ? owner : nick;
+        }
+        String nick = line.contains(":") ? line.split(":", 2)[0].strip() : j.nickname;
         String owner = fieldMaps == null ? null : fieldMaps.ownershipGroupOf(nick);
         return owner != null && !owner.isEmpty() ? owner : nick;
     }

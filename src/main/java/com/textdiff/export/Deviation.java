@@ -38,12 +38,13 @@ public final class Deviation {
         return "正常";
     }
 
-    /** 徽标样式类（紫/黄/红/绿），HTML 报告与前端在线页共用语义。 */
+    /** 徽标样式类（紫/黄/红/淡黄/绿），HTML 报告与前端在线页共用语义。 */
     public static String badgeClass(String grade) {
         return switch (grade) {
             case "严重问题" -> "b-red";
             case "务必关注" -> "b-yellow";
             case "微量偏移" -> "b-purple";
+            case "差异" -> "b-fallback"; // 兜底：淡黄底，淡于「务必关注」
             default -> "b-green";
         };
     }
