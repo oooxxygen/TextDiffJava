@@ -262,14 +262,15 @@ class CompareGroupApiTest {
         }
         assertTrue(meta.contains("\"status\":\"done\""), meta);
 
-        // 差异 1 / A 总 2 = 内容偏离 50%（严重问题）；|B−A|=0 → 条数偏离 0%（正常）
+        // 差异 1 / A 总 2 = 内容偏离 50%（严重问题）；|B−A|=0 → 条数偏离 0%，
+        // 但行内存在键值差异（diff=1）→ 兜底标「差异」（偏离度兜底规则，v0.9.18 验收）
         mvc.perform(get("/api/batches/" + batchId + "/summary-report"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.deviations[0].nickname").value("SUMNICK"))
                 .andExpect(jsonPath("$.deviations[0].content_ratio").value(0.5))
                 .andExpect(jsonPath("$.deviations[0].content_grade").value("严重问题"))
                 .andExpect(jsonPath("$.deviations[0].count_ratio").value(0.0))
-                .andExpect(jsonPath("$.deviations[0].count_grade").value("正常"))
+                .andExpect(jsonPath("$.deviations[0].count_grade").value("差异"))
                 .andExpect(jsonPath("$.deviations[0].group").value(""));
         // Excel 端点：一分区一 Sheet 的 xlsx
         mvc.perform(get("/api/batches/" + batchId + "/summary-report.xlsx"))
