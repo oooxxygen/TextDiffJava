@@ -4680,8 +4680,8 @@ const TextLinePage = {
           <label class="field">主键字符位置区间（可空 = 整行作主键；1-based，如 3-5；多区间 1-3,8-10）
             <input v-model="form.key_positions" placeholder="如 3-5（每行第 3~5 位字符作主键）" spellcheck="false" :disabled="groupMode" />
           </label>
-          <label class="field">文件名正则（可空 = 全部；支持正则或 * ? 通配，目录模式下仅命中文本纳入核对）
-            <input v-model="form.file_regex" placeholder="如 ^TRXDTA.*\.dat$ 或 *ATMP*" spellcheck="false" :disabled="groupMode" />
+          <label class="field">文件名筛选（可空 = 全部；支持正则或 * ? 通配，逻辑名或原始文件名任一命中即纳入，如 01A*0D.sx1.gz.*）
+            <input v-model="form.file_regex" placeholder="如 01A*0D.sx1.gz.* 或 ^TRXDTA.*\.dat$ 或 *ATMP*" spellcheck="false" :disabled="groupMode" />
           </label>
           <label class="field">A 侧编码
             <select v-model="form.encoding_a" :disabled="groupMode"><option v-for="e in encs" :value="e">{{ e }}</option></select>
@@ -4718,7 +4718,7 @@ const TextLinePage = {
         <div class="btn-row" style="margin-top:4px;">
           <button v-if="mode==='path'" class="btn primary" :disabled="busy" @click="submitPath">{{ busy ? '提交中…' : (groupMode ? '按配置组开始比对' : '开始整行比对') }}</button>
           <button v-else class="btn primary" :disabled="busy" @click="submitUpload">{{ busy ? '上传并比对中…' : (groupMode ? '上传并按配置组比对' : '上传并开始整行比对') }}</button>
-          <span class="count" style="align-self:center;">{{ groupMode ? '按组：文本按文件名正则命中组内配置自动纳入核对（作业带配置昵称）' : '主键 = 每行区间提取字符串；命中行整行逐字符比对，逐字符高亮差异' }}</span>
+          <span class="count" style="align-self:center;">{{ groupMode ? '按组：文本按文件名筛选（正则∨通配，逻辑名∨原始名）命中组内配置自动纳入核对（作业带配置昵称）' : '主键 = 每行区间提取字符串；命中行整行逐字符比对，逐字符高亮差异' }}</span>
         </div>
         <div class="error-box" v-if="err">{{ err }}</div>
       </div>
@@ -5482,8 +5482,8 @@ const ConfigManagePage = {
               <input v-model="tlModal.form.nickname" placeholder="如 TRXDTA整行" /></div>
             <div class="field"><label>配置组（可空；同组配置提交页可整组选择）</label>
               <input v-model="tlModal.form.group_name" placeholder="如 日报组" /></div>
-            <div class="field mono"><label>文件名正则（可空 = 全部；支持正则或 * ? 通配）</label>
-              <input v-model="tlModal.form.file_regex" placeholder="如 ^TRXDTA.*\.dat$ 或 *ATMP*" /></div>
+            <div class="field mono"><label>文件名筛选（可空 = 全部；支持正则或 * ? 通配，逻辑名或原始文件名任一命中即纳入）</label>
+              <input v-model="tlModal.form.file_regex" placeholder="如 01A*0D.sx1.gz.* 或 ^TRXDTA.*\.dat$ 或 *ATMP*" /></div>
             <div class="field mono"><label>主键字符位置区间（可空 = 整行作主键；1-based 如 3-5，多区间 1-3,8-10）</label>
               <input v-model="tlModal.form.key_positions" placeholder="如 3-5" /></div>
             <div class="field"><label>编码 A</label>

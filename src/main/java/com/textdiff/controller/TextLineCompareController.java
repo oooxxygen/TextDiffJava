@@ -56,14 +56,14 @@ public class TextLineCompareController {
         return Map.of("configs", configs.all());
     }
 
-    /** 保存命名配置（同昵称覆盖；文件名正则非法拒绝）。 */
+    /** 保存命名配置（同昵称覆盖；文件名筛选正则/通配均非法时拒绝）。 */
     @PostMapping("/textline-configs")
     public Map<String, Object> saveConfig(@RequestBody TextLineSavedConfig c) {
         if (c.nickname() == null || c.nickname().isBlank()) {
             throw new IllegalArgumentException("配置昵称不能为空");
         }
         TextLineFormat.of(c.keyPositions(), c.encodingA(), c.encodingB()); // 区间语法校验
-        TextLineCompareService.compileFilter(c.fileRegex());               // 文件名正则校验
+        TextLineCompareService.compileFilter(c.fileRegex());               // 文件名筛选校验
         return Map.of("ok", true, "config", configs.save(c));
     }
 
@@ -126,9 +126,10 @@ public class TextLineCompareController {
     /**
      * 提交普通文本比对批次：文本路径 A/B（目录按逻辑名配对全部文本，压缩文件解压后
      * 按逻辑名参与配对；或直接给单文件）+ 主键区间（可空 = 整行作键）+ A/B 编码。
-     * 可选 file_regex：目录模式下仅逻辑名命中的文本纳入核对（未命中/单侧缺失计入未纳入核对）。
-     * 可选 config_group：按配置组提交——组内配置按落库顺序求值，文本按「首个文件名正则命中的
-     * 配置」建作业（此时 key_positions/编码/来源等单条参数被忽略）。
+     * 可选 file_regex：目录模式下仅「逻辑名或原始文件名」命中（正则∨通配解释）的文本纳入
+     * 核对（未命中/单侧缺失计入未纳入核对）。可选 config_group：按配置组提交——组内配置按
+     * 落库顺序求值，文本按「首个文件名筛选命中的配置」建作业（此时 key_positions/编码/来源
+     * 等单条参数被忽略）。
      */
     @PostMapping("/textline-compare")
     public Map<String, Object> submit(@RequestBody Map<String, Object> body) throws Exception {

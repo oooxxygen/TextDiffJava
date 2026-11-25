@@ -101,9 +101,9 @@ public final class TextLineCompareService implements AutoCloseable {
     }
 
     /**
-     * 按配置组提交：组内配置按落库顺序求值，文本逻辑名命中「首个文件名正则匹配（空式=全部）
-     * 的配置」即按该配置建作业；两侧同名且命中同一配置才配对，未命中任何配置的文本
-     * 计入批次「未纳入核对」清单（不报错、不建作业）。
+     * 按配置组提交：组内配置按落库顺序求值，文本「逻辑名或原始文件名」命中「首个文件名
+     * 匹配（正则∨通配解释，空式=全部）的配置」即按该配置建作业；两侧同名且命中同一配置
+     * 才配对，未命中任何配置的文本计入批次「未纳入核对」清单（不报错、不建作业）。
      */
     public BatchRecord submitGroup(Path pathA, Path pathB, String label,
                                    List<TextLineSavedConfig> configs) throws IOException {
@@ -120,7 +120,7 @@ public final class TextLineCompareService implements AutoCloseable {
             for (Map.Entry<String, Path> e : logicalMap(isA ? pathA : pathB).entrySet()) {
                 TextLineSavedConfig hit = null;
                 for (TextLineSavedConfig c : configs) {
-                    if (c.matches(e.getKey())) { hit = c; break; }
+                    if (c.matches(e.getKey(), e.getValue().getFileName().toString())) { hit = c; break; }
                 }
                 if (hit == null) {
                     unmatched.add((isA ? "仅A有: " : "仅B有: ") + e.getKey() + "（不匹配任何配置）");
@@ -193,7 +193,8 @@ public final class TextLineCompareService implements AutoCloseable {
     /**
      * 配对：两侧均按逻辑名（压缩文件剥 .gz/.九位数字后缀）取交集；同一逻辑名同时存在
      * 普通文件与压缩版本时普通文件优先，多版本压缩件取文件名最大（最新）者。单文件路径只配该文件。
-     * nameFilter 非空时仅逻辑名命中的文本参与（两侧同规则）；落选与单侧缺失计入未纳入核对清单。
+     * nameFilter 非空时仅「逻辑名或原始文件名」命中的文本参与（两侧同规则）；
+     * 落选与单侧缺失计入未纳入核对清单。
      */
     private static Pairing listPairs(Path pathA, Path pathB, java.util.function.Predicate<String> nameFilter)
             throws IOException {
@@ -203,7 +204,8 @@ public final class TextLineCompareService implements AutoCloseable {
         List<String> unpaired = new ArrayList<>();
         for (Map.Entry<String, Path> e : filesA.entrySet()) {
             String name = e.getKey();
-            if (nameFilter != null && !nameFilter.test(name)) {
+            if (nameFilter != null && !nameFilter.test(name)
+                    && !nameFilter.test(e.getValue().getFileName().toString())) {
                 unpaired.add("仅A有: " + name + "（不匹配筛选条件）");
                 continue;
             }
@@ -217,7 +219,8 @@ public final class TextLineCompareService implements AutoCloseable {
         }
         for (Map.Entry<String, Path> e : filesB.entrySet()) {
             String name = e.getKey();
-            if (nameFilter != null && !nameFilter.test(name)) {
+            if (nameFilter != null && !nameFilter.test(name)
+                    && !nameFilter.test(e.getValue().getFileName().toString())) {
                 unpaired.add("仅B有: " + name + "（不匹配筛选条件）");
             } else if (!filesA.containsKey(name)) {
                 unpaired.add("仅B有: " + name + "（A 侧无同名文本）");
