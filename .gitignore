@@ -2,9 +2,9 @@
 build/
 *.iml
 .idea/
-results/
-results_split/
-data/
+/results/
+/results_split/
+/data/
 acceptance-run/
 .zcode/plans/
 
@@ -13,8 +13,9 @@ build2/
 acceptance-run-rc/
 debug.log
 
-# 运行时产物（含真实密钥/用户数据，不入库）
+# 运行时产物（含真实密钥/用户数据，不入库）；根锚定，避免吞掉 src/main/java/.../store/ 源码
+# （v0.9.18 教训：未锚定的 store/ 曾把 TextLineConfigStore/TextLineSavedConfig 静默排除出提交）
 config.ini
-store/
-uploads/
-configs/
+/store/
+/uploads/
+/configs/
