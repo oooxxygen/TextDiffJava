@@ -49,8 +49,13 @@ class TextLineFilterWildcardTest {
     }
 
     @Test
-    void invalidRegexValidGlobStillUsableInMatching() { // 正则非法但通配合法：匹配仍可用
+    void invalidRegexValidGlobStillUsableInMatching() { // 正则非法但通配合法：校验通过（兜底），匹配可用
         assertTrue(cfg("[01A*").matches("[01A1020D.sx1.gz", "[01A1020D.sx1.gz.202609271"));
-        assertThrows(IllegalArgumentException.class, () -> TextLineSavedConfig.compileFileFilter("[01A*"));
+        assertNotNull(TextLineSavedConfig.compileFileFilter("[01A*"));
+    }
+
+    @Test
+    void bothInterpretationsInvalidRejected() { // 正则与通配均无效才拒绝
+        assertThrows(IllegalArgumentException.class, () -> TextLineSavedConfig.compileFileFilter("[invalid("));
     }
 }

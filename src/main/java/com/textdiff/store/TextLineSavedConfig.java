@@ -24,8 +24,8 @@ public record TextLineSavedConfig(String nickname, String groupName, String file
     }
 
     /**
-     * 文件名筛选校验：按正则解释（非法时若仅含普通字符与 <code>* ?</code> 通配则按通配符
-     * 兜底编译）；两种解释均无效仍拒绝。空式 = 不过滤（返回 null）。
+     * 文件名筛选校验：先按正则解释；正则非法但含 <code>* ?</code> 时按通配符兜底编译
+     * （两种解释均无效仍拒绝）。空式 = 不过滤（返回 null）。
      * 实际匹配用 {@link #matches(String, String)}（正则∨通配双解释、逻辑名∨原始名双名）。
      */
     public static java.util.regex.Pattern compileFileFilter(String fileRegex) {
