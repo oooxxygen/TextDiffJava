@@ -67,17 +67,17 @@ public final class TextLineCompareService implements AutoCloseable {
         return submit(pathA, pathB, label, cfg, null, sourceA, sourceB);
     }
 
-    /** 提交批次（带文件名正则筛选）：目录模式下仅逻辑名命中该式的文本纳入核对。 */
+    /** 提交批次（带文件名筛选）：目录模式下仅「逻辑名或原始文件名」命中该式（正则∨通配解释）的文本纳入核对。 */
     public BatchRecord submit(Path pathA, Path pathB, String label, TextLineFormat cfg,
                               String fileRegex, String sourceA, String sourceB) throws IOException {
         if (pathA == null || pathB == null || !Files.exists(pathA) || !Files.exists(pathB)) {
             throw new IllegalArgumentException("文本路径 A/B 必须是已存在的目录或文件");
         }
-        java.util.regex.Pattern filter = compileFilter(fileRegex);
-        Pairing pairing = listPairs(pathA, pathB, n -> filter == null || filter.matcher(n).matches());
+        java.util.function.BiPredicate<String, String> filter = filterPredicate(fileRegex);
+        Pairing pairing = listPairs(pathA, pathB, filter);
         if (pairing.pairs().isEmpty()) {
             throw new IllegalArgumentException("两路径下无可配对的同名文本"
-                    + (filter != null ? "（文件名正则筛选后为空）" : ""));
+                    + (fileRegex != null && !fileRegex.isBlank() ? "（文件名筛选后为空）" : ""));
         }
         String absA = normalize(pathA);
         String absB = normalize(pathB);
@@ -182,9 +182,29 @@ public final class TextLineCompareService implements AutoCloseable {
         return batch;
     }
 
-    /** 文件名正则编译（空式 = 不过滤；非法式抛 400 级参数错误；委托命名配置的通配兜底逻辑）。 */
+    /** 文件名筛选编译（空式 = 不过滤；非法式抛 400 级参数错误；委托命名配置的通配兜底逻辑）。 */
     public static java.util.regex.Pattern compileFilter(String fileRegex) {
         return com.textdiff.store.TextLineSavedConfig.compileFileFilter(fileRegex);
+    }
+
+    /**
+     * 文件名筛选谓词（双解释 ∨ 双名）：与命名配置 {@link
+     * com.textdiff.store.TextLineSavedConfig#matches(String, String)} 一致——
+     * 正则或通配任一解释命中「逻辑名或原始文件名」任一即可（空式 = 全部通过）。
+     * 构造时先按 {@link #compileFilter(String)} 编译校验（两种解释均无效仍抛参数错误）。
+     */
+    public static java.util.function.BiPredicate<String, String> filterPredicate(String fileRegex) {
+        compileFilter(fileRegex); // 仅校验：非法式尽早抛参数错误
+        java.util.List<java.util.regex.Pattern> ps =
+                com.textdiff.store.TextLineSavedConfig.matchPatterns(fileRegex);
+        return (logical, raw) -> {
+            if (ps.isEmpty()) return true;
+            for (java.util.regex.Pattern p : ps) {
+                if (logical != null && p.matcher(logical).matches()) return true;
+                if (raw != null && !raw.equals(logical) && p.matcher(raw).matches()) return true;
+            }
+            return false;
+        };
     }
 
     /** 配对结果：命中对（逻辑名/A路径/B路径）+ 未纳入核对清单（带侧别说明）。 */
@@ -193,10 +213,11 @@ public final class TextLineCompareService implements AutoCloseable {
     /**
      * 配对：两侧均按逻辑名（压缩文件剥 .gz/.九位数字后缀）取交集；同一逻辑名同时存在
      * 普通文件与压缩版本时普通文件优先，多版本压缩件取文件名最大（最新）者。单文件路径只配该文件。
-     * nameFilter 非空时仅「逻辑名或原始文件名」命中的文本参与（两侧同规则）；
+     * nameFilter 非空时仅「逻辑名或原始文件名」命中（双解释谓词）的文本参与（两侧同规则）；
      * 落选与单侧缺失计入未纳入核对清单。
      */
-    private static Pairing listPairs(Path pathA, Path pathB, java.util.function.Predicate<String> nameFilter)
+    private static Pairing listPairs(Path pathA, Path pathB,
+                                     java.util.function.BiPredicate<String, String> nameFilter)
             throws IOException {
         Map<String, Path> filesA = logicalMap(pathA);
         Map<String, Path> filesB = logicalMap(pathB);
@@ -204,8 +225,7 @@ public final class TextLineCompareService implements AutoCloseable {
         List<String> unpaired = new ArrayList<>();
         for (Map.Entry<String, Path> e : filesA.entrySet()) {
             String name = e.getKey();
-            if (nameFilter != null && !nameFilter.test(name)
-                    && !nameFilter.test(e.getValue().getFileName().toString())) {
+            if (nameFilter != null && !nameFilter.test(name, e.getValue().getFileName().toString())) {
                 unpaired.add("仅A有: " + name + "（不匹配筛选条件）");
                 continue;
             }
@@ -219,8 +239,7 @@ public final class TextLineCompareService implements AutoCloseable {
         }
         for (Map.Entry<String, Path> e : filesB.entrySet()) {
             String name = e.getKey();
-            if (nameFilter != null && !nameFilter.test(name)
-                    && !nameFilter.test(e.getValue().getFileName().toString())) {
+            if (nameFilter != null && !nameFilter.test(name, e.getValue().getFileName().toString())) {
                 unpaired.add("仅B有: " + name + "（不匹配筛选条件）");
             } else if (!filesA.containsKey(name)) {
                 unpaired.add("仅B有: " + name + "（A 侧无同名文本）");
@@ -280,8 +299,8 @@ public final class TextLineCompareService implements AutoCloseable {
             if (cfg == null) throw new IllegalArgumentException("作业配置缺失或无效");
             Path dir = Path.of(job.resultDir);
             Path tmp = Files.createDirectories(dir.resolve("tmp"));
-            Path fa = resolveInput(Path.of(job.fileA), tmp);
-            Path fb = resolveInput(Path.of(job.fileB), tmp);
+            Path fa = resolveInput(Path.of(job.fileA), tmp, "A");
+            Path fb = resolveInput(Path.of(job.fileB), tmp, "B");
             encA = Encoding.resolveEncoding(fa, cfg.encodingA(), "|");
             encB = Encoding.resolveEncoding(fb, cfg.encodingB(), "|");
             List<String> la = readLines(fa, encA);
@@ -326,10 +345,10 @@ public final class TextLineCompareService implements AutoCloseable {
         tasks.remove(jobId);
     }
 
-    /** 运行时输入解析：压缩文件解压到作业 tmp（解压后按解压产物读编码），普通文件原样返回。 */
-    private static Path resolveInput(Path src, Path tmp) throws IOException {
+    /** 运行时输入解析：压缩文件解压到作业 tmp（按侧别 A/B 区分目标，避免同名逻辑名互相覆盖），普通文件原样返回。 */
+    static Path resolveInput(Path src, Path tmp, String side) throws IOException {
         if (!isGz(src)) return src;
-        Path target = tmp.resolve(logicalOf(src));
+        Path target = tmp.resolve(side + "_" + logicalOf(src));
         Files.createDirectories(target.getParent());
         Path tmpOut = target.resolveSibling(target.getFileName() + ".extracting");
         try (var in = new GZIPInputStream(Files.newInputStream(src));

@@ -57,6 +57,11 @@ public record TextLineSavedConfig(String nickname, String groupName, String file
 
     /** 双解释正则列表：正则式（可编译时）+ 通配式（含 * ? 时）；空式 = 空列表（全部命中）。 */
     private java.util.List<java.util.regex.Pattern> matchPatterns() {
+        return matchPatterns(fileRegex);
+    }
+
+    /** 双解释正则列表（供单条提交路径谓词复用）：正则式（可编译时）+ 通配式（含 * ? 时）；空式 = 空列表（全部命中）。 */
+    public static java.util.List<java.util.regex.Pattern> matchPatterns(String fileRegex) {
         java.util.List<java.util.regex.Pattern> out = new java.util.ArrayList<>();
         if (fileRegex == null || fileRegex.isBlank()) return out;
         String p = fileRegex.strip();
