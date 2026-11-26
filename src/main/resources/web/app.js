@@ -3,7 +3,9 @@
 const { createApp, reactive, ref, computed, onMounted, onBeforeUnmount, watch, nextTick } = Vue;
 
 /* ---------- API ---------- */
-async function api(url, opts) {
+/* api/jpost 为统一入口（含锁闭闸）：锁闭期间的配置写请求在前端就地拒绝（不发请求），
+   与后端 ConfigWriteGuard 同一套路径表；真正发请求走 _rawApi。 */
+async function _rawApi(url, opts) {
   const r = await fetch(url, opts);
   const text = await r.text();
   let data = null;
@@ -14,9 +16,50 @@ async function api(url, opts) {
   }
   return data;
 }
-const jpost = (url, body) => api(url, {
-  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-});
+
+/* ---------- 配置锁闭（🔒）----------
+   后端 423 兜底拦截一切配置写请求；这里在前端提前拦截，提交行为给出明确提示。
+   cfgLock.locked 由 /api/config-lock 查询/操作后刷新；设置页整页模糊只读也依赖此状态。 */
+const cfgLock = reactive({ locked: false, loaded: false });
+const LOCK_WRITE_PREFIXES = [
+  "/api/settings/ai", "/api/settings/runtime", "/api/settings/jvm", "/api/settings/extract",
+  "/api/settings/tasks", "/api/configs", "/api/config-files", "/api/charset-map/",
+  "/api/ctis-dyn/import", "/api/discard-fields", "/api/compare-groups", "/api/split-configs",
+  "/api/textline-configs",
+];
+const LOCK_WRITE_EXEMPT = ["/api/config-lock", "/api/settings/ai/test"];
+function lockBlocks(method, url) {
+  const m = (method || "").toUpperCase();
+  if (m !== "POST" && m !== "PUT" && m !== "DELETE" && m !== "PATCH") return false;
+  const p = url.split("?")[0];
+  if (LOCK_WRITE_EXEMPT.some(x => p === x || p.startsWith(x + "/"))) return false;
+  return LOCK_WRITE_PREFIXES.some(x => p === x || p.startsWith(x + "/"));
+}
+async function loadLockState() {
+  try {
+    const s = await _rawApi("/api/config-lock");
+    cfgLock.locked = !!s.locked;
+  } catch (e) { /* 查询失败按未锁闭（后端仍兜底） */ }
+  cfgLock.loaded = true;
+}
+async function setLockState(action, key) {
+  const r = await _rawApi("/api/config-lock", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, key }),
+  });
+  cfgLock.locked = !!r.locked;
+  return r;
+}
+const LOCK_MSG = "配置已锁闭：本次修改仅驻留当前页面，不会写入任何配置文件；如需修改请先在设置页解除锁闭";
+async function api(url, opts) {
+  if (lockBlocks((opts && opts.method) || "GET", url)) throw new Error(LOCK_MSG);
+  return _rawApi(url, opts);
+}
+function jpost(url, body) {
+  return api(url, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+}
 
 /* ---------- 工具：0-based 列数组 <-> 1-based 序列串 ---------- */
 function seqToStr(arr) { return (arr || []).map(i => i + 1).join("/"); }
@@ -417,21 +460,43 @@ function segments(value, opcodes, side) {
   return out.length ? out : [{ text: "", cls: "" }];
 }
 
-/* ---------- 序列输入框（自动换行 + 列号-列名 tips） ---------- */
+/* ---------- 序列输入框（自动换行 + 列号-列名 tips；支持 OMITSEQ 复合 token「107-1B」
+   ——CTIS 动态栏位子字段跳过：悬停显示「父列号-子编号 — 子字段名（取自已导入的解析配置）」） ---------- */
+// 子字段名查询缓存（跨实例共享；失败置空串避免反复请求）
+const seqSubNameCache = {}; // "107-1B" -> itemName | ""
+async function seqSubName(colSeq, code) {
+  const key = colSeq + "-" + code.toUpperCase();
+  if (key in seqSubNameCache) return seqSubNameCache[key];
+  seqSubNameCache[key] = "";
+  try {
+    const r = await api("/api/ctis-dyn/label?col_seq=" + encodeURIComponent(colSeq)
+        + "&code=" + encodeURIComponent(code));
+    seqSubNameCache[key] = r.name || "";
+  } catch (e) { /* 未导入/接口不可用：显示（无字段名映射） */ }
+  return seqSubNameCache[key];
+}
 const SeqField = {
   props: ["label", "modelValue", "columnNames", "readonly", "placeholder"],
   emits: ["update:modelValue"],
   setup(props, { emit }) {
     const show = ref(false);
+    const SUB_TOKEN = /^(\d+)-([0-9A-Za-z]+)$/;
     const parsed = computed(() => {
       const names = props.columnNames || [];
       const out = [];
       for (const tok of String(props.modelValue || "").split("/")) {
         const t = tok.trim();
         if (!t) continue;
+        const sm = SUB_TOKEN.exec(t);
+        if (sm) { // 复合 token：CTIS 动态栏位子字段（名称异步取回，item 对象引用保持响应式）
+          const item = { sub: sm[1] + "-" + sm[2], col: parseInt(sm[1], 10), name: "", isSub: true };
+          out.push(item);
+          seqSubName(sm[1], sm[2]).then(n => { item.name = n; });
+          continue;
+        }
         const n = parseInt(t, 10);
         if (!n) continue;
-        out.push({ col: n, name: (names[n - 1] || "") });
+        out.push({ col: n, name: (names[n - 1] || ""), isSub: false });
       }
       return out;
     });
@@ -446,8 +511,8 @@ const SeqField = {
         <div class="tips-pop" v-if="show" @mouseenter="show=true">
           <div class="tips-title">列号 — 列名</div>
           <div class="tips-empty" v-if="!parsed.length">（填入列号后在此解析）</div>
-          <div class="tips-row" v-for="p in parsed" :key="p.col">
-            <span class="tc">{{ p.col }}</span><span class="tn">{{ p.name || '（无列名映射）' }}</span>
+          <div class="tips-row" v-for="p in parsed" :key="p.isSub ? ('sub-' + p.sub) : p.col">
+            <span class="tc">{{ p.isSub ? p.sub : p.col }}</span><span class="tn">{{ p.name || '（无列名映射）' }}</span>
           </div>
         </div>
       </span>
@@ -812,6 +877,23 @@ const ListPager = {
       <option :value="200">200/页</option>
     </select>
   </span>`,
+};
+
+/* ---------- 长文本提示折叠（批次概览等提示行：>500 字仅展示前 500，点击展开/收起） ---------- */
+const FOLD_LIMIT = 500;
+const FoldHint = {
+  props: { text: { type: String, default: "" } },
+  setup(props) {
+    const open = ref(false);
+    const long = computed(() => (props.text || "").length > FOLD_LIMIT);
+    const shown = computed(() =>
+      open.value || !long.value ? (props.text || "") : (props.text || "").slice(0, FOLD_LIMIT) + "…");
+    function toggle() { open.value = !open.value; }
+    return { open, long, shown, toggle };
+  },
+  template: `
+  <span class="fold-hint"><span class="fold-text">{{ shown }}</span><button
+    v-if="long" class="mini-btn fold-toggle" @click="toggle">{{ open ? '收起' : '展开' }}</button></span>`,
 };
 
 /* ---------- 关注字段监测（DISCARD_COLS）表 + 卡片 + 批次情况总结页 ---------- */
@@ -1201,6 +1283,24 @@ const ConfigPanel = {
       finally { busy.value = false; }
     }
 
+    // 需求⑤：修改配置后重跑本批次「同昵称」全部文本（以本作业为基准，本作业包含在内）
+    async function rerunNicknames() {
+      err.value = ""; busy.value = true;
+      try {
+        if (!form.nickname) throw new Error("需填写昵称才能重跑同昵称");
+        const ok = await askConfirm("确认以当前修改后的配置重跑本批次所有「"
+            + (form.nickname || (props.meta.config || {}).nickname) + "」昵称的文本对比任务？"
+            + "各作业旧结果将被清空并重新对比。", { okText: "重跑" });
+        if (!ok) return;
+        const r = await jpost(`/api/jobs/${props.meta.job_id}/rerun-nicknames`, buildBody());
+        editing.value = false;
+        notify("已重跑同昵称 " + (r.count || 0) + " 个作业"
+            + ((r.skipped_running || []).length ? "（" + r.skipped_running.length + " 个进行中的作业已跳过）" : ""), "ok");
+        emit("rerun", props.meta.job_id); // 本作业就地刷新
+      } catch (e) { err.value = e.message; }
+      finally { busy.value = false; }
+    }
+
     // 点 4：同步最新的对比配置（按昵称从配置库取生效合并版本，填入表单，便于直接重跑）
     async function syncLatest() {
       err.value = ""; busy.value = true;
@@ -1241,7 +1341,7 @@ const ConfigPanel = {
     }
 
     return { editing, busy, err, form, columnNames, toast, confTarget, confFiles,
-             startEdit, cancel, rerun, saveConfig, syncLatest };
+             startEdit, cancel, rerun, rerunNicknames, saveConfig, syncLatest };
   },
   template: `
   <div class="card">
@@ -1253,6 +1353,8 @@ const ConfigPanel = {
         <button v-if="!editing" class="mini-btn" @click="startEdit">编辑</button>
         <button v-if="editing" class="mini-btn" @click="cancel">取消</button>
         <button v-if="editing" class="mini-btn" @click="saveConfig" :disabled="busy">保存到配置</button>
+        <button v-if="editing" class="mini-btn" @click="rerunNicknames" :disabled="busy"
+                title="以当前修改后的配置重跑本批次所有同昵称文本（普通文本对比则重跑批次下全部文本任务）">↻ 重跑同昵称</button>
         <button v-if="editing" class="btn sm" @click="rerun" :disabled="busy">
           {{ busy ? '提交中…' : '修改并重新执行' }}
         </button>
@@ -2500,13 +2602,13 @@ const BatchView = {
           触发时间 {{ fmtTime(ov.batch.created_at) }} · 配置来源 {{ ov.batch.config_source }}<template v-if="ov.batch.group_name"> · 对比范围：分组「{{ ov.batch.group_name }}」</template> · 对比批次 <b>{{ ov.batch.cmp_batch || '—' }}</b> · 轮次 <b>{{ ov.batch.cmp_round || '—' }}</b>
         </div>
         <div v-if="ov.batch.no_rule_files && ov.batch.no_rule_files.length" class="no-rule" style="margin-top:10px;">
-          ⚠ 无对应对比规则（未对比）：{{ ov.batch.no_rule_files.join('、') }}
+          ⚠ 无对应对比规则（未对比）：<FoldHint :text="ov.batch.no_rule_files.join('、')" />
         </div>
         <div v-if="ov.batch.extract_failed && ov.batch.extract_failed.length" class="no-rule" style="margin-top:10px;">
-          🗜 解压失败（附具体文件名）：{{ ov.batch.extract_failed.join('；') }}
+          🗜 解压失败（附具体文件名）：<FoldHint :text="ov.batch.extract_failed.join('；')" />
         </div>
         <div v-if="ov.batch.missing_files && ov.batch.missing_files.length" class="no-rule" style="margin-top:10px;">
-          ❓ 未能读取到相应文件（昵称 · 通配名）：{{ ov.batch.missing_files.join('；') }}
+          ❓ 未能读取到相应文件（昵称 · 通配名）：<FoldHint :text="ov.batch.missing_files.join('；')" />
         </div>
       </div>
     </div>
@@ -2859,6 +2961,23 @@ const SettingsPage = {
       finally { tl.busy = false; ev.target.value = ""; }
     }
 
+    // ---- 配置锁闭（🔒 需求③）：开启/解除均需管理密钥（与 configs/.admin_key 字面量一致）----
+    const lockModal = reactive({ open: false, action: "", key: "", busy: false, err: "" });
+    function openLock(action) {
+      lockModal.open = true; lockModal.action = action; lockModal.key = "";
+      lockModal.busy = false; lockModal.err = "";
+    }
+    async function submitLock() {
+      lockModal.busy = true; lockModal.err = "";
+      try {
+        await setLockState(lockModal.action, lockModal.key);
+        lockModal.open = false;
+        notify(lockModal.action === "lock" ? "已开启配置锁闭" : "已解除配置锁闭", "ok");
+      } catch (e) {
+        lockModal.err = e.message;
+      } finally { lockModal.busy = false; }
+    }
+
     return { providers, form, apiKeySet, busy, toast, test, curModels, pickProvider, save, testConn,
              splitCfgs, loadSplitConfigs, delSplitConfig,
              rt, saveRuntime, imp, onImpFiles, importStructure,
@@ -2869,11 +2988,46 @@ const SettingsPage = {
              dirs, loadDirs, saveDirs,
              extract, loadExtract, saveExtract,
              jvm, loadJvm, saveJvm,
-             tl, importTl };
+             tl, importTl,
+             cfgLock, lockModal, openLock, submitLock };
   },
   template: `
   <div>
     <PageHeader title="设置" sub="AI 接入 · 数据映射 · 配置版本 · 任务路径 —— 所有修改即时生效并持久化" />
+
+    <!-- 🔒 配置锁闭：开关 + 管理密钥（需求③）；锁闭期间下方所有设置模糊不可见、不可操作 -->
+    <div class="card lock-card">
+      <div class="card-body lock-row">
+        <template v-if="!cfgLock.locked">
+          <span>🔓 配置未锁闭（修改会写入本地配置文件）</span>
+          <button class="btn" @click="openLock('lock')">🔒 开启锁闭</button>
+        </template>
+        <template v-else>
+          <span class="lock-on">🔒 配置已锁闭：所有设置项已隐藏，配置修改仅驻留本次页面不会持久化</span>
+          <button class="btn" @click="openLock('unlock')">🔓 解除锁闭</button>
+        </template>
+      </div>
+    </div>
+
+    <div v-if="lockModal.open" class="modal-mask" @click.self="lockModal.open = false">
+      <div class="modal lock-modal">
+        <div class="modal-head">{{ lockModal.action === 'lock' ? '开启配置锁闭' : '解除配置锁闭' }}
+          <button class="modal-x" @click="lockModal.open = false">✕</button></div>
+        <div class="modal-body">
+          <p class="ai-hint" style="margin-top:0;">请输入管理密钥{{ lockModal.action === 'lock' ? '开启' : '解除' }}锁闭（密钥校验通过才允许变更）。</p>
+          <div class="field"><label>管理密钥</label>
+            <input type="password" v-model="lockModal.key" @keyup.enter="submitLock"
+                   placeholder="管理密钥" :disabled="lockModal.busy" /></div>
+          <p v-if="lockModal.err" class="lock-err">⚠ {{ lockModal.err }}</p>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" @click="lockModal.open = false">取消</button>
+          <button class="btn primary" :disabled="lockModal.busy || !lockModal.key" @click="submitLock">确认</button>
+        </div>
+      </div>
+    </div>
+
+    <div :class="{ 'lock-blur': cfgLock.locked }" :aria-hidden="cfgLock.locked ? 'true' : null">
     <div class="section-title">AI 分析</div>
     <div class="card">
     <div class="card-head">🤖 AI 大模型接入设置</div>
@@ -3087,6 +3241,7 @@ const SettingsPage = {
       </div>
     </div>
     <div class="toast" v-if="toast">{{ toast }}</div>
+    </div><!-- /lock-blur -->
   </div>`,
 };
 
@@ -4050,7 +4205,7 @@ const ReportBatchView = {
           {{ srcA }}：{{ ov.batch.dir_a }}<br/>{{ srcB }}：{{ ov.batch.dir_b }}<br/>{{ ov.batch.config_source }}
         </div>
         <div v-if="ov.batch.no_rule_files && ov.batch.no_rule_files.length" class="no-rule" style="margin-top:10px;">
-          ⚠ 未配对（{{ srcB }} 侧无同名文件）：{{ ov.batch.no_rule_files.join('、') }}
+          ⚠ 未配对（{{ srcB }} 侧无同名文件）：<FoldHint :text="ov.batch.no_rule_files.join('、')" />
         </div>
       </div>
     </div>
@@ -4261,7 +4416,7 @@ const CustomPage = {
   emits: ["open-batch"],
   setup(props, { emit }) {
     const mode = ref("path");
-    const form = reactive({ start_pattern: "^\\{1:", end_pattern: "^-\\}", key_pattern: ":20:(\\S+)", dir_a: "", dir_b: "", label: "", source_a: "", source_b: "" });
+    const form = reactive({ start_pattern: "^\\{1:", end_pattern: "^-\\}", key_pattern: ":20:(\\S+)", scene_sort: "", dir_a: "", dir_b: "", label: "", source_a: "", source_b: "" });
     const up = reactive({ files_a: [], files_b: [] });
     const busy = ref(false); const err = ref("");
     function onFiles(ev, target) { up[target] = Array.from(ev.target.files); }
@@ -4276,7 +4431,8 @@ const CustomPage = {
       try {
         const r = await jpost("/api/custom-compare", {
           start_pattern: form.start_pattern, end_pattern: form.end_pattern || null,
-          key_pattern: form.key_pattern || null, dir_a: form.dir_a, dir_b: form.dir_b, label: form.label || null,
+          key_pattern: form.key_pattern || null, scene_sort: form.scene_sort || null,
+          dir_a: form.dir_a, dir_b: form.dir_b, label: form.label || null,
           source_a: form.source_a || null, source_b: form.source_b || null,
         });
         emit("open-batch", r.batch_id);
@@ -4294,7 +4450,8 @@ const CustomPage = {
         const r = await api("/api/custom-compare/upload", { method: "POST", body: fd });
         const r2 = await jpost("/api/custom-compare", {
           start_pattern: form.start_pattern, end_pattern: form.end_pattern || null,
-          key_pattern: form.key_pattern || null, dir_a: r.dir_a, dir_b: r.dir_b, label: form.label || null,
+          key_pattern: form.key_pattern || null, scene_sort: form.scene_sort || null,
+          dir_a: r.dir_a, dir_b: r.dir_b, label: form.label || null,
           source_a: form.source_a || null, source_b: form.source_b || null,
         });
         emit("open-batch", r2.batch_id);
@@ -4324,6 +4481,9 @@ const CustomPage = {
           </label>
           <label class="field">主键提取式（正则，可选；取段内首个命中行的捕获组 1 作主键配对，免疫段序差异。留空 = 按段全文精确匹配）
             <input v-model="form.key_pattern" placeholder="如 :20:(\\S+)（MT950 报文 :20: 域作主键）" spellcheck="false" />
+          </label>
+          <label class="field">场次排序（可选；段内同场次标签如 :61: 的块之间按排序键重排后再对比，其他行相对顺序不变）
+            <input v-model="form.scene_sort" placeholder="① 1,21~36（第1行第21~36字符）② /[0-9]{9}/（首个正则命中）；多组用 ; 分隔" spellcheck="false" />
           </label>
           <label class="field">文本路径 A（旧）
             <input v-if="mode==='path'" v-model="form.dir_a" placeholder="如 O:\\CodeRepos\\NonStructuralData" spellcheck="false" />
@@ -4431,7 +4591,7 @@ const CustomBatchView = {
           {{ srcA }}：{{ ov.batch.dir_a }}<br/>{{ srcB }}：{{ ov.batch.dir_b }}<br/>{{ ov.batch.config_source }}
         </div>
         <div v-if="ov.batch.no_rule_files && ov.batch.no_rule_files.length" class="no-rule" style="margin-top:10px;">
-          ⚠ 未配对（{{ srcB }} 侧无同名文件）：{{ ov.batch.no_rule_files.join('、') }}
+          ⚠ 未配对（{{ srcB }} 侧无同名文件）：<FoldHint :text="ov.batch.no_rule_files.join('、')" />
         </div>
       </div>
     </div>
@@ -4478,6 +4638,7 @@ const CustomResultView = {
         sum.value = await api(`/api/custom-jobs/${props.jobId}/summary`);
         const st = sum.value.status;
         if (st === "pending" || st === "running") timer = setTimeout(load, 2000);
+        else if (s.value) fillCfg();
       } catch (e) {}
     }
     onMounted(load);
@@ -4487,7 +4648,39 @@ const CustomResultView = {
     // 需求①别名：两侧来源名（summary 端点从 JSON configLine 的 srca/srcb 解析，缺省 A/B）
     const sourceA = computed(() => (sum.value && sum.value.source_a) || "A");
     const sourceB = computed(() => (sum.value && sum.value.source_b) || "B");
-    return { sum, s, fileName, exportHref, REPORT_STATUS, sourceA, sourceB, scrollSyncOn, toggleScrollSync, goBack: () => emit("back") };
+
+    // ---- 配置修改 + 重跑同昵称（需求⑤：单文本界面改配置后重跑本批次同昵称文本） ----
+    const zoneNonce = ref(0);
+    const cfg = reactive({ start: "", end: "", key: "", scene_sort: "" });
+    const cfgEditing = ref(false); const cfgBusy = ref(false); const cfgErr = ref("");
+    function fillCfg() {
+      cfg.start = s.value.start_pattern || "";
+      cfg.end = s.value.end_pattern || "";
+      cfg.key = s.value.key_pattern || "";
+      cfg.scene_sort = ""; // 概览未回显场次排序：编辑时填入即生效，留空 = 不排序
+    }
+    async function rerunNicknames() {
+      cfgErr.value = ""; cfgBusy.value = true;
+      try {
+        const ok = await askConfirm("确认以当前配置重跑本批次所有同昵称的段对比任务？各任务旧结果将被清空。",
+            { okText: "重跑" });
+        if (!ok) return;
+        const body = {};
+        if (cfgEditing.value) {
+          body.start = cfg.start; body.end = cfg.end; body.key = cfg.key;
+          body.scene_sort = cfg.scene_sort;
+        }
+        const r = await jpost(`/api/custom-jobs/${props.jobId}/rerun-nicknames`, body);
+        cfgEditing.value = false;
+        notify("已重跑同昵称 " + (r.count || 0) + " 个段对比任务"
+            + ((r.skipped_running || []).length ? "（进行中的已跳过）" : ""), "ok");
+        sum.value = null; zoneNonce.value++;
+        load();
+      } catch (e) { cfgErr.value = e.message; }
+      finally { cfgBusy.value = false; }
+    }
+    return { sum, s, fileName, exportHref, REPORT_STATUS, sourceA, sourceB, scrollSyncOn, toggleScrollSync,
+             cfg, cfgEditing, cfgBusy, cfgErr, rerunNicknames, zoneNonce, goBack: () => emit("back") };
   },
   template: `
   <div v-if="sum">
@@ -4533,12 +4726,39 @@ const CustomResultView = {
         </div>
       </div>
 
+      <div class="card" v-if="s">
+        <div class="card-head">⚙️ 对比配置（重跑同昵称用）
+          <div class="head-actions">
+            <button v-if="!cfgEditing" class="mini-btn" @click="cfgEditing = true">编辑</button>
+            <button v-else class="mini-btn" @click="cfgEditing = false">取消</button>
+            <button class="mini-btn" @click="rerunNicknames" :disabled="cfgBusy"
+                    title="以当前配置重跑本批次所有同昵称的段对比任务（编辑后以修改后配置执行；进行中的任务自动跳过）">
+              {{ cfgBusy ? '提交中…' : '↻ 重跑同昵称' }}</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="field mono"><label>段起始正则</label>
+              <input v-model="cfg.start" :readonly="!cfgEditing" /></div>
+            <div class="field mono"><label>段结束正则（可空）</label>
+              <input v-model="cfg.end" :readonly="!cfgEditing" /></div>
+            <div class="field mono"><label>主键正则（可空）</label>
+              <input v-model="cfg.key" :readonly="!cfgEditing" /></div>
+            <div class="field mono"><label>场次排序（可空；① 1,21~36 ② /[0-9]{9}/）</label>
+              <input v-model="cfg.scene_sort" :readonly="!cfgEditing"
+                     placeholder="留空=不排序；多组用 ; 分隔" /></div>
+          </div>
+          <div v-if="cfgErr" class="error-box" style="margin-top:8px;">{{ cfgErr }}</div>
+          <p class="hint" style="margin:8px 0 0;">场次排序语法：①「行号,起~止」（段内第 N 行的字符区间，多组用 ; 分隔）；②「/正则/」（场次块内首个命中，取捕获组1或整命中）。仅同场次标签（如 :61:）的块之间重排，其他行相对顺序不变。</p>
+        </div>
+      </div>
+
       <ReportZone :job-id="jobId" base="custom-jobs" section="segment" zone="diff" title="段差异（主键相同、内容不同）" tone="diff"
-                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? s.diff : null" :key="'cd' + jobId" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? s.diff : null" :key="'cd' + jobId + '-' + zoneNonce" />
       <ReportZone :job-id="jobId" base="custom-jobs" section="segment" zone="unmatched" title="段 · 单侧不匹配（按主键配对后多余/缺失）" tone="unmatched"
-                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? (s.only_a + s.only_b) : null" :key="'cu' + jobId" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? (s.only_a + s.only_b) : null" :key="'cu' + jobId + '-' + zoneNonce" />
       <ReportZone :job-id="jobId" base="custom-jobs" section="segment" zone="equal" title="段 · 完全一致" tone="equal"
-                  :default-open="false" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? s.equal : null" :key="'ce' + jobId" />
+                  :default-open="false" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? s.equal : null" :key="'ce' + jobId + '-' + zoneNonce" />
     </template>
   </div>
   <div v-else class="loading">加载中…</div>`,
@@ -4813,7 +5033,7 @@ const TextLineBatchView = {
           {{ srcA }}：{{ ov.batch.dir_a }}<br/>{{ srcB }}：{{ ov.batch.dir_b }}<br/>{{ cfgText }}
         </div>
         <div v-if="ov.batch.no_rule_files && ov.batch.no_rule_files.length" class="no-rule" style="margin-top:10px;">
-          ⚠ 未纳入核对 {{ ov.batch.no_rule_files.length }} 条：{{ ov.batch.no_rule_files.join('；') }}
+          ⚠ 未纳入核对 {{ ov.batch.no_rule_files.length }} 条：<FoldHint :text="ov.batch.no_rule_files.join('；')" />
         </div>
       </div>
     </div>
@@ -4854,11 +5074,13 @@ const TextLineResultView = {
   setup(props, { emit }) {
     const { scrollSyncOn, toggle: toggleScrollSync } = useScrollSyncToggle();
     const sum = ref(null); let timer = null;
+    const zoneNonce = ref(0); // 重跑后强制差异分区重挂载
     async function load() {
       try {
         sum.value = await api(`/api/textline-jobs/${props.jobId}/summary`);
         const st = sum.value.status;
         if (st === "pending" || st === "running") timer = setTimeout(load, 2000);
+        else if (s.value) fillCfg();
       } catch (e) {}
     }
     onMounted(load);
@@ -4867,7 +5089,37 @@ const TextLineResultView = {
     const exportHref = computed(() => `/api/textline-jobs/${props.jobId}/export`);
     const sourceA = computed(() => (sum.value && sum.value.source_a) || "A");
     const sourceB = computed(() => (sum.value && sum.value.source_b) || "B");
-    return { sum, s, fileName, exportHref, REPORT_STATUS, sourceA, sourceB, scrollSyncOn, toggleScrollSync, goBack: () => emit("back") };
+
+    // ---- 配置修改 + 重跑（需求⑤：普通文本对比 → 重跑批次下全部文本对比任务） ----
+    const cfg = reactive({ key_positions: "", encoding_a: "auto", encoding_b: "auto" });
+    const cfgEditing = ref(false); const cfgBusy = ref(false); const cfgErr = ref("");
+    function fillCfg() {
+      cfg.key_positions = s.value.key_positions || "";
+      cfg.encoding_a = s.value.encoding_a || "auto";
+      cfg.encoding_b = s.value.encoding_b || "auto";
+    }
+    async function rerunBatch() {
+      cfgErr.value = ""; cfgBusy.value = true;
+      try {
+        const ok = await askConfirm("确认重跑本批次下全部普通文本对比任务？"
+            + (cfgEditing.value ? "将以下方修改后的配置执行，各任务旧结果清空。" : "各任务旧结果将被清空。"),
+            { okText: "重跑" });
+        if (!ok) return;
+        const r = await jpost(`/api/textline-jobs/${props.jobId}/rerun-nicknames`, {
+          key_positions: cfgEditing.value ? cfg.key_positions : null,
+          encoding_a: cfgEditing.value ? cfg.encoding_a : null,
+          encoding_b: cfgEditing.value ? cfg.encoding_b : null,
+        });
+        cfgEditing.value = false;
+        notify("已重跑本批次 " + (r.count || 0) + " 个文本对比任务"
+            + ((r.skipped_running || []).length ? "（进行中的已跳过）" : ""), "ok");
+        sum.value = null; zoneNonce.value++;
+        load();
+      } catch (e) { cfgErr.value = e.message; }
+      finally { cfgBusy.value = false; }
+    }
+    return { sum, s, fileName, exportHref, REPORT_STATUS, sourceA, sourceB, scrollSyncOn, toggleScrollSync,
+             cfg, cfgEditing, cfgBusy, cfgErr, rerunBatch, zoneNonce, goBack: () => emit("back") };
   },
   template: `
   <div v-if="sum">
@@ -4907,12 +5159,36 @@ const TextLineResultView = {
         </div>
       </div>
 
+      <div class="card" v-if="s">
+        <div class="card-head">⚙️ 对比配置（重跑本批次用）
+          <div class="head-actions">
+            <button v-if="!cfgEditing" class="mini-btn" @click="cfgEditing = true">编辑</button>
+            <button v-else class="mini-btn" @click="cfgEditing = false">取消</button>
+            <button class="mini-btn" @click="rerunBatch" :disabled="cfgBusy"
+                    title="重跑本批次下全部普通文本对比任务（编辑后以下方配置执行；进行中的任务自动跳过）">
+              {{ cfgBusy ? '提交中…' : '↻ 重跑本批次全部文本' }}</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="field mono"><label>主键区间 KEYPOS（留空 = 整行作键）</label>
+              <input v-model="cfg.key_positions" :readonly="!cfgEditing" placeholder="如 1-3,8-10" /></div>
+            <div class="field"><label>编码 {{ sourceA }}</label>
+              <select v-model="cfg.encoding_a" :disabled="!cfgEditing"><option>auto</option><option>utf-8</option><option>gbk</option><option>gb18030</option><option>latin-1</option></select></div>
+            <div class="field"><label>编码 {{ sourceB }}</label>
+              <select v-model="cfg.encoding_b" :disabled="!cfgEditing"><option>auto</option><option>utf-8</option><option>gbk</option><option>gb18030</option><option>latin-1</option></select></div>
+          </div>
+          <div v-if="cfgErr" class="error-box" style="margin-top:8px;">{{ cfgErr }}</div>
+          <p class="hint" style="margin:8px 0 0;">重跑作用于本批次下全部普通文本对比任务（各任务 A/B 来源命名保留）；仅修改单任务请用「普通文本比对」页重新提交。</p>
+        </div>
+      </div>
+
       <ReportZone :job-id="jobId" base="textline-jobs" section="line" zone="diff" title="行差异（主键相同、内容不同，逐字符高亮）" tone="diff"
-                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? s.diff : null" :key="'td' + jobId" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? s.diff : null" :key="'td' + jobId + '-' + zoneNonce" />
       <ReportZone :job-id="jobId" base="textline-jobs" section="line" zone="unmatched" title="行 · 单侧不匹配（仅一侧有）" tone="unmatched"
-                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? (s.only_a + s.only_b) : null" :key="'tu' + jobId" />
+                  :default-open="true" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? (s.only_a + s.only_b) : null" :key="'tu' + jobId + '-' + zoneNonce" />
       <ReportZone :job-id="jobId" base="textline-jobs" section="line" zone="equal" title="行 · 完全一致" tone="equal"
-                  :default-open="false" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? s.equal : null" :key="'te' + jobId" />
+                  :default-open="false" :source-a="sourceA" :source-b="sourceB" :initial-total="s ? s.equal : null" :key="'te' + jobId + '-' + zoneNonce" />
     </template>
   </div>
   <div v-else class="loading">加载中…</div>`,
@@ -4936,7 +5212,11 @@ const ConfigManagePage = {
     async function loadConfigs() {
       busy.value = true;
       try {
-        const r = await api("/api/configs/manage" + (cfgQuery.value.trim() ? "?q=" + encodeURIComponent(cfgQuery.value.trim()) : ""));
+        // 需求⑥：选择配置文件后仅展示该文件内的配置项（source 参数，后端逐文件展平过滤）
+        const ps = new URLSearchParams();
+        if (cfgQuery.value.trim()) ps.set("q", cfgQuery.value.trim());
+        if (selFile.value) ps.set("source", selFile.value);
+        const r = await api("/api/configs/manage" + (ps.toString() ? "?" + ps.toString() : ""));
         configs.value = r.configs || []; badLines.value = r.bad_lines || 0;
         dups.value = r.dups || []; cfgErr.value = "";
       } catch (e) { cfgErr.value = e.message; }
@@ -4956,6 +5236,7 @@ const ConfigManagePage = {
     // 文件管理选中项（下拉选择 + 重命名/删除，千级文件规模友好）
     const selFile = ref("current.conf");
     const selFileInfo = computed(() => confFiles.value.find(f => f.name === selFile.value) || null);
+    watch(selFile, () => { cfgPg.reset(); loadConfigs(); }); // 文件切换联动（需求⑥）：仅展示该文件内配置项
     const fileModal = reactive({ open: false, mode: "new", err: "", form: { name: "", from: "blank", orig: "" } });
     // 勘误③：新增配置文件 = 空白 或 从 current.conf 选择单条条目带入其配置（不再复制整个 current.conf）
     const currentRules = ref([]);
@@ -4995,7 +5276,9 @@ const ConfigManagePage = {
       const name = (saveAsModal.form.name || "").trim();
       if (!name) { saveAsModal.err = "文件名不能为空"; return; }
       try {
-        await jpost("/api/configs", Object.assign(cfgBody(), { target: name }));
+        const body = cfgBody();
+        delete body.source_file; delete body.source_line; // 另存为：独立新文件，不触发原文件行覆盖
+        await jpost("/api/configs", Object.assign(body, { target: name }));
         cfgModal.open = false; saveAsModal.open = false;
         loadConfigs(); loadConfFiles();
         notify("配置「" + cfgModal.form.nickname + "」已另存到 " + name
@@ -5041,12 +5324,11 @@ const ConfigManagePage = {
       } catch (e) { notify("删除失败: " + e.message, "err"); }
     }
 
-    const cfgModal = reactive({ open: false, mode: "new", err: "",
+    const cfgModal = reactive({ open: false, mode: "new", err: "", origin: null,
       form: { nickname: "", file_glob: "*", key_seq: "", omit_seq: "", delimiter: " | ",
-              trailer_prefix: "|||||", encoding_a: "auto", encoding_b: "auto",
               source_a: "A", source_b: "B", pri_seq: "", addmod: "", target: "current.conf" } });
     function newConfig() {
-      cfgModal.mode = "new"; cfgModal.err = "";
+      cfgModal.mode = "new"; cfgModal.err = ""; cfgModal.origin = null;
       Object.assign(cfgModal.form, { nickname: "", file_glob: "*", key_seq: "", omit_seq: "",
         delimiter: " | ", trailer_prefix: "|||||", encoding_a: "auto", encoding_b: "auto",
         source_a: "A", source_b: "B", pri_seq: "", addmod: "", target: "current.conf" });
@@ -5054,9 +5336,9 @@ const ConfigManagePage = {
     }
     // 勘误③：带入 current.conf 已有条目的完整配置 → 编辑后保存进新文件（供同一文本按不同配置对比）
     function prefillFromEntry(e, targetFile) {
-      cfgModal.mode = "new"; cfgModal.err = "";
+      cfgModal.mode = "new"; cfgModal.err = ""; cfgModal.origin = null;
       Object.assign(cfgModal.form, {
-        nickname: e.nickname || "", file_glob: e.file_glob || "*",
+        nickname: e.nickname || "", file_glob: e.file_glob || "",
         key_seq: seqToStr(e.key_columns), omit_seq: seqToStr(e.omit_columns),
         delimiter: e.delimiter != null ? e.delimiter : " | ",
         trailer_prefix: e.trailer_prefix || "|||||",
@@ -5068,10 +5350,13 @@ const ConfigManagePage = {
     function editConfig(c) {
       cfgModal.mode = "edit"; cfgModal.err = "";
       // 勘误②：保存写该规则当前所在文件（default.conf 为基线不可写 → 回退 current.conf）；
-      // 想另存独立文件用「另存为」按钮，不影响原文件
+      // 想另存独立文件用「另存为」按钮，不影响原文件。
+      // 需求⑦⑧：记录来源文件+行号——保存按行号精准覆盖原行，删除按行号精准删行
       const tgt = c._source === "default.conf" ? "current.conf" : (c._source || "current.conf");
+      cfgModal.origin = (c._source && c.line_no && c._source !== "default.conf")
+          ? { file: c._source, line: c.line_no } : null;
       Object.assign(cfgModal.form, {
-        nickname: c.nickname || "", file_glob: c.file_glob || "*",
+        nickname: c.nickname || "", file_glob: c.file_glob == null ? "" : c.file_glob,
         key_seq: seqToStr(c.key_columns), omit_seq: seqToStr(c.omit_columns),
         delimiter: c.delimiter != null ? c.delimiter : " | ",
         trailer_prefix: c.trailer_prefix || "|||||",
@@ -5082,31 +5367,46 @@ const ConfigManagePage = {
     }
     function cfgBody() {
       return {
-        nickname: cfgModal.form.nickname, file_glob: cfgModal.form.file_glob || "*",
+        nickname: cfgModal.form.nickname, file_glob: cfgModal.form.file_glob, // 空串合法（精准行覆盖键对齐）
         key_seq: cfgModal.form.key_seq || null, omit_seq: cfgModal.form.omit_seq || null,
         delimiter: cfgModal.form.delimiter, trailer_prefix: cfgModal.form.trailer_prefix,
         encoding_a: cfgModal.form.encoding_a, encoding_b: cfgModal.form.encoding_b,
         source_a: cfgModal.form.source_a || null, source_b: cfgModal.form.source_b || null,
         pri_seq: cfgModal.form.pri_seq || null, addmod: cfgModal.form.addmod || null,
         target: cfgModal.form.target || "current.conf",
+        // 需求⑦：编辑模式携带来源文件+行号 → 后端按行精准覆盖原行（另存为/新增不带）
+        source_file: cfgModal.mode === "edit" && cfgModal.origin ? cfgModal.origin.file : null,
+        source_line: cfgModal.mode === "edit" && cfgModal.origin ? cfgModal.origin.line : null,
       };
     }
     async function saveConfig() {
       cfgModal.err = "";
       if (!cfgModal.form.nickname.trim()) { cfgModal.err = "昵称不能为空"; return; }
       try {
-        await jpost("/api/configs", cfgBody());
+        const r = await jpost("/api/configs", cfgBody());
         cfgModal.open = false; loadConfigs(); loadConfFiles();
-        notify("配置「" + cfgModal.form.nickname + "」已保存到 " + (cfgModal.form.target || "current.conf")
-            + "（其他配置文件不受影响）");
+        const where = (cfgModal.form.target || "current.conf");
+        notify("配置「" + cfgModal.form.nickname + "」已保存到 " + where
+            + (r && r.replaced_line ? "（覆盖原第 " + r.replaced_line + " 行，其他配置文件不受影响）"
+               : "（新增一行，其他配置文件不受影响）"));
       } catch (e) { cfgModal.err = "保存失败: " + e.message; }
     }
     async function deleteConfig(c) {
-      const ok = await askConfirm("删除配置「" + c.nickname + "」？将从全部配置文件移除该昵称的规则行（基线 default.conf 同样清理）。", { danger: true });
+      // 需求⑧：列表行自带来源文件+行号 → 精准删该行（不波及其他文件/同名规则）
+      const precise = !!(c._source && c.line_no && c._source !== "default.conf");
+      const ok = await askConfirm(precise
+          ? "删除配置「" + c.nickname + "」？将精准删除 " + c._source + " 第 " + c.line_no
+            + " 行的该规则行（其他配置文件及其中同名规则不受影响）。"
+          : "删除配置「" + c.nickname + "」？将从全部配置文件移除该昵称的规则行（基线 default.conf 同样清理）。",
+          { danger: true });
       if (!ok) return;
       try {
-        await api("/api/configs?nickname=" + encodeURIComponent(c.nickname), { method: "DELETE" });
-        notify("配置「" + c.nickname + "」已删除"); loadConfigs(); loadConfFiles();
+        const qs = new URLSearchParams({ nickname: c.nickname });
+        if (precise) { qs.set("source", c._source); qs.set("line_no", String(c.line_no)); }
+        await api("/api/configs?" + qs.toString(), { method: "DELETE" });
+        notify("配置「" + c.nickname + "」已删除"
+            + (precise ? "（" + c._source + " 第 " + c.line_no + " 行）" : ""));
+        loadConfigs(); loadConfFiles();
       } catch (e) { notify("删除失败: " + e.message, "err"); }
     }
 
@@ -5238,6 +5538,7 @@ const ConfigManagePage = {
         <div class="conf-file-bar" v-if="confFiles.length">
           <b>🗂 配置文件：</b>
           <select v-model="selFile" class="styled-select" style="min-width:200px;">
+            <option value="">全部配置（{{ confFiles.reduce((n, f) => n + (f.rules || 0), 0) }} 条）</option>
             <option v-for="f in confFiles" :key="f.name" :value="f.name"
                     :disabled="f.name === 'default.conf'">{{ f.name }}（{{ f.rules || 0 }} 条）</option>
           </select>
@@ -5527,6 +5828,7 @@ const App = {
     const encodings = ref(["auto", "utf-8"]);
     onMounted(async () => {
       try { const r = await api("/api/encodings"); encodings.value = r.encodings; } catch (e) {}
+      loadLockState(); // 配置锁闭状态（设置页模糊只读、写请求前置拦截均依赖）
     });
     function onSubmitted(ids) {
       if (ids && ids.length) { jobId.value = ids[0]; backBatch.value = null; resultNonce.value++; tab.value = "result"; }
@@ -5640,4 +5942,5 @@ const App = {
 };
 
 createApp(App).component("PageHeader", PageHeader).component("ListPager", ListPager)
+  .component("FoldHint", FoldHint)
   .component("DiscardTable", DiscardTable).component("DiscardCard", DiscardCard).mount("#app");

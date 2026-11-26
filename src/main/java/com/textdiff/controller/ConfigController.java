@@ -115,14 +115,68 @@ public class ConfigController {
         return Map.of("configs", out, "bad_lines", bad, "dups", dups);
     }
 
-    /** 删除配置：删 {昵称}.conf（如存在），并从 configs 目录全部配置文件中移除该昵称的行。 */
+    /**
+     * 删除配置。两种模式：
+     *  1) 精确删行：source + line_no 同时提供时，仅在该文件（configs 目录按原名精确匹配）定位删除该行；
+     *     文件不存在 → 404；行号越界/空行/注释/非配置行 → 400 带说明；该行昵称 ≠ nickname → 400。
+     *     校验失败绝不降级为跨文件删除。
+     *  2) 旧行为：source/line_no 缺失时，保持跨全部配置文件移除该昵称行（并删 {昵称}.conf），兼容旧调用方。
+     */
     @DeleteMapping("/configs")
-    public Map<String, Object> delete(@RequestParam String nickname) throws IOException {
+    public Map<String, Object> delete(@RequestParam String nickname,
+                                      @RequestParam(required = false) String source,
+                                      @RequestParam(name = "line_no", required = false) Integer lineNo) throws IOException {
         if (nickname == null || nickname.isBlank()) throw new IllegalArgumentException("缺少 nickname");
         sanitize(nickname);
         String nick = nickname.strip();
-        List<String> touched = new ArrayList<>();
         Path dir = paths.configsDir();
+        // 精确删行：source + line_no 二者同时提供才允许（部分提供视为参数错误，不回退跨文件删除）
+        if (source != null && !source.isBlank() || lineNo != null) {
+            if (source == null || source.isBlank() || lineNo == null) {
+                throw new IllegalArgumentException("source 与 line_no 必须同时提供");
+            }
+            sanitize(source);
+            String name = source.strip();
+            Path file = dir.resolve(name);
+            if (!Files.isRegularFile(file)) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "配置文件不存在: " + name);
+            }
+            List<String> lines = new ArrayList<>(Files.readAllLines(file, StandardCharsets.UTF_8));
+            if (lineNo < 1 || lineNo > lines.size()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "行号越界: " + lineNo + "（" + name + " 共 " + lines.size() + " 行）");
+            }
+            String t = lines.get(lineNo - 1).strip();
+            if (t.isEmpty() || t.startsWith("#")) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "第 " + lineNo + " 行为空行或注释，不可删除");
+            }
+            String lineNick;
+            try {
+                lineNick = Rules.parseLegacy(t, ApiPayloads.JobDefaults.DELIM,
+                        ApiPayloads.JobDefaults.TRAILER).nickname;
+            } catch (RuntimeException e) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "第 " + lineNo + " 行不是有效配置行，无法删除");
+            }
+            if (!lineNick.equals(nick)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "该行昵称为 " + lineNick + "，与请求不符");
+            }
+            lines.remove(lineNo - 1);
+            Files.writeString(file, lines.isEmpty() ? "" : String.join(System.lineSeparator(), lines)
+                    + System.lineSeparator(), StandardCharsets.UTF_8);
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+            out.put("deleted", true);
+            out.put("nickname", nick);
+            out.put("files", List.of(name));
+            out.put("deleted_line", true);
+            out.put("file", name);
+            out.put("line_no", lineNo);
+            return out;
+        }
+        // 旧行为：跨文件按昵称删除（source/line_no 缺失时兼容旧调用方）
+        List<String> touched = new ArrayList<>();
         if (Files.isDirectory(dir)) {
             List<Path> files;
             try (var s = Files.list(dir)) {
@@ -160,9 +214,12 @@ public class ConfigController {
     }
 
     /**
-     * 保存配置规则（需求⑤）：默认写入 <b>current.conf</b>（请求体 target 可指定其他配置文件，如
-     * 配置管理页新建的独立文件）；目标文件内同（昵称+通配名）规则替换、否则追加，<b>不触碰其他文件</b>。
-     * default.conf 为基线文件禁止作目标。column_names 显式传入时重编码 COLS（修复旧版忽略导致的陈旧）。
+     * 保存配置规则（需求⑤）：默认写入 <b>current.conf</b>；请求体 target 可指定其他配置文件（如
+     * 配置管理页新建的独立文件），target 缺省且 source_file 给定时回写 source_file 原名。目标文件内：
+     * source_file=target 且 source_line 有效且该行昵称一致 → 按行号精确替换；否则按（昵称 + 通配名
+     * 原文，空串保持空串）原地替换；未命中 → 追加。<b>不触碰其他文件</b>。configs 目录已存在同名文件
+     * （含无 .conf 后缀的 配置.txt）用原名，仅新建文件时补 .conf。default.conf 为基线文件禁止作目标。
+     * column_names 显式传入时重编码 COLS（修复旧版忽略导致的陈旧）。
      */
     @SuppressWarnings("unchecked")
     @PostMapping("/configs")
@@ -173,8 +230,9 @@ public class ConfigController {
             throw new IllegalArgumentException("缺少 nickname");
         }
         sanitize(nickname);
-        String globKey = glob == null || glob.isBlank() ? "*" : glob.strip();
-        String target = normalizeConfTarget(str(body.get("target")));
+        // file_glob 使用 body 原文（strip），空串合法（匹配第二冒号段为空的行），不再做 "空→*" 转换
+        String globKey = glob == null ? "" : glob.strip();
+        String target = resolveSaveTarget(str(body.get("target")), str(body.get("source_file")));
         StringBuilder sb = new StringBuilder();
         sb.append(nickname.strip()).append(':').append(globKey);
         String keySeq = str(body.get("key_seq"));
@@ -214,34 +272,59 @@ public class ConfigController {
         }
         if (colNames != null && !colNames.isEmpty()) parsed.columnNames = colNames;
         String line = Rules.toLegacyLine(parsed, true);
-        // 写目标文件：同（昵称+通配名）替换，否则追加；其他文件一律不动（Q14 口径：文件间互不影响）
+        // 写目标文件：① source_file=target 且 source_line 有效且该行昵称一致 → 按行号精确替换；
+        // ② 否则按（昵称 + 通配名原文，空串保持空串）替换第一条命中行；未命中 → 追加文件尾。
+        // 其他文件一律不动（Q14 口径：文件间互不影响）
         Path dir = paths.configsDir();
         Files.createDirectories(dir);
         Path file = dir.resolve(target);
-        List<String> kept = new ArrayList<>();
-        boolean replaced = false;
-        if (Files.isRegularFile(file)) {
-            for (String l : Files.readAllLines(file, StandardCharsets.UTF_8)) {
-                String t = l.strip();
-                if (t.isEmpty() || t.startsWith("#")) {
-                    kept.add(l);
-                    continue;
-                }
-                String[] parts = t.split(":", 3);
-                String nick = parts[0].strip();
-                String g = parts.length > 1 ? parts[1].strip() : "";
-                if (!replaced && nick.equals(nickname.strip()) && g.equals(globKey)) {
-                    kept.add(line);
-                    replaced = true;
-                } else {
-                    kept.add(l);
+        List<String> lines = Files.isRegularFile(file)
+                ? new ArrayList<>(Files.readAllLines(file, StandardCharsets.UTF_8))
+                : new ArrayList<>();
+        Integer sourceLine = numberOf(body.get("source_line"));
+        String sourceFile = str(body.get("source_file"));
+        Integer replacedLine = null;
+        // ① 精确行替换（行号定位，忽略键匹配）；行损坏/昵称不符 → 落回按键替换
+        if (sourceLine != null && sourceFile != null && !sourceFile.isBlank()
+                && sourceFile.strip().equals(target)
+                && sourceLine >= 1 && sourceLine <= lines.size()) {
+            String t = lines.get(sourceLine - 1).strip();
+            if (!t.isEmpty() && !t.startsWith("#")) {
+                try {
+                    if (nickname.strip().equals(Rules.parseLegacy(t, ApiPayloads.JobDefaults.DELIM,
+                            ApiPayloads.JobDefaults.TRAILER).nickname)) {
+                        lines.set(sourceLine - 1, line);
+                        replacedLine = sourceLine;
+                    }
+                } catch (RuntimeException ignored) {
+                    // 该行损坏无法解析昵称 → 走按键替换
                 }
             }
         }
-        if (!replaced) kept.add(line);
-        Files.writeString(file, String.join(System.lineSeparator(), kept) + System.lineSeparator(),
+        // ② 按键替换：第二条冒号段原文（strip，空串保持空串，不把空当 *）
+        if (replacedLine == null) {
+            for (int i = 0; i < lines.size(); i++) {
+                String t = lines.get(i).strip();
+                if (t.isEmpty() || t.startsWith("#")) continue;
+                String[] parts = t.split(":", 3);
+                String nick = parts[0].strip();
+                String g = parts.length > 1 ? parts[1].strip() : "";
+                if (nick.equals(nickname.strip()) && g.equals(globKey)) {
+                    lines.set(i, line);
+                    replacedLine = i + 1;
+                    break;
+                }
+            }
+        }
+        if (replacedLine == null) lines.add(line); // 未命中 → 追加
+        Files.writeString(file, String.join(System.lineSeparator(), lines) + System.lineSeparator(),
                 StandardCharsets.UTF_8);
-        return Map.of("files", List.of(target), "nickname", nickname.strip(), "target", target);
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("files", List.of(target));
+        out.put("nickname", nickname.strip());
+        out.put("target", target);
+        out.put("replaced_line", replacedLine); // 1-based 被替换行号；null = 追加
+        return out;
     }
 
     /** 请求体 column_names（字符串列表）→ 非空列表，缺省 null（沿用现值）。 */
@@ -253,6 +336,48 @@ public class ConfigController {
             if (o != null) out.add(o.toString());
         }
         return out.isEmpty() ? null : out;
+    }
+
+    /**
+     * 保存目标文件决定：body.target 优先——configs 目录下已存在同名文件（含无 .conf 后缀的
+     * 配置.txt）必须用原名，仅当目标文件不存在需新建时才补 .conf（normalizeConfTarget）；
+     * target 缺省时有 source_file → source_file 原名，否则 current.conf。
+     * default.conf 一律禁作目标（已存在与新建两条路径都拦截）。
+     */
+    private String resolveSaveTarget(String target, String sourceFile) {
+        if (target != null && !target.isBlank()) {
+            sanitize(target);
+            String t = target.strip();
+            if (Files.isRegularFile(paths.configsDir().resolve(t))) {
+                if (t.equalsIgnoreCase("default.conf")) {
+                    throw new IllegalArgumentException("default.conf 为基线文件，不可作为保存目标");
+                }
+                return t;
+            }
+            return normalizeConfTarget(t);
+        }
+        if (sourceFile != null && !sourceFile.isBlank()) {
+            sanitize(sourceFile);
+            String s = sourceFile.strip();
+            if (s.equalsIgnoreCase("default.conf")) {
+                throw new IllegalArgumentException("default.conf 为基线文件，不可作为保存目标");
+            }
+            return s;
+        }
+        return "current.conf";
+    }
+
+    /** 请求体数值字段（source_line 等）→ Integer；缺失或非数值返回 null。 */
+    private static Integer numberOf(Object o) {
+        if (o instanceof Number n) return n.intValue();
+        if (o instanceof String s && !s.isBlank()) {
+            try {
+                return Integer.parseInt(s.strip());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /** 保存目标文件名规范化：sanitize + 缺省 current.conf + 补 .conf 后缀；default.conf 禁作目标。 */
@@ -847,14 +972,16 @@ public class ConfigController {
 
     // ---- internals ----
 
-    /** 文件名 → 内容（LinkedHashMap 保序）。 */
+    /** 文件名 → 内容（LinkedHashMap 保序；隐藏文件（.admin_key/.lock_state.json 等点开头）排除）。 */
     private Map<String, String> readAll() throws IOException {
         Map<String, String> out = new java.util.LinkedHashMap<>();
         Path dir = paths.configsDir();
         if (!Files.isDirectory(dir)) return out;
         try (var s = Files.list(dir)) {
             for (Path p : s.filter(Files::isRegularFile).sorted().toList()) {
-                out.put(p.getFileName().toString(), Files.readString(p, StandardCharsets.UTF_8));
+                String name = p.getFileName().toString();
+                if (name.startsWith(".")) continue; // 锁闭密钥/状态等系统隐藏文件不作为配置文件暴露
+                out.put(name, Files.readString(p, StandardCharsets.UTF_8));
             }
         }
         return out;

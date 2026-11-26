@@ -25,8 +25,28 @@ public class WebBeansConfig {
     }
 
     @Bean(destroyMethod = "close")
-    public DualJobStore jobStore(AppPaths paths, AppConfig cfg) {
+    public com.textdiff.store.DualJobStore jobStore(AppPaths paths, AppConfig cfg) {
         return new DualJobStore(paths.baseDir().resolve("store"), cfg.store().enabled());
+    }
+
+    /** 配置锁闭（管理密钥 + 状态落盘 configs/.admin_key、configs/.lock_state.json）。 */
+    @Bean(initMethod = "init")
+    public com.textdiff.config.ConfigLockService configLockService(AppPaths paths) {
+        return new com.textdiff.config.ConfigLockService(paths);
+    }
+
+    /** 配置锁闭写保护拦截器（锁闭期间拒绝一切配置写请求）。 */
+    @Bean
+    org.springframework.web.servlet.config.annotation.WebMvcConfigurer configWriteGuardConfigurer(
+            com.textdiff.config.ConfigLockService lock) {
+        return new org.springframework.web.servlet.config.annotation.WebMvcConfigurer() {
+            @Override
+            public void addInterceptors(
+                    org.springframework.web.servlet.config.annotation.InterceptorRegistry registry) {
+                registry.addInterceptor(new com.textdiff.config.ConfigWriteGuard(lock))
+                        .addPathPatterns("/api/**");
+            }
+        };
     }
 
     /** 字段名映射（源系统字段配置）：JSONL 事实来源 + H2 镜像。 */

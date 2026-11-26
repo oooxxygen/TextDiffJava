@@ -13,8 +13,10 @@ import java.util.regex.Pattern;
  *
  * 段 = 起始行（含）~ 结束行（含）；无结束式时到下一段起始行之前 / 文件尾。
  * 首段之前的行进 head、末段之后的残行进 tail（供对照而非丢弃）。
- * 主键 = 主键式在段内首个命中行的捕获组 1（无组取整体命中；未命中 = null，
+ * 主键 = 主键式在段内首个命中行的捕获组 1（无捕获组取整体命中；未命中 = null，
  * 无主键段走段全文精确匹配）。
+ * 配置 sceneSort 非空时，段内场次块（如 {@code :61:} 块）先按排序键重排再产出，
+ * 语法见 {@link SceneSorter}。
  */
 public final class SegmentParser {
     private SegmentParser() {}
@@ -34,6 +36,7 @@ public final class SegmentParser {
         Pattern start = cfg.compiledStart();
         Pattern end = cfg.compiledEnd();
         Pattern key = cfg.compiledKey();
+        SceneSorter.Spec sceneSpec = cfg.compiledSceneSort(); // 场次排序配置，空 = 不重排
 
         List<Segment> out = new ArrayList<>();
         List<String> head = new ArrayList<>();
@@ -71,6 +74,10 @@ public final class SegmentParser {
                 }
             }
             List<String> segLines = new ArrayList<>(lines.subList(s, e + 1));
+            // 段内场次块按键重排（配置空 = 原序）；重排不改变行数，startLineNo 仍为原段首行号。
+            // 结束式传给排序器：匹配结束式的尾行固定在段尾不参与重排。
+            // 主键在重排后的行上提取：与现状一致（主键式一般锚定头行，头行不参与重排，行为不变）。
+            segLines = SceneSorter.reorder(segLines, sceneSpec, end);
             out.add(new Segment(extractKey(segLines, key), segLines, s + 1));
             i = e + 1;
         }

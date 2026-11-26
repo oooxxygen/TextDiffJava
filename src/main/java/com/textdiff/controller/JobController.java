@@ -4,6 +4,7 @@ import com.textdiff.engine.RowDiff;
 import com.textdiff.engine.Summary;
 import com.textdiff.store.JobRecord;
 import com.textdiff.store.JobStore;
+import com.textdiff.store.Json;
 import com.textdiff.store.NoteRecord;
 import com.textdiff.store.ResultFiles;
 import com.textdiff.task.JobManager;
@@ -171,6 +172,170 @@ public class JobController {
         ApiViews.deleteRecursively(Path.of(job.resultDir)); // 旧结果清空后重跑
         jobs.submit(job);
         return Map.of("job_id", job.id);
+    }
+
+    /**
+     * 修改配置后重跑「同昵称」（单文本界面发起，作用整个批次）：
+     * <ul>
+     *   <li>legacy（普通文件/CTIS，legacy configLine）：按 ComparePayload 重建 configLine（同
+     *       /rerun），批次内解析昵称（Rules.parseLegacy）与重建后昵称一致的作业全部以新配置重跑；</li>
+     *   <li>custom（JSON configLine）：body 可带 start/end/key/scene_sort → 校验
+     *       （CustomFormat.of）后就地改写各作业 configLine 对应键；批次内 jobType=custom 且
+     *       展示昵称（label 优先，回退剥「 · 」后缀的 nickname）相同的作业重跑；</li>
+     *   <li>textline（JSON configLine）：body 可带 key_positions/encoding_a/encoding_b →
+     *       校验（TextLineFormat.of）后批次内<b>全部</b> textline 作业就地改写对应键重跑
+     *       （各作业 srca/srcb 来源命名保留）。</li>
+     * </ul>
+     * RUNNING 作业跳过（避免并发重跑）；PENDING 作业仅改写配置（已在队列，不重复入池）。
+     * 请求体字段同各类型提交接口；无批次归属的作业 400。
+     */
+    @PostMapping("/jobs/{id}/rerun-nicknames")
+    public Map<String, Object> rerunNicknames(@PathVariable String id,
+                                              @RequestBody Map<String, Object> body) {
+        return doRerunNicknames(id, body);
+    }
+
+    /** 同上（普通文本比对结果页入口：/api/textline-jobs/{id}/rerun-nicknames）。 */
+    @PostMapping("/textline-jobs/{id}/rerun-nicknames")
+    public Map<String, Object> rerunNicknamesTl(@PathVariable String id,
+                                                @RequestBody Map<String, Object> body) {
+        return doRerunNicknames(id, body);
+    }
+
+    /** 同上（自定义格式结果页入口：/api/custom-jobs/{id}/rerun-nicknames）。 */
+    @PostMapping("/custom-jobs/{id}/rerun-nicknames")
+    public Map<String, Object> rerunNicknamesCustom(@PathVariable String id,
+                                                    @RequestBody Map<String, Object> body) {
+        return doRerunNicknames(id, body);
+    }
+
+    private Map<String, Object> doRerunNicknames(String id, Map<String, Object> body) {
+        JobRecord src = require(id);
+        if (src.batchId == null || src.batchId.isBlank()) {
+            throw new IllegalArgumentException("该作业不属于任何批次，无同昵称范围可重跑");
+        }
+        String type = src.jobType == null ? "file" : src.jobType;
+        List<JobRecord> batchJobs = store.listJobs(src.batchId);
+
+        // 预计算：新配置键值（各类型统一「先校验、后改写」，非法配置在改动任何作业前即失败）
+        String newLegacyLine = null;
+        String legacyNick = null;
+        Map<String, String> jsonUpdates = null; // custom/textline 的 JSON 键改写（null 键 = 删除该键）
+        String matchNick = null;                // custom 的同昵称匹配键
+
+        if ("custom".equals(type)) {
+            @SuppressWarnings("unchecked")
+            Map<String, String> cur = Json.read(src.configLine, Map.class);
+            // containsKey 区分「字段缺席（沿用原配置）」与「显式清空（end/key/scene_sort 可空合法）」
+            String start = body.containsKey("start") ? nz(str(body.get("start"))) : g(cur, "start");
+            String end = body.containsKey("end") ? nz(str(body.get("end"))) : g(cur, "end");
+            String key = body.containsKey("key") ? nz(str(body.get("key"))) : g(cur, "key");
+            String scene = body.containsKey("scene_sort") ? nz(str(body.get("scene_sort"))) : null;
+            com.textdiff.custom.CustomFormat.of(start, end, key,
+                    scene == null || scene.isBlank() ? null : scene); // 校验（非法正则 400）
+            jsonUpdates = new LinkedHashMap<>();
+            jsonUpdates.put("start", start);
+            jsonUpdates.put("end", end);
+            jsonUpdates.put("key", key);
+            if (body.containsKey("scene_sort")) {
+                jsonUpdates.put("scene_sort", scene == null || scene.isBlank() ? null : scene);
+            }
+            matchNick = com.textdiff.controller.ApiViews.jsonNick(src);
+        } else if ("textline".equals(type)) {
+            @SuppressWarnings("unchecked")
+            Map<String, String> cur = Json.read(src.configLine, Map.class);
+            String kp = body.containsKey("key_positions") ? nz(str(body.get("key_positions"))) : g(cur, "keypos");
+            String ea = body.containsKey("encoding_a") ? nz(str(body.get("encoding_a"))) : g(cur, "enca");
+            String eb = body.containsKey("encoding_b") ? nz(str(body.get("encoding_b"))) : g(cur, "encb");
+            com.textdiff.textline.TextLineFormat.of(kp, ea, eb); // 校验（非法区间 400）
+            jsonUpdates = new LinkedHashMap<>();
+            jsonUpdates.put("keypos", kp);
+            jsonUpdates.put("enca", ea);
+            jsonUpdates.put("encb", eb);
+        } else {
+            ApiPayloads.ComparePayload p;
+            try {
+                p = Json.read(Json.write(body), ApiPayloads.ComparePayload.class);
+            } catch (RuntimeException e) {
+                throw new IllegalArgumentException("重跑参数无效：" + e.getMessage());
+            }
+            newLegacyLine = ApiPayloads.buildLegacyLine(p);
+            legacyNick = com.textdiff.engine.Rules
+                    .parseLegacy(newLegacyLine, com.textdiff.task.JobManager.DEFAULT_DELIM,
+                            com.textdiff.task.JobManager.DEFAULT_TRAILER).nickname;
+        }
+
+        List<String> rerun = new ArrayList<>(), skipped = new ArrayList<>();
+        for (JobRecord j : batchJobs) {
+            String jt = j.jobType == null ? "file" : j.jobType;
+            boolean inScope;
+            if ("custom".equals(type)) {
+                inScope = "custom".equals(jt) && matchNick.equals(com.textdiff.controller.ApiViews.jsonNick(j));
+            } else if ("textline".equals(type)) {
+                inScope = "textline".equals(jt); // 普通文本对比：重跑批次下全部文本对比任务
+            } else {
+                inScope = ("file".equals(jt) || "ctis".equals(jt)) && legacyNick.equals(legacyNickOf(j));
+            }
+            if (!inScope) continue;
+            if (JobRecord.RUNNING.equals(j.status)) {
+                skipped.add(j.id);
+                continue;
+            }
+            if (newLegacyLine != null) {
+                j.configLine = newLegacyLine;
+            } else {
+                applyJsonUpdates(j, jsonUpdates);
+            }
+            j.status = JobRecord.PENDING;
+            j.error = null;
+            j.aiStatus = "none";
+            j.clearStats();
+            store.saveJob(j);
+            ApiViews.deleteRecursively(Path.of(j.resultDir)); // 旧结果清空后重跑
+            jobs.submit(j); // 新置 PENDING 的作业重新入池（含此前已在队列中的：submit 幂等）
+            rerun.add(j.id);
+        }
+        if (rerun.isEmpty() && skipped.isEmpty()) {
+            throw new IllegalArgumentException("批次内没有匹配的同昵称作业");
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("batch_id", src.batchId);
+        out.put("rerun", rerun);
+        out.put("skipped_running", skipped);
+        out.put("count", rerun.size());
+        return out;
+    }
+
+    /** legacy configLine 的解析昵称（解析失败回退首冒号段原文）。 */
+    private static String legacyNickOf(JobRecord j) {
+        try {
+            return com.textdiff.engine.Rules.parseLegacy(j.configLine,
+                    com.textdiff.task.JobManager.DEFAULT_DELIM,
+                    com.textdiff.task.JobManager.DEFAULT_TRAILER).nickname;
+        } catch (RuntimeException e) {
+            String line = j.configLine == null ? "" : j.configLine;
+            return line.split(":", 2)[0].strip();
+        }
+    }
+
+    /** 就地改写 JSON configLine 的键（值为 null 删除该键；非 JSON 行原样不动并抛参数错误）。 */
+    @SuppressWarnings("unchecked")
+    private static void applyJsonUpdates(JobRecord j, Map<String, String> updates) {
+        Map<String, Object> m = Json.read(j.configLine, Map.class);
+        for (Map.Entry<String, String> e : updates.entrySet()) {
+            if (e.getValue() == null) m.remove(e.getKey());
+            else m.put(e.getKey(), e.getValue());
+        }
+        j.configLine = Json.write(m);
+    }
+
+    private static String g(Map<String, String> m, String k) {
+        return m == null ? "" : (m.get(k) == null ? "" : m.get(k));
+    }
+
+    /** null → ""（Map 值显式清空语义统一）。 */
+    private static String nz(String v) {
+        return v == null ? "" : v;
     }
 
     @PostMapping("/jobs/{id}/label")

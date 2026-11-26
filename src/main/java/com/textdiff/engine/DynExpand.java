@@ -5,9 +5,11 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * CTIS 动态栏位「对比时虚拟子列展开」。
@@ -79,17 +81,27 @@ public final class DynExpand {
     public record RowResult(int[] diffCols, List<Val> vals) {}
 
     private final List<Spec> specs;
+    /** 子字段跳过标签（统一小写；匹配 Desc.label() 忽略大小写）。空 = 无。 */
+    private final Set<String> omitSubs;
     private final Map<Integer, Spec> byCol = new HashMap<>();
     private final LinkedHashMap<String, Desc> registry = new LinkedHashMap<>();
     private int seq = 0;
 
-    private DynExpand(List<Spec> specs) {
+    private DynExpand(List<Spec> specs, Set<String> omitSubLabels) {
         this.specs = specs;
+        this.omitSubs = omitSubLabels == null ? Set.of()
+                : omitSubLabels.stream().filter(s -> s != null && !s.isBlank())
+                        .map(s -> s.strip().toLowerCase(Locale.ROOT)).collect(Collectors.toSet());
         for (Spec s : specs) byCol.putIfAbsent(s.colIndex, s);
     }
 
     /** specs 空/ null 返回 null（走 legacy 逐列路径）。 */
     public static DynExpand of(List<Spec> specs) {
+        return of(specs, null);
+    }
+
+    /** omitSubLabels：子字段跳过标签集（如 "107-1B"，匹配忽略大小写）；null/空 = 无。 */
+    public static DynExpand of(List<Spec> specs, Set<String> omitSubLabels) {
         if (specs == null) return null;
         List<Spec> effective = new ArrayList<>();
         Set<Integer> seen = new LinkedHashSet<>();
@@ -98,7 +110,7 @@ public final class DynExpand {
             seen.add(s.colIndex);
             effective.add(s);
         }
-        return effective.isEmpty() ? null : new DynExpand(effective);
+        return effective.isEmpty() ? null : new DynExpand(effective, omitSubLabels);
     }
 
     public boolean isDyn(int colIndex) {
@@ -113,6 +125,8 @@ public final class DynExpand {
     /**
      * 整行比较：真实列逐列（跳过 omit/ignore 与动态父栏位），动态父栏位按子编号展开比对。
      * 差异索引 = 真实差异列 + 差异虚拟子列；vals 含全部子项（相等子项也供前端展示）。
+     * 命中子字段跳过标签（omitSubs，如 107-1B）的子键不比较、不进 vals、不注册虚拟列、不计差异；
+     * 键集合判等也只对未跳过键进行（两侧仅 1B 跳过时，1B 的有无/取值差异不影响整行判定）。
      */
     public RowResult compareRow(String[] aCols, String[] bCols, Set<Integer> skip) {
         int la = aCols.length, lb = bCols.length;
@@ -135,6 +149,7 @@ public final class DynExpand {
             LinkedHashSet<String> keys = new LinkedHashSet<>(pa.keySet());
             keys.addAll(pb.keySet());
             for (String k : keys) {
+                if (omitted(spec, k)) continue; // 子字段跳过：不注册、不进 vals、不计差异
                 String av = pa.get(k), bv = pb.get(k); // null = 该侧无此编号
                 Desc d = register(spec, k);
                 vals.add(new Val(d.index, i, k, av, bv));
@@ -154,12 +169,23 @@ public final class DynExpand {
             if (skip.contains(i)) continue;
             String raw = i < cols.length ? cols[i] : "";
             for (Map.Entry<String, String> e : parse(raw).entrySet()) {
+                if (omitted(spec, e.getKey())) continue; // 子字段跳过：单侧行同样不展开
                 Desc d = register(spec, e.getKey());
                 vals.add(new Val(d.index, i, e.getKey(),
                         sideA ? e.getValue() : null, sideA ? null : e.getValue()));
             }
         }
         return vals;
+    }
+
+    /**
+     * 子字段跳过判定：行内键（编号，重复出现为 编号*2、自然段为 #n）折算成父标签-子编号（如 107-1B，
+     * 同编号重复段共用同一跳过标签），在 omitSubs 中忽略大小写查找。
+     */
+    private boolean omitted(Spec spec, String key) {
+        if (omitSubs.isEmpty()) return false;
+        String sub = key.startsWith("#") ? key.substring(1) : key.split("\\*", 2)[0];
+        return omitSubs.contains((spec.parentLabel + "-" + sub).toLowerCase(Locale.ROOT));
     }
 
     /**

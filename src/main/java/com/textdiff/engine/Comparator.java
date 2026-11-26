@@ -133,12 +133,25 @@ public final class Comparator {
                                               FieldTranscoder transA, FieldTranscoder transB,
                                               List<DynExpand.Spec> dynSpecs)
             throws IOException {
+        return compareFiles(pathA, pathB, config, sink, maxInMemoryBytes, tmpDir, transA, transB,
+                dynSpecs, null);
+    }
+
+    /**
+     * 带子字段跳过版：omitSubLabels（如 "107-1B"，匹配忽略大小写）命中的子字段在对比中被屏蔽——
+     * 不比较、不进 diff、不注册虚拟列；父栏位其余子字段正常比对。null/空 = 无跳过。
+     */
+    public static CompareOutcome compareFiles(Path pathA, Path pathB, CompareConfig config,
+                                              ResultSink sink, long maxInMemoryBytes, Path tmpDir,
+                                              FieldTranscoder transA, FieldTranscoder transB,
+                                              List<DynExpand.Spec> dynSpecs, Set<String> omitSubLabels)
+            throws IOException {
         Rules.RuleEngine engine = new Rules.RuleEngine(config);
         String delim = config.delimiter;
         String tp = config.trailerPrefix;
         String encA = Encoding.resolveEncoding(pathA, config.encodingA, delim);
         String encB = Encoding.resolveEncoding(pathB, config.encodingB, delim);
-        DynExpand dyn = DynExpand.of(dynSpecs);
+        DynExpand dyn = DynExpand.of(dynSpecs, omitSubLabels);
 
         Summary summary = new Summary();
         Parser.TrailerData trailerA = new Parser.TrailerData();

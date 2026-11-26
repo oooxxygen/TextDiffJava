@@ -20,6 +20,7 @@ import java.util.Map;
  * POST /api/ctis-dyn/import（multipart .xlsx：sheet1 适用清单 + sheet2 子栏位明细，全量原子替换）
  * GET  /api/ctis-dyn/status（当前配置概览）
  * GET  /api/ctis-dyn/get?dyn=（指定关联行名称的子栏位明细）
+ * GET  /api/ctis-dyn/label?col_seq=107&code=1B（子字段名称查询：悬停显示，未配置 name=""）
  */
 @RestController
 @RequestMapping("/api/ctis-dyn")
@@ -98,6 +99,24 @@ public class CtisDynController {
         out.put("applies", applies.stream().map(a -> Map.of(
                 "text_name", a.textName(), "col_seq", a.colSeq())).toList());
         out.put("items", items);
+        return out;
+    }
+
+    /**
+     * 子字段名称查询（前端悬停）：col_seq = 动态父栏位行序号（如 107），code = 子编号（如 1B）。
+     * 返回 {label:"107-1B", name:"<itemName>"}；未导入/未配置时 name=""。
+     */
+    @GetMapping("/label")
+    public Map<String, Object> label(@RequestParam("col_seq") String colSeq, @RequestParam("code") String code) {
+        if (colSeq == null || colSeq.isBlank() || code == null || code.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "col_seq 与 code 均必填");
+        }
+        String cs = colSeq.strip();
+        String cd = code.strip();
+        String name = store.subItemName(cs, cd);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("label", cs + "-" + cd);
+        out.put("name", name == null ? "" : name);
         return out;
     }
 }

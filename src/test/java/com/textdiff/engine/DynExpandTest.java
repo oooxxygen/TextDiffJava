@@ -169,4 +169,78 @@ class DynExpandTest {
         assertNull(DynExpand.of(null));
         assertNull(DynExpand.of(List.of()));
     }
+
+    // ---- 子字段跳过（omitSubLabels）----
+
+    private static DynExpand oneDyn(int col, Map<String, DynExpand.Item> items, Set<String> omitSubs) {
+        return DynExpand.of(List.of(new DynExpand.Spec(col, "107", "DYNAMIC_MESSAGE_01", items)), omitSubs);
+    }
+
+    @Test
+    void 子跳过_命中子键不比较不注册不计差异() {
+        DynExpand d = oneDyn(1, Map.of(), Set.of("107-1B"));
+        DynExpand.RowResult r = d.compareRow(
+                new String[]{"k", "~~1Aaaa~~1Bbbb"},
+                new String[]{"k", "~~1Aaaa~~1Bccc"}, Set.of());
+        assertEquals(0, r.diffCols().length);           // 1B 取值不同也不产生差异
+        assertTrue(r.vals().stream().noneMatch(v -> "1B".equals(v.k))); // 不进 vals
+        assertTrue(d.descs().stream().noneMatch(x -> x.sub().equals("1B"))); // 不注册虚拟列
+        assertEquals(1, r.vals().size());
+    }
+
+    @Test
+    void 子跳过_键集合判等只看未跳过键() {
+        // A 有 1A+1B，B 有 1A+1C，1B/1C 均跳过 → 相等；1A 仍正常比对
+        DynExpand d = oneDyn(1, Map.of(), Set.of("107-1b", "107-1C")); // 大小写混写：匹配忽略大小写
+        DynExpand.RowResult r = d.compareRow(
+                new String[]{"k", "~~1Ax~~1B1"},
+                new String[]{"k", "~~1Ax~~1C2"}, Set.of());
+        assertEquals(0, r.diffCols().length);
+        assertEquals(1, r.vals().size());
+        assertEquals("1A", r.vals().get(0).k);
+    }
+
+    @Test
+    void 子跳过_父栏位其余子字段照常比对() {
+        DynExpand d = oneDyn(1, Map.of(), Set.of("107-1B"));
+        DynExpand.RowResult r = d.compareRow(
+                new String[]{"k", "~~1A1~~1B1"},
+                new String[]{"k", "~~1A2~~1B1"}, Set.of());
+        assertEquals(1, r.diffCols().length); // 1A 差异照常计
+        assertTrue(r.diffCols()[0] >= DynExpand.VBASE);
+    }
+
+    @Test
+    void 子跳过_命中子键不比较单侧() {
+        DynExpand d = oneDyn(1, Map.of(), Set.of("107-1B"));
+        List<DynExpand.Val> vals = d.expandSingle(new String[]{"k", "~~1A1~~1B2"}, Set.of(), true);
+        assertEquals(1, vals.size());
+        assertEquals("1A", vals.get(0).k);
+        // 重复出现的同编号子段同样被跳过（1B*2 → 107-1B）
+        vals = d.expandSingle(new String[]{"k", "~~1A1~~1B2~~1B3"}, Set.of(), true);
+        assertEquals(1, vals.size());
+    }
+
+    @Test
+    void 子跳过_父栏位整列跳过时整列优先() {
+        // 父栏位已在 skip 中 → 整列跳过优先，子跳过只是叠加过滤（不产生额外行为）
+        DynExpand d = oneDyn(1, Map.of(), Set.of("107-1B"));
+        DynExpand.RowResult r = d.compareRow(
+                new String[]{"k", "~~1A1~~1B1"},
+                new String[]{"k", "~~1A2~~1B2"}, Set.of(1));
+        assertEquals(0, r.diffCols().length);
+        assertTrue(r.vals().isEmpty());
+    }
+
+    @Test
+    void 子跳过_空集合不影响原有行为() {
+        DynExpand d = oneDyn(1, Map.of(), Set.of());
+        DynExpand.RowResult r = d.compareRow(
+                new String[]{"k", "~~1B1"},
+                new String[]{"k", "~~1B2"}, Set.of());
+        assertEquals(1, r.diffCols().length);
+        DynExpand d2 = oneDyn(1, Map.of(), null);
+        assertEquals(1, d2.compareRow(new String[]{"k", "~~1B1"},
+                new String[]{"k", "~~1B2"}, Set.of()).diffCols().length);
+    }
 }

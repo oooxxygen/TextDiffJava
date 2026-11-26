@@ -15,6 +15,8 @@ import java.util.stream.Collectors;
  *
  * 文本格式（以 ':' 分割，序列以 '/' 分割，1-based）：
  *   NICK:GLOB:KEYSEQ=3/4/5:OMITSEQ=1/2:IGNORESEQ=..:DELIM=..:ENCA=..:...:REPLACE=&lt;b64&gt;
+ * OMITSEQ 令牌支持两种形态：纯数字 = 整列跳过（1-based 列号）；「数字-子编号」（如 107-1B）=
+ * CTIS 动态栏位父栏位 107 的 1B 子字段跳过（不比对、不进 diff、不注册虚拟子列），可与数字混用。
  */
 public final class Rules {
     private Rules() {}
@@ -66,6 +68,26 @@ public final class Rules {
         return String.join(",", out);
     }
 
+    /** OMITSEQ 逐令牌分流：纯数字走 parseSeq（整列跳过）；「数字-子编号」入 omitSubLabels（忽略大小写匹配）；其余报错。 */
+    private static void parseOmitSeq(String value, CompareConfig cfg) {
+        List<String> numeric = new ArrayList<>();
+        for (String tok : value.split("/")) {
+            tok = tok.strip();
+            if (tok.isEmpty()) continue;
+            if (tok.matches("\\d+")) {
+                numeric.add(tok);
+            } else if (tok.matches("\\d+-[0-9A-Za-z]+")) {
+                cfg.omitSubLabels.add(tok);
+            } else {
+                throw new IllegalArgumentException("无法识别的跳过栏位: " + tok);
+            }
+        }
+        if (!numeric.isEmpty()) {
+            List<Integer> cols = parseSeq(String.join("/", numeric));
+            for (int c : cols) if (!cfg.omitColumns.contains(c)) cfg.omitColumns.add(c);
+        }
+    }
+
     /** 解析单行配置为 CompareConfig（兼容最小基线与扩展全字段两种文本）。 */    public static CompareConfig parseLegacy(String text, String delimiter, String trailerPrefix) {
         text = text.strip();
         if (text.startsWith("=>")) text = text.substring(2).strip();
@@ -88,7 +110,7 @@ public final class Rules {
             String value = token.substring(eq + 1);
             switch (key) {
                 case "KEYSEQ" -> cfg.keyColumns = parseSeq(value.strip());
-                case "OMITSEQ" -> cfg.omitColumns = parseSeq(value.strip());
+                case "OMITSEQ" -> parseOmitSeq(value.strip(), cfg);
                 case "IGNORESEQ" -> cfg.ignoreColumns = parseSeq(value.strip());
                 case "DELIM" -> { if (!value.isEmpty()) cfg.delimiter = value; } // 保留内部空格，不 strip
                 case "ENCA" -> cfg.encodingA = blankTo(value.strip(), "auto");
@@ -117,7 +139,13 @@ public final class Rules {
         parts.add(cfg.nickname == null ? "" : cfg.nickname);
         parts.add(cfg.fileGlob == null || cfg.fileGlob.isEmpty() ? "*" : cfg.fileGlob);
         if (!cfg.keyColumns.isEmpty()) parts.add("KEYSEQ=" + seq1based(cfg.keyColumns));
-        if (!cfg.omitColumns.isEmpty()) parts.add("OMITSEQ=" + seq1based(cfg.omitColumns));
+        if (!cfg.omitColumns.isEmpty() || !cfg.omitSubLabels.isEmpty()) {
+            // OMITSEQ= 数字列在前，复合令牌（107-1B 子字段跳过）按加入顺序随后，parse→toLegacy 往返不丢失
+            List<String> omitToks = new ArrayList<>();
+            if (!cfg.omitColumns.isEmpty()) omitToks.add(seq1based(cfg.omitColumns));
+            omitToks.addAll(cfg.omitSubLabels);
+            parts.add("OMITSEQ=" + String.join("/", omitToks));
+        }
         if (!cfg.ignoreColumns.isEmpty()) parts.add("IGNORESEQ=" + seq1based(cfg.ignoreColumns));
         if (full) {
             parts.add("DELIM=" + (cfg.delimiter == null ? "" : cfg.delimiter));

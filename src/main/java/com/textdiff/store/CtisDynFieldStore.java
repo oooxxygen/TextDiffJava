@@ -130,6 +130,22 @@ public final class CtisDynFieldStore implements AutoCloseable {
         return m == null ? Map.of() : m;
     }
 
+    /**
+     * 子字段名称查询（悬停展示）：按适用清单 colSeq（忽略大小写、strip）找到 dynName，
+     * 再按 (dynName, code) 取 itemName；未导入/未配置返回 null。
+     */
+    public synchronized String subItemName(String colSeq, String code) {
+        if (colSeq == null || colSeq.isBlank() || code == null || code.isBlank()) return null;
+        String cs = colSeq.strip();
+        for (CtisDynFields.Apply a : applies) {
+            if (a.colSeq() == null || a.colSeq().isBlank() || !cs.equalsIgnoreCase(a.colSeq().strip())) continue;
+            CtisDynFields.Item it = items.get(a.dynName()) == null
+                    ? null : items.get(a.dynName()).get(code.strip());
+            if (it != null) return it.itemName();
+        }
+        return null;
+    }
+
     public synchronized List<CtisDynFields.Apply> allApplies() {
         return new ArrayList<>(applies);
     }

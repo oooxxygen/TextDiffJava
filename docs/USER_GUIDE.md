@@ -199,6 +199,11 @@ JSONL 文件层始终是事实来源；H2 仅尽力镜像，损坏自动重建�
 | GET `/api/jobs/{id}/export?zone=` | CSV 导出（全量/差异） |
 | GET `/api/tasks` POST `/api/tasks/{id}/regenerate` DELETE `/api/tasks/{id}` | 任务跟踪 |
 | GET/POST `/api/settings/tasks`，GET `/api/settings/ai|runtime`，POST `/api/settings/ai/test`，GET `/api/ai/status` | 设置与 AI 状态 |
+| GET/POST `/api/config-lock` | 配置锁闭状态查询 / 开启·解除（body：`action=lock\|unlock` + `key` 管理密钥） |
+| POST `/api/jobs/{id}/rerun-nicknames` | 修改配置后重跑本批次「同昵称」全部文本（custom/textline 分支按 jobType 自动处理；textline=全批次） |
+| POST `/api/textline-jobs/{id}/rerun-nicknames` | 同上（textline 类型入口；body 可带 key_positions/encoding_a/encoding_b） |
+| POST `/api/custom-jobs/{id}/rerun-nicknames` | 同上（custom 类型入口；body 可带 start/end/key/scene_sort） |
+| GET `/api/ctis-dyn/label?col_seq=&code=` | CTIS 动态栏位子字段名查询（悬停提示用，取自已导入解析配置） |
 
 ## 十、常见问题
 
@@ -208,3 +213,12 @@ JSONL 文件层始终是事实来源；H2 仅尽力镜像，损坏自动重建�
 - **对比结果显示「第几列」而非字段名**：请先在设置页完成列名映射导入，映射按文件名自动匹配。
 - **状态旁 ⚠ 主键重复**：KEYSEQ 配置与数据不符，请重检配置（结果仍可查看）。
 - **改了 config.ini 不生效**：配置重启生效（界面提示 501 的设置项均属此类）。
+
+## 十一、v0.9.19 功能提升
+
+1. **批次概览提示折叠**：批次详情/各类批次页的提示行（无对应规则、解压失败、未能读取文件、未纳入核对等）超过 500 字仅展示前 500 字，点击「展开」查看全部、「收起」折叠。
+2. **CTIS 动态栏位子字段跳过**：OMITSEQ 序列支持复合令牌「父列号-子编号」（如 `OMITSEQ=4/107-1B/107-1C`）——命中子字段（按 `~~` 解析出的 1B/1C 等）不参与对比、不进差异概览；同父栏位其余子字段正常比对。配置悬停提示（ⓘ）对复合令牌显示子字段名（取自已导入的 CTIS 动态栏位配置；查询接口 `GET /api/ctis-dyn/label`）。
+3. **配置锁闭（🔒）**：设置页顶部「开启锁闭/解除锁闭」，均需输入管理密钥（base64 落盘 `configs/.admin_key`，出厂默认 `330e2dcc7cce4a3da57d7295fb189daf`；状态落盘 `configs/.lock_state.json`，重启保持）。锁闭期间：设置页所有选项模糊不可见、不可操作；所有会写本地配置的接口（config.ini、configs/*.conf、各类配置存储）一律拒绝（HTTP 423），前端提交就地提示「仅驻留本次页面」。
+4. **修改配置后重跑同昵称**（需求⑤）：普通结果页配置面板新增「↻ 重跑同昵称」——以修改后配置重跑本批次所有同昵称文本；普通文本对比结果页新增配置卡（主键区间/编码）与「↻ 重跑本批次全部文本」；自定义格式结果页新增配置卡（段起止/主键/场次排序）与「↻ 重跑同昵称」。进行中（RUNNING）的作业自动跳过。
+5. **配置管理**（需求⑥⑦⑧）：选择配置文件后仅展示该文件内配置项（含「全部配置」选项）；修改保存按来源文件+行号精准覆盖原行（不再新增一条，另存为除外）；删除按来源文件+行号精准删行（不波及其他文件同名规则；无行号信息时保留旧跨文件删除行为并二次确认）。
+6. **段对比场次排序**（需求⑨）：提交/结果页可配置「场次排序」，段内同场次标签（如 `:61:`）的块之间按排序键重排后再对比，其他行相对顺序不变。两种模式：① `行号,起~止`（段内第 N 行 1-based 字符闭区间，如 `1,21~36`；多组用 `;` 分隔）；② `/正则/`（场次块内首个命中，取捕获组 1 或整命中，如 `/[0-9]{9}/`）。取不到键的块保持原位。

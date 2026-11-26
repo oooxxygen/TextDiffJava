@@ -46,7 +46,8 @@ public class CustomCompareController {
 
     /**
      * 提交自定义格式对比批次：文本路径 A/B（目录按文件名配对，或单文件）
-     * + 段起始/结束匹配式 + 主键提取式（均为正则；结束式与主键式可空）。
+     * + 段起始/结束匹配式 + 主键提取式（均为正则；结束式与主键式可空）
+     * + 可选 scene_sort 段内场次块排序配置（语法见 {@link com.textdiff.custom.SceneSorter}）。
      */
     @PostMapping("/custom-compare")
     public Map<String, Object> submit(@RequestBody Map<String, Object> body) throws Exception {
@@ -56,7 +57,8 @@ public class CustomCompareController {
             throw new IllegalArgumentException("缺少 dir_a / dir_b");
         }
         CustomFormat cfg = CustomFormat.of(str(body.get("start_pattern")),
-                str(body.get("end_pattern")), str(body.get("key_pattern")));
+                str(body.get("end_pattern")), str(body.get("key_pattern")),
+                str(body.get("scene_sort")));
         var batch = service.submit(Path.of(pa), Path.of(pb), str(body.get("label")), cfg,
                 str(body.get("source_a")), str(body.get("source_b")));
         List<String> ids = store.listJobs(batch.id).stream().map(j -> j.id).toList();

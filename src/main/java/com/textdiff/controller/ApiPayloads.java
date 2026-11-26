@@ -72,6 +72,8 @@ final class ApiPayloads {
         m.put("ignore_columns", cfg.ignoreColumns);
         m.put("key_seq", seq1based(cfg.keyColumns));
         m.put("omit_seq", seq1based(cfg.omitColumns));
+        // OMITSEQ 复合令牌（107-1B 子字段跳过）不属于数字列序列，单独透传给前端展示/编辑
+        m.put("omit_sub_labels", cfg.omitSubLabels().isEmpty() ? null : List.copyOf(cfg.omitSubLabels()));
         m.put("pri_seq", cfg.priSeqSet ? String.valueOf(cfg.priSeq) : null);
         m.put("addmod", cfg.incrFields.isEmpty() ? null : Rules.addmod1based(cfg.incrFields));
         m.put("column_names", cfg.columnNames);

@@ -27,6 +27,46 @@ class RulesTest {
     }
 
     @Test
+    void omitSeq数字与子字段令牌混用() {
+        CompareConfig c = Rules.parseLegacy("nick:*.v01:OMITSEQ=4/107-1B/107-1C", DELIM, TP);
+        assertEquals(List.of(3), c.omitColumns);           // 纯数字仍走整列跳过（1-based → 0-based）
+        assertEquals(Set.of("107-1B", "107-1C"), c.omitSubLabels); // 复合令牌入子字段跳过
+    }
+
+    @Test
+    void omitSeq往返保留复合令牌() {
+        String line = "nick:*.v01:OMITSEQ=4/107-1B/107-1C";
+        CompareConfig c = Rules.parseLegacy(line, DELIM, TP);
+        String out = Rules.toLegacyLine(c, false);
+        assertTrue(out.contains("OMITSEQ=4/107-1B/107-1C"), out); // 数字列在前、复合令牌按加入顺序随后
+        // 再解析结果一致（往返不丢失）
+        CompareConfig c2 = Rules.parseLegacy(out, DELIM, TP);
+        assertEquals(c.omitColumns, c2.omitColumns);
+        assertEquals(c.omitSubLabels, c2.omitSubLabels);
+        // 仅子字段跳过也完整落行
+        CompareConfig subOnly = Rules.parseLegacy("nick:*.v01:OMITSEQ=107-1B", DELIM, TP);
+        assertEquals("nick:*.v01:OMITSEQ=107-1B", Rules.toLegacyLine(subOnly, false));
+    }
+
+    @Test
+    void omitSeq非法令牌抛IAE() {
+        assertThrows(IllegalArgumentException.class,
+                () -> Rules.parseLegacy("nick:*.v01:OMITSEQ=4/abc", DELIM, TP));
+        assertThrows(IllegalArgumentException.class,
+                () -> Rules.parseLegacy("nick:*.v01:OMITSEQ=107-", DELIM, TP));
+        assertThrows(IllegalArgumentException.class,
+                () -> Rules.parseLegacy("nick:*.v01:OMITSEQ=x-1B", DELIM, TP));
+    }
+
+    @Test
+    void omitSub不并入skipSet() {
+        CompareConfig c = Rules.parseLegacy("nick:*.v01:OMITSEQ=107-1B", DELIM, TP);
+        assertTrue(c.omitColumns.isEmpty());
+        assertTrue(c.skipSet().isEmpty()); // 列级跳过与子字段跳过分开
+        assertEquals(Set.of("107-1B"), c.omitSubLabels());
+    }
+
+    @Test
     void parseLegacyArrowPrefixStripped() {
         CompareConfig c = Rules.parseLegacy("=> nick:*:KEYSEQ=1", DELIM, TP);
         assertEquals("nick", c.nickname);

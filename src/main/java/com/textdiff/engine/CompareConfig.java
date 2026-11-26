@@ -28,11 +28,18 @@ public final class CompareConfig {
     public boolean priSeqSet = false;
     /** 增量过滤栏位（0-based，按配置顺序）：非空时作业按提交条件值过滤行后重组源文本再对比。 */
     public List<Integer> incrFields = new ArrayList<>();
+    /** 子字段跳过标签（如 "107-1B"：父栏位 colSeq=107 的 1B 子字段不比对；存原样大小写，匹配时忽略大小写）。 */
+    public Set<String> omitSubLabels = new LinkedHashSet<>();
 
-    /** 比对时需要跳过的列集合（omit ∪ ignore）。 */
+    /** 比对时需要跳过的列集合（omit ∪ ignore）。子字段跳过单独由 {@link #omitSubLabels()} 携带，不并入列级跳过。 */
     public Set<Integer> skipSet() {
         Set<Integer> s = new HashSet<>(omitColumns);
         s.addAll(ignoreColumns);
         return s;
+    }
+
+    /** 子字段跳过标签（不可变集合；空 = 无）。 */
+    public Set<String> omitSubLabels() {
+        return Set.copyOf(omitSubLabels);
     }
 }

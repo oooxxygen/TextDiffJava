@@ -114,4 +114,28 @@ class ComparatorCtisTest {
         assertNull(r.dyn);
         assertNull(out.summary().dynCols);
     }
+
+    @Test
+    void 子字段跳过屏蔽虚拟子列(@TempDir Path dir) throws Exception {
+        Path a = write(dir, "a.txt", String.join("\n",
+                "k1 | ~~1B20261018~~1C23053339",
+                "k2 | ~~1B20261017~~1C09344973"));
+        Path b = write(dir, "b.txt", String.join("\n",
+                "k1 | ~~1B99999999~~1C23053339",    // 1B 差异但被跳过 → 整行判等
+                "k2 | ~~1B20261017~~1C23000000"));  // 1C 差异照常计
+        ResultSink.ListSink sink = new ResultSink.ListSink();
+        CompareOutcome out = Comparator.compareFiles(a, b, keyCfg(), sink,
+                64L * 1024 * 1024, dir.resolve("tmp"), null, null, spec(1), Set.of("107-1B"));
+        Summary s = out.summary();
+        assertEquals(1, s.equal);
+        assertEquals(1, s.diff);
+
+        RowDiff k1 = find(sink.rows, "k1");
+        assertEquals(Status.EQUAL, k1.status);
+
+        // 差异频次只剩 1C 的虚拟列；注册表中无被跳过的 107-1B
+        assertEquals(1, s.diffColFreq.size());
+        assertTrue(s.dynCols.stream().noneMatch(d -> d.sub().equals("1B")));
+        assertTrue(s.dynCols.stream().anyMatch(d -> d.sub().equals("1C")));
+    }
 }

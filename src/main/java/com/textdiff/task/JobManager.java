@@ -633,7 +633,8 @@ public final class JobManager implements AutoCloseable {
                     CompareOutcome outcome = Comparator.compareFiles(
                             incr != null ? incr.filteredA() : inputA,
                             incr != null ? incr.filteredB() : inputB,
-                            cfg, sink, inMemoryBudget(), dir.resolve("tmp"), transA, transB, dynSpecs);
+                            cfg, sink, inMemoryBudget(), dir.resolve("tmp"), transA, transB,
+                            dynSpecs, cfg.omitSubLabels());
                     Summary s = outcome.summary();
                     // 统计快照落作业记录：列表/批次视图不再逐作业读 meta.json（前端轮询与批次页的主要磁盘开销）
                     job.diffCount = s.diff;
