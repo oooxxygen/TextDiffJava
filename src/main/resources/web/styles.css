@@ -875,3 +875,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .lock-modal { width: min(440px, 92vw); }
 .lock-modal .modal-head { display: flex; justify-content: space-between; align-items: center; }
 .lock-err { color: var(--diff-bar, #dc2626); font-size: 12.5px; margin: 6px 0 0; }
+
+/* ---------- 配置锁闭·配置管理页只读标识 ---------- */
+.ro-banner .ro-banner-row { font-size: 13.5px; color: var(--warning, #b45309); }
+.ro-banner .ro-banner-row b { color: inherit; }
+.mini-btn.btn-disabled { opacity: .45; cursor: not-allowed; }

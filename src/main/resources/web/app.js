@@ -5511,6 +5511,7 @@ const ConfigManagePage = {
     }
 
     return { cfgQuery, configs, badLines, cfgErr, busy, loadConfigs, cfgPg, dups, dupMap,
+             cfgLock,
              confFiles, selFile, selFileInfo,
              fileModal, newConfFile, renameConfFile, saveConfFile, deleteConfFile, loadConfFiles,
              entryQuery, entryPick, entryOptions, pickEntry,
@@ -5524,14 +5525,23 @@ const ConfigManagePage = {
   template: `
   <div>
     <PageHeader title="配置管理" sub="全部文本对比配置的查询 / 修改 / 新增 / 删除；对比配置分组用于目录对比时圈定对比范围（分组可 Excel 导入）" />
+    <!-- 🔒 锁闭只读标识：修改/新增/删除按钮置灰（后台 423 强校验兜底） -->
+    <div class="card ro-banner" v-if="cfgLock.locked">
+      <div class="card-body ro-banner-row">
+        🔒 配置已锁闭：本页面为<b>只读</b>——查询、刷新可用；修改 / 新增 / 删除 / 导入已置灰，
+        如需变更请先到「设置」页解除锁闭（修改保存会被后台拒绝，不会持久化）。
+      </div>
+    </div>
     <div class="card">
       <div class="card-head">⚙️ 对比配置（{{ configs.length }} 条<template v-if="badLines"> · {{ badLines }} 行坏行已跳过</template>）
         <div class="head-actions">
           <ListPager :page="cfgPg.page" :pages="cfgPg.pages" :total="cfgPg.total" :size="cfgPg.size"
                      @go="cfgPg.go" @resize="cfgPg.resize" />
           <button class="mini-btn" @click="loadConfigs" :disabled="busy">↻ 刷新</button>
-          <button class="mini-btn" @click="newConfig">＋ 新增配置</button>
-          <button class="mini-btn" @click="newConfFile" title="新建独立配置文件（空白或从 current.conf 选条目带入配置作起点），供同一文本按不同配置对比">🗂 新增配置文件</button>
+          <button class="mini-btn" @click="newConfig" :disabled="cfgLock.locked"
+                  title="配置已锁闭：新增不可用">＋ 新增配置</button>
+          <button class="mini-btn" @click="newConfFile" :disabled="cfgLock.locked"
+                  title="新建独立配置文件（空白或从 current.conf 选条目带入配置作起点），供同一文本按不同配置对比；配置已锁闭时不可用">🗂 新增配置文件</button>
         </div>
       </div>
       <div class="card-body">
@@ -5544,8 +5554,8 @@ const ConfigManagePage = {
           </select>
           <template v-if="selFileInfo">
             <span class="hint">{{ selFileInfo.rules || 0 }} 条规则 · 修改于 {{ selFileInfo.mtime ? fmtTime(selFileInfo.mtime) : '—' }}<template v-if="selFileInfo.protected"> · 🔒 系统文件</template></span>
-            <button v-if="!selFileInfo.protected" class="mini-btn" @click="renameConfFile(selFileInfo)">✏️ 重命名</button>
-            <button v-if="!selFileInfo.protected" class="mini-btn" @click="deleteConfFile(selFileInfo)">🗑 删除文件</button>
+            <button v-if="!selFileInfo.protected" class="mini-btn" @click="renameConfFile(selFileInfo)" :disabled="cfgLock.locked">✏️ 重命名</button>
+            <button v-if="!selFileInfo.protected" class="mini-btn" @click="deleteConfFile(selFileInfo)" :disabled="cfgLock.locked">🗑 删除文件</button>
           </template>
           <span class="hint" style="margin-left:8px;">修改保存写入规则所在文件，「另存为」可存为新文件；新增配置默认写入 current.conf。</span>
         </div>
@@ -5572,8 +5582,10 @@ const ConfigManagePage = {
                   <span v-if="dupMap[c.nickname + '\u0000' + (c.file_glob || '*')]" class="miss-hint"
                         :title="'同（昵称+通配名）规则还存在于：' + dupMap[c.nickname + '\u0000' + (c.file_glob || '*')].filter(f => f !== c._source).join('、') + '。目录批次「全部配置」按来源文件优先级取本条生效'">⚠ 同名多文件</span></td>
                 <td>
-                  <button class="mini-btn" @click="editConfig(c)">✏️ 修改</button>
-                  <button class="mini-btn" @click="deleteConfig(c)">🗑 删除</button>
+                  <button class="mini-btn" @click="editConfig(c)" :disabled="cfgLock.locked"
+                          :title="cfgLock.locked ? '配置已锁闭：修改不可用（只读）' : '修改该规则'">✏️ 修改</button>
+                  <button class="mini-btn" @click="deleteConfig(c)" :disabled="cfgLock.locked"
+                          :title="cfgLock.locked ? '配置已锁闭：删除不可用（只读）' : '删除该规则'">🗑 删除</button>
                 </td>
               </tr>
             </tbody>
@@ -5586,9 +5598,9 @@ const ConfigManagePage = {
     <div class="card">
       <div class="card-head">🏷 对比配置分组（{{ groups.length }} 组）
         <div class="head-actions">
-          <label class="mini-btn" title="导入 Excel（分组名称 + 文本昵称 两列，同名分组合并替换）">📥 导入 Excel<input type="file" accept=".xlsx" style="display:none;" @change="importGroups" /></label>
+          <label class="mini-btn" title="导入 Excel（分组名称 + 文本昵称 两列，同名分组合并替换）" :class="{ 'btn-disabled': cfgLock.locked }" :disabled="cfgLock.locked">📥 导入 Excel<input type="file" accept=".xlsx" style="display:none;" @change="importGroups" :disabled="cfgLock.locked" /></label>
           <button class="mini-btn" @click="loadGroups" :disabled="grpBusy">↻ 刷新</button>
-          <button class="mini-btn" @click="newGroup">＋ 新增分组</button>
+          <button class="mini-btn" @click="newGroup" :disabled="cfgLock.locked">＋ 新增分组</button>
         </div>
       </div>
       <div class="card-body">
@@ -5605,8 +5617,10 @@ const ConfigManagePage = {
                 <td>{{ g.source_file || '—' }}</td>
                 <td>{{ g.imported_at ? fmtTime(g.imported_at) : '—' }}</td>
                 <td>
-                  <button class="mini-btn" @click="editGroup(g)">✏️ 修改</button>
-                  <button class="mini-btn" @click="deleteGroup(g)">🗑 删除</button>
+                  <button class="mini-btn" @click="editGroup(g)" :disabled="cfgLock.locked"
+                          :title="cfgLock.locked ? '配置已锁闭：修改不可用（只读）' : '修改该分组'">✏️ 修改</button>
+                  <button class="mini-btn" @click="deleteGroup(g)" :disabled="cfgLock.locked"
+                          :title="cfgLock.locked ? '配置已锁闭：删除不可用（只读）' : '删除该分组'">🗑 删除</button>
                 </td>
               </tr>
             </tbody>
@@ -5620,7 +5634,7 @@ const ConfigManagePage = {
       <div class="card-head">📄 普通文本比对配置（{{ tlConfigs.length }} 条 · 独立存储 textline_configs.jsonl）
         <div class="head-actions">
           <button class="mini-btn" @click="loadTlConfigs" :disabled="tlBusy">↻ 刷新</button>
-          <button class="mini-btn" @click="newTlConfig">＋ 新增配置</button>
+          <button class="mini-btn" @click="newTlConfig" :disabled="cfgLock.locked">＋ 新增配置</button>
         </div>
       </div>
       <div class="card-body">
@@ -5640,8 +5654,10 @@ const ConfigManagePage = {
                 <td>{{ c.source_a || 'A' }} / {{ c.source_b || 'B' }}</td>
                 <td>{{ c.created_at ? fmtTime(c.created_at) : '—' }}</td>
                 <td>
-                  <button class="mini-btn" @click="editTlConfig(c)">✏️ 修改</button>
-                  <button class="mini-btn" @click="deleteTlConfig(c)">🗑 删除</button>
+                  <button class="mini-btn" @click="editTlConfig(c)" :disabled="cfgLock.locked"
+                          :title="cfgLock.locked ? '配置已锁闭：修改不可用（只读）' : '修改该命名配置'">✏️ 修改</button>
+                  <button class="mini-btn" @click="deleteTlConfig(c)" :disabled="cfgLock.locked"
+                          :title="cfgLock.locked ? '配置已锁闭：删除不可用（只读）' : '删除该命名配置'">🗑 删除</button>
                 </td>
               </tr>
             </tbody>
